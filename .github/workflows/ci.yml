@@ -1,1 +1,29 @@
+name: SPEC-6 CI
 
+on:
+  pull_request:
+
+jobs:
+  ci_checks:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Run check_import_scope
+      run: python3 ./ci/check_import_scope.py
+
+    - name: Run check_signature
+      run: python3 ./ci/check_signature.py
+
+    - name: Run check_pr_scope
+      run: python3 ./ci/check_pr_scope.py
+
+    - name: Run check_spec_lock
+      run: python3 ./ci/check_spec_lock.py
