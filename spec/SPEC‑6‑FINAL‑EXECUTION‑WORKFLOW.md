@@ -1,4 +1,4 @@
-SPEC‑6‑FINAL‑EXECUTION‑WORKFLOW
+SPEC‑6‑FINAL‑EXECUTION‑WORKFLOW	
 	
 Phiên bản hoàn chỉnh – sẵn sàng triển khai	
 	
