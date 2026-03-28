@@ -17,7 +17,7 @@ def verify_ref(ref: str) -> tuple[str | None, str]:
 
 def resolve_diff_range() -> str:
     base_ref_raw = os.getenv("GITHUB_BASE_REF")
-    head_sha_raw = os.getenv("GITHUB_HEAD_SHA") or os.getenv("GITHUB_SHA")
+    head_sha_raw = os.getenv("GITHUB_SHA")
 
     is_ci = os.getenv("GITHUB_ACTIONS") == "true"
 
@@ -26,29 +26,21 @@ def resolve_diff_range() -> str:
         head_sha = head_sha_raw.strip() if head_sha_raw else ""
         if not base_ref or not head_sha:
             print(
-                "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
+                "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_SHA; "
                 "cannot determine diff range in CI",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
-        if base_ref_raw is None or head_sha_raw is None:
+        base_ref = base_ref_raw.strip() if base_ref_raw else ""
+        head_sha = head_sha_raw.strip() if head_sha_raw else ""
+        if not base_ref or not head_sha:
             print(
-                "check_spec_lock: WARNING: local mode, using develop...HEAD",
+                "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_SHA; "
+                "set them to run locally",
                 file=sys.stderr,
             )
-            base_ref = "develop"
-            head_sha = "HEAD"
-        else:
-            base_ref = base_ref_raw.strip()
-            head_sha = head_sha_raw.strip()
-            if not base_ref or not head_sha:
-                print(
-                    "check_spec_lock: ERROR: missing GITHUB_BASE_REF or "
-                    "GITHUB_HEAD_SHA",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
+            sys.exit(1)
 
     base_ref_sha, base_ref_error = verify_ref(base_ref)
     if base_ref_sha is not None:
@@ -119,10 +111,7 @@ def main() -> None:
         print("check_spec_lock: spec files modified:", file=sys.stderr)
         for path in spec_files:
             print(path, file=sys.stderr)
-        print(
-            "check_spec_lock: FAIL - modifications in spec/ are not allowed",
-            file=sys.stderr,
-        )
+        print("Spec modification is forbidden", file=sys.stderr)
         sys.exit(1)
 
     print("check_spec_lock: PASS")
