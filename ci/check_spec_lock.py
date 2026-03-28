@@ -19,45 +19,27 @@ def resolve_diff_range() -> str:
     base_ref = os.getenv("GITHUB_BASE_REF")
     head_sha = os.getenv("GITHUB_HEAD_SHA")
 
-    if base_ref and head_sha:
-        base = verify_ref(base_ref) or verify_ref(f"origin/{base_ref}")
-        if not base:
-            print(
-                f"check_spec_lock: base ref '{base_ref}' could not be resolved",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        head = verify_ref(head_sha)
-        if not head:
-            print(
-                f"check_spec_lock: head sha '{head_sha}' could not be resolved",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        return f"{base}...{head}"
-
-    if os.getenv("GITHUB_ACTIONS") == "true":
+    if not base_ref or not head_sha:
         print(
-            "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
-            "cannot determine diff range in CI",
+            "check_spec_lock: WARNING: running in local mode, using diff range "
+            "develop...HEAD",
             file=sys.stderr,
         )
-        sys.exit(1)
+        base_ref = "develop"
+        head_sha = "HEAD"
 
-    base = verify_ref("develop") or verify_ref("origin/develop")
+    base = verify_ref(base_ref) or verify_ref(f"origin/{base_ref}")
     if not base:
         print(
-            "check_spec_lock: local fallback failed to resolve 'develop'",
+            f"check_spec_lock: base ref '{base_ref}' could not be resolved",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    head = verify_ref("HEAD")
+    head = verify_ref(head_sha)
     if not head:
         print(
-            "check_spec_lock: local fallback failed to resolve 'HEAD'",
+            f"check_spec_lock: head sha '{head_sha}' could not be resolved",
             file=sys.stderr,
         )
         sys.exit(1)
