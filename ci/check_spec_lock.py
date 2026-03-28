@@ -19,8 +19,11 @@ def resolve_diff_range() -> str:
     base_ref = os.getenv("GITHUB_BASE_REF")
     head_sha = os.getenv("GITHUB_HEAD_SHA")
 
+    def has_value(value: str | None) -> bool:
+        return value is not None and value.strip() != ""
+
     if os.getenv("GITHUB_ACTIONS") == "true":
-        if not base_ref or not head_sha:
+        if not has_value(base_ref) or not has_value(head_sha):
             print(
                 "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
                 "cannot determine diff range in CI",
