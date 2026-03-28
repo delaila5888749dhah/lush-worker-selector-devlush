@@ -31,6 +31,8 @@ jobs:
 
       - name: Check spec lock
         run: python ci/check_spec_lock.py
+        env:
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
       - name: Unit tests
         run: python -m unittest discover tests

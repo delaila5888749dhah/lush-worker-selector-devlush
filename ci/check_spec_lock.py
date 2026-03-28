@@ -17,7 +17,7 @@ def verify_ref(ref: str) -> tuple[str | None, str]:
 
 def resolve_diff_range() -> str:
     base_ref_raw = os.getenv("GITHUB_BASE_REF")
-    head_sha_raw = os.getenv("GITHUB_SHA")
+    head_sha_raw = os.getenv("GITHUB_HEAD_SHA") or os.getenv("GITHUB_SHA")
 
     is_ci = os.getenv("GITHUB_ACTIONS") == "true"
 
@@ -26,7 +26,8 @@ def resolve_diff_range() -> str:
         head_sha = head_sha_raw.strip() if head_sha_raw else ""
         if not base_ref or not head_sha:
             print(
-                "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_SHA; "
+                "check_spec_lock: missing GITHUB_BASE_REF or "
+                "GITHUB_HEAD_SHA/GITHUB_SHA; "
                 "cannot determine diff range in CI",
                 file=sys.stderr,
             )
@@ -36,7 +37,8 @@ def resolve_diff_range() -> str:
         head_sha = head_sha_raw.strip() if head_sha_raw else ""
         if not base_ref or not head_sha:
             print(
-                "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_SHA; "
+                "check_spec_lock: missing GITHUB_BASE_REF or "
+                "GITHUB_HEAD_SHA/GITHUB_SHA; "
                 "set them to run locally",
                 file=sys.stderr,
             )
