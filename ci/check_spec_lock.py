@@ -21,16 +21,19 @@ def resolve_diff_range() -> str:
 
     is_ci = os.getenv("GITHUB_ACTIONS") == "true"
 
+    if base_ref is not None:
+        base_ref = base_ref.strip()
+    if head_sha is not None:
+        head_sha = head_sha.strip()
+
     if is_ci:
-        if not (base_ref and base_ref.strip() and head_sha and head_sha.strip()):
+        if not base_ref or not head_sha:
             print(
                 "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
                 "cannot determine diff range in CI",
                 file=sys.stderr,
             )
             sys.exit(1)
-        base_ref = base_ref.strip()
-        head_sha = head_sha.strip()
 
     if not is_ci:
         if base_ref is None or head_sha is None:
@@ -40,6 +43,13 @@ def resolve_diff_range() -> str:
             )
             base_ref = "develop"
             head_sha = "HEAD"
+        elif not base_ref or not head_sha:
+            print(
+                "check_spec_lock: ERROR: missing GITHUB_BASE_REF or "
+                "GITHUB_HEAD_SHA",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         else:
             base_ref = base_ref.strip()
             head_sha = head_sha.strip()
