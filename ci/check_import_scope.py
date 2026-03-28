@@ -213,8 +213,7 @@ def current_package_from_path(path):
     parts = normalized[:-3].split("/")
     if not parts:
         return ""
-    if parts[-1] == "__init__":
-        parts = parts[:-1]
+    parts = parts[:-1]
     return ".".join(parts)
 
 
