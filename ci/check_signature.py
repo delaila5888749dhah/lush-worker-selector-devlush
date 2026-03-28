@@ -1,286 +1,344 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
 import ast
-import os
+import io
 import re
 import sys
-from collections import Counter
+import tokenize
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SPEC_PATH = ROOT_DIR / "spec" / "interface.md"
+MODULES_DIR = ROOT_DIR / "modules"
+
+INLINE_FUNCTION_DEF_RE = re.compile(r"^(?:async\s+def|def)\s+\w+")
+INLINE_SIGNATURE_CALL_RE = re.compile(r"^[A-Za-z_]\w*\s*\(")
+FUNCTION_RE = re.compile(r"^Function\s*:\s*(?P<name>[A-Za-z_]\w*)\s*$", re.I)
+INPUT_RE = re.compile(r"^Input\s*:\s*(?P<input>.*)$", re.I)
+OUTPUT_RE = re.compile(r"^Output\s*:\s*(?P<output>.*)$", re.I)
+
+EMPTY_PARAM_VALUES = frozenset({"none", "n/a", "na"})
 
 
-SIGNATURE_LINE_PATTERN = re.compile(
-    r"^(?:def\s+)?(?P<name>[A-Za-z_]\w*)\s*\("
-)
+@dataclass
+class SignatureRecord:
+    name: str
+    params: list[str]
+    output: str | None = None
+    file: Path | None = None
+    line: int | None = None
 
 
-def extract_parenthesized(text, start_index):
-    depth = 0
-    start = None
-    for index in range(start_index, len(text)):
-        char = text[index]
-        if char == "(":
-            depth += 1
-            if depth == 1:
-                start = index + 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0 and start is not None:
-                return text[start:index], index
-    return None, None
+class SpecParseError(RuntimeError):
+    pass
 
 
-def extract_return_type(text, close_index):
-    line_end = text.find("\n", close_index + 1)
-    if line_end == -1:
-        line_end = len(text)
-    line_tail = text[close_index + 1 : line_end]
-    match = re.search(r"->\s*([^\n:]+)", line_tail)
-    if not match:
-        return None
-    return normalize_type(match.group(1))
+class ModuleParseError(RuntimeError):
+    pass
 
 
-def normalize_type(type_text):
-    if not type_text:
-        return None
-    cleaned = " ".join(type_text.strip().rstrip(":").split())
-    return cleaned or None
+def normalize_line(raw_line: str) -> str:
+    line = raw_line.strip()
+    if not line:
+        return ""
+    line = re.sub(r"^[#>]+\s*", "", line)
+    line = re.sub(r"^[-*]\s+", "", line)
+    return line.strip("`").strip()
 
 
-def extract_param_names(args):
-    names = []
-    for arg in args.posonlyargs + args.args:
-        names.append(arg.arg)
+def extract_params_from_args(args: ast.arguments) -> list[str]:
+    params: list[str] = []
+    if args.posonlyargs:
+        params.extend([arg.arg for arg in args.posonlyargs])
+        params.append("/")
+    params.extend([arg.arg for arg in args.args])
     if args.vararg:
-        names.append(args.vararg.arg)
-    for arg in args.kwonlyargs:
-        names.append(arg.arg)
+        params.append(f"*{args.vararg.arg}")
+    elif args.kwonlyargs:
+        params.append("*")
+    params.extend([arg.arg for arg in args.kwonlyargs])
     if args.kwarg:
-        names.append(args.kwarg.arg)
-    return names
-
-
-def parse_params_from_text(param_text):
-    text = param_text.strip()
-    if not text:
-        return []
-    try:
-        tree = ast.parse(f"def _temp_signature_function({text}):\n    pass")
-        func = tree.body[0]
-        if isinstance(func, ast.FunctionDef):
-            return extract_param_names(func.args)
-    except SyntaxError:
-        pass
-    params = []
-    for raw in text.split(","):
-        piece = raw.strip()
-        if not piece or piece in {"*", "/"}:
-            continue
-        if piece.startswith("**"):
-            piece = piece[2:]
-        elif piece.startswith("*"):
-            piece = piece[1:]
-        if ":" in piece:
-            piece = piece.split(":", 1)[0].strip()
-        if "=" in piece:
-            piece = piece.split("=", 1)[0].strip()
-        if piece:
-            params.append(piece)
+        params.append(f"**{args.kwarg.arg}")
     return params
 
 
-def format_annotation(node, source):
-    if node is None:
-        return None
+def parse_params_text(params_text: str, line_no: int) -> list[str]:
+    params_text = params_text.strip()
+    if not params_text:
+        return []
+    if params_text.lower() in EMPTY_PARAM_VALUES:
+        return []
+    if params_text.startswith("(") and params_text.endswith(")"):
+        params_text = params_text[1:-1].strip()
     try:
-        text = ast.unparse(node)
-    except (AttributeError, ValueError, TypeError):
-        text = ast.get_source_segment(source, node) or ""
-    return normalize_type(text)
+        module = ast.parse(f"def _f({params_text}):\n    pass")
+    except SyntaxError as exc:
+        raise SpecParseError(f"Invalid parameters at line {line_no}: {params_text}") from exc
+    func = module.body[0]
+    if not isinstance(func, ast.FunctionDef):
+        raise SpecParseError(f"Invalid parameters at line {line_no}: {params_text}")
+    return extract_params_from_args(func.args)
 
 
-def parse_interface_spec(spec_path):
-    if not os.path.isfile(spec_path):
-        return {}
+def parse_inline_signature(line: str, line_no: int) -> SignatureRecord:
+    signature_line = line
+    if not INLINE_FUNCTION_DEF_RE.match(signature_line):
+        signature_line = f"def {signature_line}"
+    if not signature_line.rstrip().endswith(":"):
+        signature_line = f"{signature_line}:"
+    source = f"{signature_line}\n    pass"
     try:
-        with open(spec_path, "r", encoding="utf-8") as spec_file:
-            content = spec_file.read()
-    except (OSError, UnicodeError):
-        return {}
-    signatures = {}
-    in_code_block = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_code_block = not in_code_block
+        module = ast.parse(source)
+    except SyntaxError as exc:
+        raise SpecParseError(f"Invalid function signature at line {line_no}: {line}") from exc
+    if not module.body or not isinstance(
+        module.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+    ):
+        raise SpecParseError(f"Invalid function signature at line {line_no}: {line}")
+    func = module.body[0]
+    output = ast.unparse(func.returns) if func.returns else None
+    return SignatureRecord(
+        name=func.name,
+        params=extract_params_from_args(func.args),
+        output=output,
+        line=line_no,
+    )
+
+
+def parse_spec_signatures(path: Path | str) -> list[SignatureRecord]:
+    path = Path(path)
+    if not path.exists():
+        raise SpecParseError(f"Spec file not found: {path}")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SpecParseError(f"Unable to read spec file: {exc}") from exc
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SpecParseError(f"Spec file is not valid UTF-8: {exc}") from exc
+
+    signatures: list[SignatureRecord] = []
+    seen_names: dict[str, int] = {}
+    pending_index: int | None = None
+
+    for line_no, raw_line in enumerate(content.splitlines(), start=1):
+        normalized = normalize_line(raw_line)
+        if not normalized:
             continue
-        candidate = stripped
-        if not in_code_block:
-            candidate = candidate.lstrip("-*+").strip()
-            if candidate.startswith("`") and candidate.endswith("`"):
-                candidate = candidate.strip("`").strip()
-            elif candidate.startswith("`"):
-                candidate = candidate.strip("`").strip()
-        match = SIGNATURE_LINE_PATTERN.match(candidate)
-        if not match:
+        if INLINE_FUNCTION_DEF_RE.match(normalized) or INLINE_SIGNATURE_CALL_RE.match(normalized):
+            record = parse_inline_signature(normalized, line_no)
+            if record.name in seen_names:
+                raise SpecParseError(
+                    f"Duplicate function '{record.name}' in spec at line {line_no} "
+                    f"(first defined at line {seen_names[record.name]})"
+                )
+            signatures.append(record)
+            seen_names[record.name] = line_no
+            pending_index = None
             continue
-        name = match.group("name")
-        params_text, close_index = extract_parenthesized(candidate, match.end() - 1)
-        if params_text is None:
+
+        func_match = FUNCTION_RE.match(normalized)
+        if func_match:
+            name = func_match.group("name")
+            if name in seen_names:
+                raise SpecParseError(
+                    f"Duplicate function '{name}' in spec at line {line_no} "
+                    f"(first defined at line {seen_names[name]})"
+                )
+            signatures.append(SignatureRecord(name=name, params=[], output=None, line=line_no))
+            seen_names[name] = line_no
+            pending_index = len(signatures) - 1
             continue
-        return_text = extract_return_type(candidate, close_index)
-        signatures[name] = {
-            "params": parse_params_from_text(params_text),
-            "return_type": return_text,
-        }
+
+        input_match = INPUT_RE.match(normalized)
+        if input_match:
+            if pending_index is None:
+                raise SpecParseError(f"Input without Function at line {line_no}: {normalized}")
+            params = parse_params_text(input_match.group("input") or "", line_no)
+            signatures[pending_index].params = params
+            continue
+
+        output_match = OUTPUT_RE.match(normalized)
+        if output_match:
+            if pending_index is None:
+                raise SpecParseError(f"Output without Function at line {line_no}: {normalized}")
+            signatures[pending_index].output = output_match.group("output").strip() or None
+            continue
+
+        if normalized.startswith("def ") or normalized.startswith("async def "):
+            raise SpecParseError(f"Invalid function signature at line {line_no}: {normalized}")
+        if normalized.lower().startswith("function") and not func_match:
+            raise SpecParseError(
+                f"Function line missing name or invalid format at line {line_no}: {normalized}"
+            )
+        if normalized.lower().startswith("input") and not input_match:
+            raise SpecParseError(
+                f"Input line missing parameters or invalid format at line {line_no}: {normalized}"
+            )
+        if normalized.lower().startswith("output") and not output_match:
+            raise SpecParseError(
+                f"Output line missing return info or invalid format at line {line_no}: {normalized}"
+            )
+
     return signatures
 
 
-def parse_schema_spec(spec_path):
-    if not os.path.isfile(spec_path):
-        return {}
-    try:
-        with open(spec_path, "r", encoding="utf-8") as spec_file:
-            content = spec_file.read()
-    except (OSError, UnicodeError):
-        return {}
-    try:
-        tree = ast.parse(content, filename=spec_path)
-    except SyntaxError:
-        return {}
-    signatures = {}
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            signatures[node.name] = {
-                "params": extract_param_names(node.args),
-                "return_type": format_annotation(node.returns, content),
-            }
-    return signatures
+class _FunctionCollector(ast.NodeVisitor):
+    def __init__(self, file_path: Path) -> None:
+        self._file_path = file_path
+        self.functions: list[SignatureRecord] = []
+
+    def _record(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        output = ast.unparse(node.returns) if node.returns else None
+        self.functions.append(
+            SignatureRecord(
+                name=node.name,
+                params=extract_params_from_args(node.args),
+                output=output,
+                file=self._file_path,
+                line=node.lineno,
+            )
+        )
+
+    def _visit_body(self, body: list[ast.stmt]) -> None:
+        for stmt in body:
+            self.visit(stmt)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._record(node)
+        self._visit_body(node.body)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._record(node)
+        self._visit_body(node.body)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._visit_body(node.body)
 
 
-def load_spec_signatures(repo_root):
-    spec_dir = os.path.join(repo_root, "spec")
-    interface_path = os.path.join(spec_dir, "interface.md")
-    schema_path = os.path.join(spec_dir, "schema.py")
-    interface_signatures = parse_interface_spec(interface_path)
-    if interface_signatures:
-        return interface_signatures
-    schema_signatures = parse_schema_spec(schema_path)
-    return schema_signatures
+def collect_module_functions(modules_dir: Path | str) -> list[SignatureRecord]:
+    modules_dir = Path(modules_dir)
+    functions: list[SignatureRecord] = []
+    if not modules_dir.exists():
+        return functions
+    for file_path in sorted(modules_dir.rglob("*.py")):
+        try:
+            raw = file_path.read_bytes()
+        except OSError as exc:
+            raise ModuleParseError(f"Unable to read {file_path}: {exc}") from exc
+        try:
+            encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+            source = raw.decode(encoding)
+        except (SyntaxError, UnicodeDecodeError, LookupError) as exc:
+            raise ModuleParseError(f"Unable to read {file_path}: {exc}") from exc
+        try:
+            tree = ast.parse(source, filename=str(file_path))
+        except SyntaxError as exc:
+            raise ModuleParseError(f"Unable to parse {file_path}: {exc}") from exc
+        collector = _FunctionCollector(file_path)
+        collector.visit(tree)
+        functions.extend(collector.functions)
+    return functions
 
 
-def iter_python_files(modules_dir):
-    for root, _, files in os.walk(modules_dir):
-        for filename in files:
-            if filename.endswith(".py"):
-                yield os.path.join(root, filename)
+def format_signature(name: str, params: list[str], output: str | None = None) -> str:
+    display_params = params
+    if display_params and all(param in {"*", "/"} for param in display_params):
+        display_params = []
+    signature = f"{name}({', '.join(display_params)})"
+    if output:
+        signature = f"{signature} -> {output}"
+    return signature
+
+
+def format_location(record: SignatureRecord) -> str:
+    if record.file and record.line:
+        return f"{record.file}:{record.line}"
+    if record.file:
+        return f"{record.file}"
+    if record.line:
+        return f"{SPEC_PATH}:{record.line}"
+    return str(SPEC_PATH)
 
 
 def compare_signatures(
-    file_path, node, spec_signature, source, errors, warnings, repo_root
-):
-    spec_params = spec_signature["params"]
-    code_params = extract_param_names(node.args)
-    rel_path = os.path.relpath(file_path, repo_root)
-    if len(code_params) != len(spec_params):
-        spec_counter = Counter(spec_params)
-        code_counter = Counter(code_params)
-        missing = []
-        extra = []
-        for name, count in (spec_counter - code_counter).items():
-            missing.append(f"{name} (count: {count})" if count > 1 else name)
-        for name, count in (code_counter - spec_counter).items():
-            extra.append(f"{name} (count: {count})" if count > 1 else name)
-        parts = []
-        if missing:
-            parts.append(f"missing params: {', '.join(missing)}")
-        if extra:
-            parts.append(f"extra params: {', '.join(extra)}")
-        message = "; ".join(parts) or (
-            f"param count mismatch (expected {len(spec_params)}, got {len(code_params)})"
-        )
-        errors.append((rel_path, node.lineno, node.name, message))
-        return
-    if code_params != spec_params:
-        mismatches = [
-            f"{idx + 1}: expected '{spec}', got '{code}'"
-            for idx, (spec, code) in enumerate(zip(spec_params, code_params))
-            if spec != code
-        ]
-        if mismatches:
-            message = "param name mismatch (" + "; ".join(mismatches) + ")"
-            errors.append((rel_path, node.lineno, node.name, message))
-            return
-    spec_return = spec_signature.get("return_type")
-    if spec_return:
-        code_return = format_annotation(node.returns, source)
-        if not code_return:
-            warnings.append(
-                (
-                    rel_path,
-                    node.lineno,
-                    node.name,
-                    f"missing return annotation (expected {spec_return})",
+    spec_records: Iterable[SignatureRecord],
+    module_records: Iterable[SignatureRecord],
+) -> list[str]:
+    spec_list = list(spec_records)
+    module_list = list(module_records)
+    errors: list[str] = []
+    max_len = max(len(spec_list), len(module_list))
+
+    for index in range(max_len):
+        spec = spec_list[index] if index < len(spec_list) else None
+        actual = module_list[index] if index < len(module_list) else None
+
+        if spec is None:
+            if actual is not None:
+                actual_signature = format_signature(actual.name, actual.params, actual.output)
+                errors.append(
+                    f"{format_location(actual)}: {actual.name}\n"
+                    f"  expected: no specification found; add entry to spec/interface.md\n"
+                    f"  actual:   {actual_signature}"
                 )
-            )
-        elif code_return != spec_return:
-            warnings.append(
-                (
-                    rel_path,
-                    node.lineno,
-                    node.name,
-                    f"return type mismatch (expected {spec_return}, got {code_return})",
-                )
-            )
-
-
-def print_warnings(warnings):
-    for rel_path, line, func_name, message in warnings:
-        print(f"WARN: {rel_path}:{line} {func_name} {message}")
-
-
-def main():
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    modules_dir = os.path.join(repo_root, "modules")
-    spec_signatures = load_spec_signatures(repo_root)
-
-    if not os.path.isdir(modules_dir):
-        print("check_signature: PASS")
-        return 0
-
-    errors = []
-    warnings = []
-
-    for file_path in iter_python_files(modules_dir):
-        try:
-            with open(file_path, "r", encoding="utf-8") as source_file:
-                content = source_file.read()
-            tree = ast.parse(content, filename=file_path)
-        except SyntaxError as exc:
-            rel_path = os.path.relpath(file_path, repo_root)
-            errors.append((rel_path, exc.lineno or 0, "SyntaxError", exc.msg))
             continue
-        except (OSError, UnicodeError) as exc:
-            rel_path = os.path.relpath(file_path, repo_root)
-            errors.append((rel_path, 0, "ReadError", str(exc)))
+        if actual is None:
+            expected_signature = format_signature(spec.name, spec.params, spec.output)
+            errors.append(
+                f"{format_location(spec)}: {spec.name}\n"
+                f"  expected: {expected_signature}\n"
+                f"  actual:   <missing implementation>"
+            )
             continue
 
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            spec_signature = spec_signatures.get(node.name)
-            if not spec_signature:
-                continue
-            compare_signatures(
-                file_path, node, spec_signature, content, errors, warnings, repo_root
-            )
+        expected_signature = format_signature(spec.name, spec.params, spec.output)
+        actual_signature = format_signature(actual.name, actual.params, actual.output)
 
-    if errors:
-        print("check_signature: FAIL")
-        for rel_path, line, func_name, message in errors:
-            print(f"FAIL: {rel_path}:{line} {func_name} {message}")
-        print_warnings(warnings)
+        if spec.name != actual.name:
+            errors.append(
+                f"{format_location(actual)}: {actual.name}\n"
+                f"  expected: {expected_signature}\n"
+                f"  actual:   {actual_signature}"
+            )
+            continue
+        if spec.params != actual.params:
+            errors.append(
+                f"{format_location(actual)}: {actual.name}\n"
+                f"  expected: {expected_signature}\n"
+                f"  actual:   {actual_signature}"
+            )
+            continue
+        if spec.output is not None and spec.output != actual.output:
+            errors.append(
+                f"{format_location(actual)}: {actual.name}\n"
+                f"  expected: {expected_signature}\n"
+                f"  actual:   {actual_signature}"
+            )
+            continue
+
+    return errors
+
+
+def main() -> int:
+    try:
+        spec_signatures = parse_spec_signatures(SPEC_PATH)
+        functions = collect_module_functions(MODULES_DIR)
+    except (SpecParseError, ModuleParseError) as exc:
+        print(f"check_signature: {exc}", file=sys.stderr)
         return 1
 
-    print_warnings(warnings)
-    print("check_signature: PASS")
+    errors = compare_signatures(spec_signatures, functions)
+    if errors:
+        print("check_signature: signature mismatch detected:", file=sys.stderr)
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+
     return 0
 
 
