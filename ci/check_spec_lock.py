@@ -19,7 +19,9 @@ def resolve_diff_range() -> str:
     base_ref = os.getenv("GITHUB_BASE_REF")
     head_sha = os.getenv("GITHUB_HEAD_SHA")
 
-    if os.getenv("GITHUB_ACTIONS") == "true":
+    is_ci = os.getenv("GITHUB_ACTIONS") == "true"
+
+    if is_ci:
         if not (base_ref and base_ref.strip() and head_sha and head_sha.strip()):
             print(
                 "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
@@ -28,7 +30,7 @@ def resolve_diff_range() -> str:
             )
             sys.exit(1)
 
-    if base_ref is None or head_sha is None:
+    if not is_ci and (base_ref is None or head_sha is None):
         print(
             "check_spec_lock: WARNING: local mode, using develop...HEAD",
             file=sys.stderr,
@@ -36,8 +38,7 @@ def resolve_diff_range() -> str:
         base_ref = "develop"
         head_sha = "HEAD"
 
-    base_ref_exists = verify_ref(base_ref) is not None
-    if base_ref_exists:
+    if verify_ref(base_ref) is not None:
         base = base_ref
     else:
         origin_ref = f"origin/{base_ref}"
