@@ -38,6 +38,8 @@ def validate_ref_format(ref):
         return None, f"invalid git ref '{sanitize_ref(ref)}'"
     if not REF_PATTERN.fullmatch(ref):
         return None, f"invalid git ref '{sanitize_ref(ref)}'"
+    if ".." in ref or "/." in ref or "./" in ref or ref.startswith("/") or ref.endswith("/"):
+        return None, f"invalid git ref '{sanitize_ref(ref)}'"
     return ref, ""
 
 
@@ -49,6 +51,7 @@ def verify_ref(ref):
         ["git", "rev-parse", "--verify", safe_ref],
         capture_output=True,
         text=True,
+        timeout=30,
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip()
@@ -153,6 +156,7 @@ def get_changed_files(diff_range):
         ["git", "diff", "--name-only", diff_range],
         capture_output=True,
         text=True,
+        timeout=30,
     )
     if result.returncode != 0:
         print("check_import_scope: git diff failed", file=sys.stderr)
