@@ -1,3 +1,10 @@
-# Interface Specification
+Function: add_new_state
 
-def add_new_state(state_name: str) -> State:
+Input:
+
+* state_name: string
+* transitions: list
+
+Output:
+
+* boolean (true nếu thêm thành công, false nếu state đã tồn tại)
