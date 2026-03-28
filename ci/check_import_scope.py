@@ -24,7 +24,7 @@ def normalize_path(path):
 
 
 REF_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
-DIFF_RANGE_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+\\.\\.\\.[A-Za-z0-9._/-]+$")
+DIFF_RANGE_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+\.{3}[A-Za-z0-9._/-]+$")
 
 
 def sanitize_ref(ref):
@@ -133,7 +133,7 @@ def resolve_diff_range():
 
 
 def validate_diff_range(diff_range):
-    # Basic validation: safe refs on both sides of "...".
+    # Format-only validation: "<ref>...<ref>" using allowed characters.
     return bool(DIFF_RANGE_PATTERN.fullmatch(diff_range))
 
 
