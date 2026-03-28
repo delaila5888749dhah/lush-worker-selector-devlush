@@ -4,20 +4,20 @@ import subprocess
 import sys
 
 
-def verify_ref(ref: str) -> str | None:
+def verify_ref(ref: str) -> tuple[str | None, str]:
     result = subprocess.run(
         ["git", "rev-parse", "--verify", ref],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        return None
-    return result.stdout.strip()
+        return None, result.stderr.strip()
+    return result.stdout.strip(), ""
 
 
 def resolve_diff_range() -> str:
     base_ref_raw = os.getenv("GITHUB_BASE_REF")
-    head_sha_raw = os.getenv("GITHUB_HEAD_SHA")
+    head_sha_raw = os.getenv("GITHUB_HEAD_SHA") or os.getenv("GITHUB_SHA")
 
     is_ci = os.getenv("GITHUB_ACTIONS") == "true"
 
@@ -50,24 +50,34 @@ def resolve_diff_range() -> str:
                 )
                 sys.exit(1)
 
-    if verify_ref(base_ref) is not None:
+    base_ref_sha, base_ref_error = verify_ref(base_ref)
+    if base_ref_sha is not None:
         base = base_ref
     else:
         origin_ref = f"origin/{base_ref}"
-        if verify_ref(origin_ref) is not None:
+        origin_sha, origin_error = verify_ref(origin_ref)
+        if origin_sha is not None:
             base = origin_ref
         else:
             print(
-                "check_spec_lock: ERROR: unable to resolve base ref",
+                "check_spec_lock: ERROR: unable to resolve base ref "
+                f"'{base_ref}' (also tried '{origin_ref}')",
                 file=sys.stderr,
             )
+            if base_ref_error:
+                print(base_ref_error, file=sys.stderr)
+            if origin_error:
+                print(origin_error, file=sys.stderr)
             sys.exit(1)
 
-    if verify_ref(head_sha) is None:
+    head_sha_resolved, head_sha_error = verify_ref(head_sha)
+    if head_sha_resolved is None:
         print(
             f"check_spec_lock: head SHA '{head_sha}' could not be resolved",
             file=sys.stderr,
         )
+        if head_sha_error:
+            print(head_sha_error, file=sys.stderr)
         sys.exit(1)
 
     return f"{base}...{head_sha}"
