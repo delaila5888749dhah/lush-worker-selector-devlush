@@ -23,8 +23,8 @@ def normalize_path(path):
     return normalized
 
 
-REF_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
-DIFF_RANGE_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+\.{3}[A-Za-z0-9._/-]+$")
+REF_PATTERN = re.compile(r"^[A-Za-z0-9._/~-]+$")
+DIFF_RANGE_PATTERN = re.compile(r"^[A-Za-z0-9._/~-]+\.{3}[A-Za-z0-9._/~-]+$")
 
 
 def sanitize_ref(ref):
