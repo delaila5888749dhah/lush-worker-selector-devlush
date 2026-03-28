@@ -16,17 +16,14 @@ def verify_ref(ref: str) -> str | None:
 
 
 def resolve_diff_range() -> str:
-    base_ref = os.getenv("GITHUB_BASE_REF")
-    head_sha = os.getenv("GITHUB_HEAD_SHA")
+    base_ref_raw = os.getenv("GITHUB_BASE_REF")
+    head_sha_raw = os.getenv("GITHUB_HEAD_SHA")
 
     is_ci = os.getenv("GITHUB_ACTIONS") == "true"
 
-    if base_ref is not None:
-        base_ref = base_ref.strip()
-    if head_sha is not None:
-        head_sha = head_sha.strip()
-
     if is_ci:
+        base_ref = base_ref_raw.strip() if base_ref_raw else ""
+        head_sha = head_sha_raw.strip() if head_sha_raw else ""
         if not base_ref or not head_sha:
             print(
                 "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
@@ -35,20 +32,23 @@ def resolve_diff_range() -> str:
             )
             sys.exit(1)
     else:
-        if base_ref is None or head_sha is None:
+        if base_ref_raw is None or head_sha_raw is None:
             print(
                 "check_spec_lock: WARNING: local mode, using develop...HEAD",
                 file=sys.stderr,
             )
             base_ref = "develop"
             head_sha = "HEAD"
-        elif not base_ref or not head_sha:
-            print(
-                "check_spec_lock: ERROR: missing GITHUB_BASE_REF or "
-                "GITHUB_HEAD_SHA",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        else:
+            base_ref = base_ref_raw.strip()
+            head_sha = head_sha_raw.strip()
+            if not base_ref or not head_sha:
+                print(
+                    "check_spec_lock: ERROR: missing GITHUB_BASE_REF or "
+                    "GITHUB_HEAD_SHA",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     if verify_ref(base_ref) is not None:
         base = base_ref
@@ -65,7 +65,7 @@ def resolve_diff_range() -> str:
 
     if verify_ref(head_sha) is None:
         print(
-            f"check_spec_lock: head sha '{head_sha}' could not be resolved",
+            f"check_spec_lock: head SHA '{head_sha}' could not be resolved",
             file=sys.stderr,
         )
         sys.exit(1)
