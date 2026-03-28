@@ -20,6 +20,13 @@ def resolve_diff_range() -> str:
     head_sha = os.getenv("GITHUB_HEAD_SHA")
 
     if not base_ref or not head_sha:
+        if os.getenv("GITHUB_ACTIONS") == "true":
+            print(
+                "check_spec_lock: missing GITHUB_BASE_REF or GITHUB_HEAD_SHA; "
+                "cannot determine diff range in CI",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         print(
             "check_spec_lock: WARNING: running in local mode, using diff range "
             "develop...HEAD",
@@ -28,23 +35,25 @@ def resolve_diff_range() -> str:
         base_ref = "develop"
         head_sha = "HEAD"
 
-    base = verify_ref(base_ref) or verify_ref(f"origin/{base_ref}")
-    if not base:
+    if verify_ref(base_ref):
+        base = base_ref
+    elif verify_ref(f"origin/{base_ref}"):
+        base = f"origin/{base_ref}"
+    else:
         print(
             f"check_spec_lock: base ref '{base_ref}' could not be resolved",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    head = verify_ref(head_sha)
-    if not head:
+    if not verify_ref(head_sha):
         print(
             f"check_spec_lock: head sha '{head_sha}' could not be resolved",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    return f"{base}...{head}"
+    return f"{base}...{head_sha}"
 
 
 def get_changed_files(diff_range: str) -> list[str]:
