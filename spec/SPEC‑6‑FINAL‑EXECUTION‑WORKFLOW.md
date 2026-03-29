@@ -148,9 +148,8 @@ timestamp | worker_id | trace_id | state | action | status
 1. Architect (Claude Opus 4.6): Thiết kế logic tổng thể, định nghĩa interface, phê duyệt milestone và giám sát runtime. Đầu ra: Spec, interface contract và các quyết định kỹ thuật.
 2. System Coordinator GPT (Software Architect GPT): Quản lý luồng CI/CD, đánh giá tiến độ, kiểm soát khóa cứng (Hard Gate, Review Lock) và phân phối lệnh làm việc. Đầu ra: Lệnh điều phối và chỉ định task.
 3. Trợ lý Hỗ trợ Triển khai (DeepSeek): Hướng dẫn thao tác từng bước, soạn Prompt kỹ thuật chuẩn để copy-paste, tuyệt đối không tự viết code. Đầu ra: Hướng dẫn thao tác, Prompt giao việc và Báo cáo kết quả.
-4. Prompt Engineer (Gemini 3.1 Pro): Chuyển spec thành các task cụ thể, chuẩn hóa input/output và viết prompt cho Codex. Đầu ra: Task file cho từng function.
-5. Code (GPT-5.2-Codex): Chịu trách nhiệm viết mã nguồn theo task, triển khai module và viết unit test hoàn chỉnh. Đầu ra: Code và bộ unit test.
-6. Review (GPT-5.4): Kiểm tra PR, đối chiếu với spec để phát hiện lỗi logic, side-effect và đảm bảo tính nhất quán của interface. Đầu ra: Quyết định Approved hoặc Rejected.
+4. Code (GPT-5.2-Codex): Chịu trách nhiệm viết mã nguồn theo task, triển khai module và viết unit test hoàn chỉnh. Đầu ra: Code và bộ unit test.
+5. Review (GPT-5.4): Kiểm tra PR, đối chiếu với spec để phát hiện lỗi logic, side-effect và đảm bảo tính nhất quán của interface. Đầu ra: Quyết định Approved hoặc Rejected.
 
 Nguyên tắc làm việc:
 
@@ -203,9 +202,6 @@ P6 Runbook hoàn chỉnh, sẵn sàng bàn giao
 │
 └── [System Coordinator GPT] SOFTWARE ARCHITECT GPT
 │ (Kiểm soát luồng CI/CD, gài khóa cứng, ra lệnh điều phối task)
-│
-├── [Prompt Engineer] Gemini 3.1 Pro
-│   (Phân rã Spec thành các Task file cụ thể, chuẩn hóa Input/Output)
 │
 └── [Trợ lý Hỗ trợ Triển khai] DEEPSEEK	
 │ (Nhận Task, soạn Prompt chuẩn kỹ thuật, hướng dẫn TÔI từng bước)
