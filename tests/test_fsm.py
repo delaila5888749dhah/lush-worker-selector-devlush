@@ -1,11 +1,11 @@
 import unittest
 
-from modules.fsm.main import add_new_state, reset_states
+from modules.fsm.main import add_new_state, _states
 
 
 class AddNewStateTests(unittest.TestCase):
     def setUp(self):
-        reset_states()
+        _states.clear()
 
     def test_add_valid_state(self):
         self.assertTrue(add_new_state("valid_state"))
@@ -14,23 +14,27 @@ class AddNewStateTests(unittest.TestCase):
         self.assertTrue(add_new_state("duplicate"))
         self.assertFalse(add_new_state("duplicate"))
 
-    def test_add_empty_state(self):
+    def test_add_empty_string(self):
         self.assertFalse(add_new_state(""))
 
-    def test_add_state_with_special_characters(self):
+    def test_add_none(self):
+        self.assertFalse(add_new_state(None))
+
+    def test_add_invalid_characters(self):
         self.assertFalse(add_new_state("state!"))
 
-    def test_add_initial_state_case_insensitive(self):
+    def test_add_initial_case_insensitive(self):
+        self.assertFalse(add_new_state("initial"))
         self.assertFalse(add_new_state("INITIAL"))
         self.assertFalse(add_new_state("Initial"))
 
-    def test_add_final_state(self):
+    def test_add_final(self):
         self.assertFalse(add_new_state("final"))
 
-    def test_add_error_state(self):
+    def test_add_error(self):
         self.assertFalse(add_new_state("error"))
 
-    def test_add_state_after_other_state(self):
+    def test_add_after_another_state(self):
         self.assertTrue(add_new_state("first_state"))
         self.assertTrue(add_new_state("second_state"))
         self.assertFalse(add_new_state("first_state"))
