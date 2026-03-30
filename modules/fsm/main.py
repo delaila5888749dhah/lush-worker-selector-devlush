@@ -1,39 +1,30 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
 import re
-from threading import Lock
-from typing import Dict
 
 
-@dataclass(frozen=True)
 class State:
-    name: str
+    def __init__(self, name: str):
+        self.name = name
 
 
-_states: Dict[str, State] = {}
-_states_lock = Lock()
-
-
-_RESERVED_STATE_NAMES = {"initial", "final", "error"}
-_STATE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
+_states = set()
+_VALID_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+_RESERVED_NAMES = {"initial", "final", "error"}
 
 
 def add_new_state(state_name: str) -> bool:
-    if not isinstance(state_name, str) or not state_name:
+    if state_name is None or not isinstance(state_name, str):
         return False
-    if _STATE_NAME_PATTERN.match(state_name) is None:
+    if state_name == "":
         return False
-    normalized_name = state_name.lower()
-    if normalized_name in _RESERVED_STATE_NAMES:
+    if _VALID_NAME_RE.fullmatch(state_name) is None:
         return False
-    with _states_lock:
-        if state_name in _states:
-            return False
-        _states[state_name] = State(name=state_name)
-        return True
+    if state_name.lower() in _RESERVED_NAMES:
+        return False
+    if state_name in _states:
+        return False
+    _states.add(state_name)
+    return True
 
 
-def _clear_states() -> None:
-    with _states_lock:
-        _states.clear()
+def reset_states() -> None:
+    _states.clear()
