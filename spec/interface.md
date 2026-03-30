@@ -1,3 +1,20 @@
+<<<<<<< HEAD
+Function: add_new_state
+
+Input:
+  * state_name: str
+
+Output:
+  * State (frozen dataclass, field: name: str)
+
+Error:
+  * Raise ValueError nếu state_name không nằm trong ALLOWED_STATES (xem spec/fsm.md)
+  * Raise ValueError nếu state_name đã tồn tại trong registry
+
+Notes:
+  * Thread-safe (Lock)
+  * ALLOWED_STATES là tập đóng, định nghĩa tại spec/fsm.md
+=======
 Function: add_new_state
 
 Input:
@@ -8,3 +25,4 @@ Input:
 Output:
 
 * boolean (true nếu thêm thành công, false nếu state đã tồn tại)
+>>>>>>> 52a2008b5fe2cef08bafe3a661fef0e913c0121b

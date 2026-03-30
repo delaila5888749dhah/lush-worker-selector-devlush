@@ -351,12 +351,11 @@ def main():
     if errors:
         print("check_import_scope: FAIL")
         for file_path, line, message in errors:
-            print(f"FAIL: {file_path}:{line} {message}")
+            print(f"FAIL: {file_path}: {line} {message}")
         return 1
 
     print("check_import_scope: PASS")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
