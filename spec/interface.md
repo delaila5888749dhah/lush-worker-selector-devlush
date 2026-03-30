@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 Function: add_new_state
 
 Input:
@@ -25,4 +24,3 @@ Input:
 Output:
 
 * boolean (true nếu thêm thành công, false nếu state đã tồn tại)
->>>>>>> 52a2008b5fe2cef08bafe3a661fef0e913c0121b
