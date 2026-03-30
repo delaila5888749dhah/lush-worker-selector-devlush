@@ -13,7 +13,7 @@ Error:
 Notes:
   * Thread-safe (Lock)
   * ALLOWED_STATES là tập đóng, định nghĩa tại spec/fsm.md
-=======
+
 Function: add_new_state
 
 Input:
