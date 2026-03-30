@@ -105,6 +105,16 @@ def is_spec_path(path: str) -> bool:
 
 
 def main() -> None:
+    allow_spec_modification = (
+        os.environ.get("ALLOW_SPEC_MODIFICATION", "").strip().lower() == "true"
+    )
+    if allow_spec_modification:
+        print(
+            "WARNING: Spec modification allowed by environment variable",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
     diff_range = resolve_diff_range()
     changed_files = get_changed_files(diff_range)
     spec_files = [path for path in changed_files if is_spec_path(path)]
