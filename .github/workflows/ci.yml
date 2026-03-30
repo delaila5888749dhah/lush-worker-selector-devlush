@@ -38,3 +38,6 @@ jobs:
 
     - name: Unit tests
       run: python -m unittest discover tests
+
+    - name: Check schema import
+      run: python -c "import spec.schema"
