@@ -3,7 +3,7 @@ from typing import List, Optional
 
 
 @dataclass
-class State:
+class State
     name: str
 
 
