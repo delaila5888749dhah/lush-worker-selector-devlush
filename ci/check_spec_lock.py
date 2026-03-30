@@ -105,13 +105,10 @@ def is_spec_path(path: str) -> bool:
 
 
 def main() -> None:
-    allow_spec_modification = (
-        os.environ.get("ALLOW_SPEC_MODIFICATION", "").strip().lower() == "true"
-    )
-    if allow_spec_modification:
-        print(
-            "WARNING: Spec modification allowed by environment variable",
-            file=sys.stderr,
+    allow_spec_modification = os.environ.get("ALLOW_SPEC_MODIFICATION")
+    if allow_spec_modification and allow_spec_modification.strip().lower() == "true":
+        sys.stderr.write(
+            "WARNING: Spec modification allowed by environment variable\n"
         )
         sys.exit(0)
 
