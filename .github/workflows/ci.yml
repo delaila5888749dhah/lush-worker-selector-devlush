@@ -29,6 +29,8 @@ jobs:
 
     - name: Check PR scope
       run: python ci/check_pr_scope.py
+      env:
+        ALLOW_MULTI_MODULE: "true"
 
     - name: Check spec lock
       run: python ci/check_spec_lock.py

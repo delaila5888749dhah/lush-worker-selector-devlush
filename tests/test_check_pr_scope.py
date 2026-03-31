@@ -8,6 +8,7 @@ from ci.check_pr_scope import (
     module_from_path,
     get_numstat,
     check,
+    main,
     EXCLUDED_PREFIXES,
     MAX_CHANGED_LINES,
 )
@@ -132,6 +133,41 @@ class ConstantsTests(unittest.TestCase):
     def test_excluded_prefixes(self):
         self.assertIn("tests/", EXCLUDED_PREFIXES)
         self.assertIn("ci/", EXCLUDED_PREFIXES)
+
+
+class AllowMultiModuleTests(unittest.TestCase):
+    """Test the ALLOW_MULTI_MODULE env var bypass."""
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"ALLOW_MULTI_MODULE": "true"})
+    def test_bypass_allows_multi_module(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (10, 5, "modules/fsm/main.py"),
+            (10, 5, "modules/watchdog/main.py"),
+            (10, 5, "modules/billing/main.py"),
+            (10, 5, "modules/cdp/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"ALLOW_MULTI_MODULE": "true"})
+    def test_bypass_still_enforces_line_limit(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (150, 60, "modules/fsm/main.py"),
+        ]
+        self.assertEqual(main(), 1)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"ALLOW_MULTI_MODULE": "false"})
+    def test_no_bypass_when_false(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (10, 5, "modules/fsm/main.py"),
+            (10, 5, "modules/watchdog/main.py"),
+        ]
+        self.assertEqual(main(), 1)
 
 
 if __name__ == "__main__":

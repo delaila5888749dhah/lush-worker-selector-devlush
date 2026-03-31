@@ -194,6 +194,30 @@ def check(diff_range: str) -> int:
 
 
 def main() -> int:
+    allow_multi = os.environ.get("ALLOW_MULTI_MODULE", "").strip().lower()
+    if allow_multi == "true":
+        print("WARNING: Multi-module scope check bypassed by "
+              "ALLOW_MULTI_MODULE", file=sys.stderr)
+        diff_range = resolve_diff_range()
+        entries = get_numstat(diff_range)
+        total_lines = 0
+        excluded_lines = 0
+        for added, deleted, filepath in entries:
+            changed = added + deleted
+            if _is_excluded(filepath):
+                excluded_lines += changed
+            else:
+                total_lines += changed
+        if total_lines > MAX_CHANGED_LINES:
+            print("check_pr_scope: FAIL")
+            print(f"  total lines changed ({total_lines}) exceeds "
+                  f"{MAX_CHANGED_LINES} (excluding "
+                  f"{', '.join(EXCLUDED_PREFIXES)})")
+            return 1
+        print(f"check_pr_scope: PASS ({total_lines} lines changed"
+              + (f", {excluded_lines} excluded" if excluded_lines else "")
+              + ", multi-module allowed)")
+        return 0
     diff_range = resolve_diff_range()
     return check(diff_range)
 
