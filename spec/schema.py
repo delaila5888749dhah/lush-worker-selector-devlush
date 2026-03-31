@@ -33,3 +33,11 @@ class WorkerTask:
     amount: int
     primary_card: CardInfo
     order_queue: List[CardInfo]
+
+
+class SessionFlaggedError(Exception):
+    """Raised when session is flagged (e.g. timeout on total watchdog)."""
+
+
+class CycleExhaustedError(Exception):
+    """Raised when all cards in OrderQueue have been exhausted."""
