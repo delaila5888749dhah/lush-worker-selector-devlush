@@ -3,8 +3,11 @@
 Kiến trúc lõi & Cấu hình hệ thống:
 
 · Quy mô vận hành: WorkerPool quản lý 10+ luồng (Workers) chạy song song độc lập.
+
 · Stagger Start (Khởi động so le): Sử dụng random.uniform(12, 25) giây giữa các lần gọi Worker để chống màng lọc nhận diện chu kỳ mạng của Givex.
+
 · Công nghệ lõi: Python + Selenium bọc qua CDP (Chrome DevTools Protocol) và ghost-cursor. Toàn bộ thao tác chuột và phím được đẩy thẳng xuống cấp độ hệ điều hành (OS-level events), đảm bảo cờ isTrusted=True 100%.
+
 · Quản lý Proxy: Sử dụng Proxy tĩnh (SOCKS5/HTTP) map 1-1 với Profile BitBrowser. Tuyệt đối KHÔNG tự động gọi API 9Proxy để lấy IP mới (ngăn chặn triệt để vòng lặp lỗi 402 đốt tiền).
 
 🎬 KỊCH BẢN VẬN HÀNH THỰC TẾ (1 CYCLE)
