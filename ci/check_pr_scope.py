@@ -9,9 +9,16 @@ Architect Directive (AD-6 amendment):
   script itself would exceed the limit it enforces.
 
 Change Classification (Exception Framework — Final Architecture):
-  CHANGE_CLASS is REQUIRED for every PR.  It is the SINGLE source of
-  truth for CI policy selection.  There are NO legacy flags, NO implicit
-  bypasses, and NO environment-only overrides.
+  CHANGE_CLASS is auto-detected from PR content.  It is the SINGLE
+  source of truth for CI policy selection.  There are NO legacy flags,
+  NO implicit bypasses, and NO environment-only overrides.
+
+  Detection rules (hard, in priority order):
+    1. Explicit CHANGE_CLASS env var (if set and valid)
+    2. "[emergency]" in PR title → emergency_override
+    3. ANY changed file in spec/ → spec_sync
+    4. ANY changed file in ci/ or .github/ → infra_change
+    5. Fallback → normal
 
   Values:
     normal             — ≤200 lines, single module
@@ -233,15 +240,74 @@ def check(diff_range: str) -> int:
     return 0
 
 
-def _resolve_change_class() -> str | None:
-    """Resolve CHANGE_CLASS from env.
+def _get_changed_files(diff_range: str) -> list[str]:
+    """Return list of changed file paths from git diff --name-only."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", diff_range],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        print("check_pr_scope: git diff --name-only failed", file=sys.stderr)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return []
+    return [_normalize(f) for f in result.stdout.splitlines() if f.strip()]
 
-    CHANGE_CLASS is REQUIRED for every PR.  Returns None if not set,
-    which the caller treats as a hard failure.  Legacy flags
-    (ALLOW_MULTI_MODULE) are not recognized.
+
+def _auto_detect_change_class(
+    pr_title: str,
+    changed_files: list[str],
+) -> str:
+    """Auto-detect CHANGE_CLASS from PR title and changed files.
+
+    Hard rules only — no ratios, no scoring, no heuristics.
+
+    Rule 1: "[emergency]" in PR title → emergency_override
+    Rule 2: ANY file starts with "spec/" → spec_sync
+    Rule 3: ANY file starts with "ci/" or ".github/" → infra_change
+    Rule 4: fallback → normal
     """
-    change_class = os.environ.get("CHANGE_CLASS", "").strip().lower()
-    return change_class if change_class else None
+    title_lower = pr_title.strip().lower()
+
+    # Rule 1 — emergency_override (title-based, highest priority)
+    if "[emergency]" in title_lower:
+        return "emergency_override"
+
+    # Rule 2 — spec_sync (file-based)
+    if any(f.startswith("spec/") for f in changed_files):
+        return "spec_sync"
+
+    # Rule 3 — infra_change (file-based)
+    if any(f.startswith("ci/") or f.startswith(".github/") for f in changed_files):
+        return "infra_change"
+
+    # Rule 4 — fallback
+    return "normal"
+
+
+def _resolve_change_class(diff_range: str) -> str:
+    """Resolve CHANGE_CLASS: explicit env var OR auto-detect from files.
+
+    Priority:
+      1. Explicit CHANGE_CLASS env var (if set and valid)
+      2. Auto-detect from PR title + changed files
+    """
+    explicit = os.environ.get("CHANGE_CLASS", "").strip().lower()
+
+    if explicit and explicit in VALID_CHANGE_CLASSES:
+        print(f"check_pr_scope: CHANGE_CLASS from env: {explicit}",
+              file=sys.stderr)
+        return explicit
+
+    pr_title = os.environ.get("PR_TITLE", "")
+    changed_files = _get_changed_files(diff_range)
+
+    print(f"check_pr_scope: FILES: {changed_files}", file=sys.stderr)
+
+    detected = _auto_detect_change_class(pr_title, changed_files)
+    print(f"check_pr_scope: DETECTED CHANGE_CLASS: {detected}",
+          file=sys.stderr)
+    return detected
 
 
 def _check_authorization(change_class: str) -> list[str]:
@@ -364,15 +430,8 @@ def _emit_audit_log(
 
 
 def main() -> int:
-    change_class = _resolve_change_class()
-
-    # CHANGE_CLASS is REQUIRED
-    if change_class is None:
-        print("check_pr_scope: FAIL — CHANGE_CLASS env var is required. "
-              "Set to one of: "
-              f"{', '.join(sorted(VALID_CHANGE_CLASSES))}",
-              file=sys.stderr)
-        return 1
+    diff_range = resolve_diff_range()
+    change_class = _resolve_change_class(diff_range)
 
     # Validate CHANGE_CLASS value
     if change_class not in VALID_CHANGE_CLASSES:
@@ -383,7 +442,6 @@ def main() -> int:
 
     # For normal PRs, skip governance checks entirely
     if change_class == "normal":
-        diff_range = resolve_diff_range()
         return check(diff_range)
 
     # ── Override path: authorization + context binding ──────────
@@ -396,7 +454,6 @@ def main() -> int:
             print(f"  {err}", file=sys.stderr)
         return 1
 
-    diff_range = resolve_diff_range()
     entries = get_numstat(diff_range)
     total_lines, excluded_lines, modules_touched = _analyze_entries(entries)
     changed_paths = [filepath for _, _, filepath in entries]

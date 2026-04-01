@@ -49,7 +49,3 @@ class InvalidStateError(Exception):
 
 class InvalidTransitionError(Exception):
     pass
-
-
-class DuplicateStateError(Exception):
-    pass

@@ -6,6 +6,7 @@ from ci.check_pr_scope import (
     _normalize,
     _is_excluded,
     _resolve_change_class,
+    _auto_detect_change_class,
     _check_authorization,
     _check_context_binding,
     module_from_path,
@@ -139,29 +140,69 @@ class ConstantsTests(unittest.TestCase):
         self.assertIn("ci/", EXCLUDED_PREFIXES)
 
 
+class AutoDetectChangeClassTests(unittest.TestCase):
+    """Test _auto_detect_change_class — hard rules only."""
+
+    def test_emergency_from_title(self):
+        self.assertEqual(
+            _auto_detect_change_class("[emergency] hotfix", ["modules/fsm/main.py"]),
+            "emergency_override",
+        )
+
+    def test_emergency_takes_priority_over_spec(self):
+        self.assertEqual(
+            _auto_detect_change_class("[emergency] fix", ["spec/fsm.md"]),
+            "emergency_override",
+        )
+
+    def test_spec_sync_from_files(self):
+        self.assertEqual(
+            _auto_detect_change_class("update stuff", ["spec/fsm.md", "modules/fsm/main.py"]),
+            "spec_sync",
+        )
+
+    def test_infra_from_ci_files(self):
+        self.assertEqual(
+            _auto_detect_change_class("update CI", ["ci/check_pr_scope.py"]),
+            "infra_change",
+        )
+
+    def test_infra_from_github_files(self):
+        self.assertEqual(
+            _auto_detect_change_class("update workflow", [".github/workflows/ci.yml"]),
+            "infra_change",
+        )
+
+    def test_spec_takes_priority_over_infra(self):
+        self.assertEqual(
+            _auto_detect_change_class("update", ["spec/fsm.md", "ci/check.py"]),
+            "spec_sync",
+        )
+
+    def test_fallback_to_normal(self):
+        self.assertEqual(
+            _auto_detect_change_class("simple fix", ["modules/fsm/main.py"]),
+            "normal",
+        )
+
+
 class ResolveChangeClassTests(unittest.TestCase):
-    """Test _resolve_change_class — CHANGE_CLASS is REQUIRED."""
+    """Test _resolve_change_class — explicit env OR auto-detect."""
 
-    @patch.dict("os.environ", {}, clear=True)
-    def test_missing_returns_none(self):
-        self.assertIsNone(_resolve_change_class())
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch.dict("os.environ", {"CHANGE_CLASS": "spec_sync"}, clear=True)
+    def test_explicit_env_takes_priority(self, mock_files):
+        self.assertEqual(_resolve_change_class("fake...range"), "spec_sync")
 
-    @patch.dict("os.environ", {"CHANGE_CLASS": ""}, clear=True)
-    def test_empty_returns_none(self):
-        self.assertIsNone(_resolve_change_class())
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["spec/fsm.md", "modules/fsm/main.py"])
+    @patch.dict("os.environ", {"CHANGE_CLASS": "", "PR_TITLE": "update stuff"}, clear=True)
+    def test_auto_detects_spec_sync(self, mock_files):
+        self.assertEqual(_resolve_change_class("fake...range"), "spec_sync")
 
-    @patch.dict("os.environ", {"CHANGE_CLASS": "emergency_override"}, clear=True)
-    def test_reads_change_class(self):
-        self.assertEqual(_resolve_change_class(), "emergency_override")
-
-    @patch.dict("os.environ", {"CHANGE_CLASS": "  Spec_Sync  "}, clear=True)
-    def test_normalizes_whitespace_and_case(self):
-        self.assertEqual(_resolve_change_class(), "spec_sync")
-
-    @patch.dict("os.environ", {"ALLOW_MULTI_MODULE": "true"}, clear=True)
-    def test_legacy_allow_multi_module_ignored(self):
-        """ALLOW_MULTI_MODULE is no longer recognized."""
-        self.assertIsNone(_resolve_change_class())
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch.dict("os.environ", {"CHANGE_CLASS": "", "PR_TITLE": "simple fix"}, clear=True)
+    def test_auto_detects_normal(self, mock_files):
+        self.assertEqual(_resolve_change_class("fake...range"), "normal")
 
 
 class AuthorizationTests(unittest.TestCase):
@@ -262,37 +303,44 @@ class ContextBindingTests(unittest.TestCase):
 class ChangeClassIntegrationTests(unittest.TestCase):
     """End-to-end tests for CHANGE_CLASS through main()."""
 
-    @patch.dict("os.environ", {}, clear=True)
-    def test_missing_change_class_fails(self):
-        """CHANGE_CLASS is REQUIRED — missing = FAIL."""
-        self.assertEqual(main(), 1)
-
-    @patch.dict("os.environ", {"CHANGE_CLASS": ""}, clear=True)
-    def test_empty_change_class_fails(self):
-        self.assertEqual(main(), 1)
-
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
-        "CHANGE_CLASS": "normal",
+        "CHANGE_CLASS": "",
+        "PR_TITLE": "simple change",
     }, clear=False)
-    def test_normal_enforces_both_limits(self, mock_resolve, mock_numstat):
+    def test_auto_detect_normal_enforces_limits(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (150, 60, "modules/fsm/main.py"),
         ]
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "normal",
     }, clear=False)
-    def test_normal_passes_under_limit(self, mock_resolve, mock_numstat):
+    def test_explicit_normal_enforces_both_limits(self, mock_resolve, mock_numstat, mock_files):
+        mock_numstat.return_value = [
+            (150, 60, "modules/fsm/main.py"),
+        ]
+        self.assertEqual(main(), 1)
+
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "normal",
+    }, clear=False)
+    def test_normal_passes_under_limit(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (50, 10, "modules/fsm/main.py"),
         ]
         self.assertEqual(main(), 0)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
@@ -301,13 +349,15 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "PR_LABELS": "approved-override",
         "PR_REVIEW_STATE": "APPROVED",
     }, clear=False)
-    def test_emergency_override_full_bypass(self, mock_resolve, mock_numstat):
+    def test_emergency_override_full_bypass(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (200, 100, "modules/fsm/main.py"),
             (200, 100, "modules/watchdog/main.py"),
         ]
         self.assertEqual(main(), 0)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "emergency_override",
         "PR_TITLE": "[emergency] hotfix",
@@ -315,18 +365,23 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "CHANGE_CLASS_APPROVED": "",
         "PR_REVIEW_STATE": "APPROVED",
     }, clear=False)
-    def test_emergency_without_label_fails(self):
+    def test_emergency_without_label_fails(self, mock_resolve, mock_files):
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "emergency_override",
         "PR_TITLE": "[emergency] hotfix",
         "PR_LABELS": "approved-override",
         "PR_REVIEW_STATE": "PENDING",
     }, clear=False)
-    def test_emergency_without_review_fails(self):
+    def test_emergency_without_review_fails(self, mock_resolve, mock_files):
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.get_numstat", return_value=[(10, 5, "modules/fsm/main.py")])
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "emergency_override",
         "PR_TITLE": "normal PR",
@@ -334,20 +389,19 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "CHANGE_CLASS_APPROVED": "",
         "PR_REVIEW_STATE": "APPROVED",
     }, clear=False)
-    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
-    @patch("ci.check_pr_scope.get_numstat", return_value=[(10, 5, "modules/fsm/main.py")])
-    def test_emergency_without_title_tag_fails(self, mock_numstat, mock_resolve):
+    def test_emergency_without_title_tag_fails(self, mock_resolve, mock_numstat, mock_files):
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["spec/fsm.md", "modules/fsm/main.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
-        "CHANGE_CLASS": "spec_sync",
+        "CHANGE_CLASS": "",
         "PR_TITLE": "update interfaces",
         "CHANGE_CLASS_APPROVED": "true",
     }, clear=False)
-    def test_spec_sync_bypasses_both_limits(self, mock_resolve, mock_numstat):
-        """spec_sync skips line limit AND module limit."""
+    def test_auto_detect_spec_sync_bypasses_limits(self, mock_resolve, mock_numstat, mock_files):
+        """Auto-detected spec_sync skips line limit AND module limit."""
         mock_numstat.return_value = [
             (200, 100, "spec/fsm.md"),
             (10, 5, "modules/fsm/main.py"),
@@ -355,6 +409,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         ]
         self.assertEqual(main(), 0)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["spec/fsm.md", "modules/fsm/main.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
@@ -362,13 +417,30 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "PR_TITLE": "update interfaces",
         "CHANGE_CLASS_APPROVED": "true",
     }, clear=False)
-    def test_spec_sync_without_spec_files_fails(self, mock_resolve, mock_numstat):
+    def test_spec_sync_bypasses_both_limits(self, mock_resolve, mock_numstat, mock_files):
+        mock_numstat.return_value = [
+            (200, 100, "spec/fsm.md"),
+            (10, 5, "modules/fsm/main.py"),
+            (10, 5, "modules/watchdog/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "spec_sync",
+        "PR_TITLE": "update interfaces",
+        "CHANGE_CLASS_APPROVED": "true",
+    }, clear=False)
+    def test_spec_sync_without_spec_files_fails(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (10, 5, "modules/fsm/main.py"),
             (10, 5, "modules/watchdog/main.py"),
         ]
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["ci/check_pr_scope.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
@@ -376,12 +448,13 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "PR_TITLE": "update CI scripts",
         "PR_LABELS": "approved-override",
     }, clear=False)
-    def test_infra_bypasses_line_limit_only(self, mock_resolve, mock_numstat):
+    def test_infra_bypasses_line_limit_only(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (300, 200, "ci/check_pr_scope.py"),
         ]
         self.assertEqual(main(), 0)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["ci/check_pr_scope.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
@@ -389,7 +462,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "PR_TITLE": "update CI",
         "PR_LABELS": "approved-override",
     }, clear=False)
-    def test_infra_still_enforces_module_limit(self, mock_resolve, mock_numstat):
+    def test_infra_still_enforces_module_limit(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (10, 5, "ci/check_pr_scope.py"),
             (10, 5, "modules/fsm/main.py"),
@@ -397,10 +470,13 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         ]
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {"CHANGE_CLASS": "invalid_class"}, clear=False)
-    def test_invalid_change_class_fails(self):
+    def test_invalid_change_class_fails(self, mock_resolve, mock_files):
         self.assertEqual(main(), 1)
 
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["modules/fsm/main.py"])
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
     @patch.dict("os.environ", {
@@ -409,7 +485,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
         "CHANGE_CLASS_APPROVED": "true",
         "PR_REVIEW_STATE": "APPROVED",
     }, clear=False)
-    def test_admin_approved_grants_access(self, mock_resolve, mock_numstat):
+    def test_admin_approved_grants_access(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
             (200, 100, "modules/fsm/main.py"),
         ]

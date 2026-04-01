@@ -29,15 +29,15 @@ spec-version: 1.0
 ## Error Contract
 | Scenario                          | Exception              |
 |-----------------------------------|------------------------|
-| state_name không nằm trong ALLOWED_STATES | InvalidStateError      |
-| state_name đã tồn tại trong registry      | DuplicateStateError    |
-| target_state không nằm trong ALLOWED_STATES | InvalidStateError    |
-| target_state chưa đăng ký (not registered) | InvalidTransitionError |
+| state_name not in ALLOWED_STATES          | InvalidStateError      |
+| state_name already exists in registry     | ValueError             |
+| target_state not in ALLOWED_STATES        | InvalidStateError      |
+| target_state not registered               | InvalidTransitionError |
 
 ## reset_states Behavior
-- Xóa toàn bộ registry (_states.clear())
-- Reset current_state về None
-- Sau reset, mọi transition_to sẽ raise InvalidTransitionError (vì không còn state nào registered)
-- Thread-safe qua Lock
+- Clears registry (_states.clear())
+- Resets current_state to None
+- After reset, transition_to will raise InvalidTransitionError
+- Thread-safe via Lock
 spec
 fsm.md

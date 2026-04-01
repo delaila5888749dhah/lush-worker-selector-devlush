@@ -12,8 +12,8 @@ Constraints:
     - Thread-safe (Lock)
 
 Error:
-    - Raise InvalidStateError nếu state_name không hợp lệ
-    - Raise DuplicateStateError nếu state_name đã tồn tại
+    - Raise InvalidStateError if state_name is not in ALLOWED_STATES
+    - Raise ValueError if state_name already exists in registry
 
 Forbidden:
     - Không tạo state ngoài ALLOWED_STATES

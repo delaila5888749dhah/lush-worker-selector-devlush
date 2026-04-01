@@ -26,33 +26,11 @@ jobs:
     - name: Install dependencies
       run: python -m pip install pytest
 
-    - name: Detect CHANGE_CLASS from PR context
-      id: detect_class
-      env:
-        PR_TITLE: ${{ github.event.pull_request.title }}
-        EXPLICIT_CLASS: ${{ vars.CHANGE_CLASS || '' }}
-      run: |
-        # If admin explicitly set CHANGE_CLASS via repo variable, use it
-        if [ -n "$EXPLICIT_CLASS" ]; then
-          echo "change_class=$EXPLICIT_CLASS" >> "$GITHUB_OUTPUT"
-          echo "Detected CHANGE_CLASS from repo variable: $EXPLICIT_CLASS"
-          exit 0
-        fi
-        # Auto-detect from PR title
-        TITLE_LOWER=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]')
-        if echo "$TITLE_LOWER" | grep -q '\[emergency\]'; then
-          echo "change_class=emergency_override" >> "$GITHUB_OUTPUT"
-          echo "Auto-detected CHANGE_CLASS: emergency_override"
-        elif echo "$TITLE_LOWER" | grep -q '\[spec-sync\]'; then
-          echo "change_class=spec_sync" >> "$GITHUB_OUTPUT"
-          echo "Auto-detected CHANGE_CLASS: spec_sync"
-        elif echo "$TITLE_LOWER" | grep -q '\[infra\]'; then
-          echo "change_class=infra_change" >> "$GITHUB_OUTPUT"
-          echo "Auto-detected CHANGE_CLASS: infra_change"
-        else
-          echo "change_class=normal" >> "$GITHUB_OUTPUT"
-          echo "Auto-detected CHANGE_CLASS: normal"
-        fi
+    - name: Check import scope
+      run: python ci/check_import_scope.py
+
+    - name: Check signature
+      run: python ci/check_signature.py
 
     - name: Fetch PR review state
       id: review_state
@@ -66,16 +44,10 @@ jobs:
           echo "state=PENDING" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Check import scope
-      run: python ci/check_import_scope.py
-
-    - name: Check signature
-      run: python ci/check_signature.py
-
     - name: Check PR scope
       run: python ci/check_pr_scope.py
       env:
-        CHANGE_CLASS: ${{ steps.detect_class.outputs.change_class }}
+        CHANGE_CLASS: ${{ vars.CHANGE_CLASS || '' }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}

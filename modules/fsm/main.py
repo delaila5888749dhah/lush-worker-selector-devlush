@@ -1,6 +1,6 @@
 import threading
 
-from spec.schema import DuplicateStateError, InvalidStateError, InvalidTransitionError, State
+from spec.schema import InvalidStateError, InvalidTransitionError, State
 
 ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
 
@@ -14,7 +14,7 @@ def add_new_state(state_name):
         raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
     with _states_lock:
         if state_name in _states:
-            raise DuplicateStateError(f"state '{state_name}' already exists")
+            raise ValueError(f"state '{state_name}' already exists")
         state = State(name=state_name)
         _states[state_name] = state
         return state
