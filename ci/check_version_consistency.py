@@ -20,7 +20,7 @@ VERSION_HEADER_RE = re.compile(
     r"^spec-version\s*:\s*(?P<version>\d+\.\d+)\s*$", re.MULTILINE
 )
 VERSION_TABLE_RE = re.compile(
-    r"\|\s*`?(?P<file>[^|`]+)`?\s*\|\s*(?P<version>\d+\.\d+)\s*\|"
+    r"\|\s*`?(?P<file>[^|`]+)`?[^|]*\|\s*(?P<version>\d+\.\d+)\s*\|"
 )
 
 TRACKED_SPEC_FILES = [
