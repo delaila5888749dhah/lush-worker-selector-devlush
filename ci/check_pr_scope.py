@@ -233,16 +233,14 @@ def check(diff_range: str) -> int:
     return 0
 
 
-def _resolve_change_class() -> str | None:
-    """Resolve CHANGE_CLASS from env.
-
-    CHANGE_CLASS is REQUIRED for every PR.  Returns None if not set,
-    which the caller treats as a hard failure.  Legacy flags
-    (ALLOW_MULTI_MODULE) are not recognized.
-    """
+def _resolve_change_class() -> str:
+    """Lấy CHANGE_CLASS từ môi trường (do detect_change_class.py thiết lập)."""
     change_class = os.environ.get("CHANGE_CLASS", "").strip().lower()
-    return change_class if change_class else None
-
+    if not change_class:
+        print("FAIL: CHANGE_CLASS environment variable not set")
+        sys.exit(1)
+    print(f"Detected Change Class: {change_class}")
+    return change_class
 
 def _check_authorization(change_class: str) -> list[str]:
     """Validate that a non-normal CHANGE_CLASS has explicit approval.
