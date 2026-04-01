@@ -6,7 +6,7 @@ def get_changed_files():
     try:
         output = subprocess.check_output(['git', 'diff', '--name-only', 'origin/main...HEAD'], encoding='utf-8')
         return [f for f in output.split('\n') if f]
-    except:
+    except Exception:
         return []
 
 def detect():
