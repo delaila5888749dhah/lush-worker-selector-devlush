@@ -9,7 +9,7 @@ from modules.fsm.main import (
 from spec.schema import InvalidStateError, InvalidTransitionError, State
 
 
-class FsmTests(unittest.TestCase):
+class FSMTests(unittest.TestCase):
     def setUp(self):
         reset_states()
 
@@ -23,27 +23,28 @@ class FsmTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             add_new_state("success")
 
-    def test_add_new_state_invalid_state_raises_invalid_state_error(self):
+    def test_add_new_state_invalid_raises_invalid_state_error(self):
         with self.assertRaises(InvalidStateError):
             add_new_state("not_a_real_state")
 
     def test_transition_to_valid(self):
-        add_new_state("vbv_3ds")
-        transition_to("vbv_3ds")
-        current = get_current_state()
-        self.assertIsNotNone(current)
-        self.assertEqual(current.name, "vbv_3ds")
+        add_new_state("success")
+        result = transition_to("success")
+        self.assertIsInstance(result, State)
+        self.assertEqual(result.name, "success")
+        self.assertEqual(get_current_state().name, "success")
 
     def test_transition_to_invalid_raises_invalid_transition_error(self):
         with self.assertRaises(InvalidTransitionError):
-            transition_to("declined")
+            transition_to("ui_lock")
 
     def test_reset_states_clears_all(self):
         add_new_state("ui_lock")
-        add_new_state("success")
         transition_to("ui_lock")
         reset_states()
         self.assertIsNone(get_current_state())
+        with self.assertRaises(InvalidTransitionError):
+            transition_to("ui_lock")
 
 
 if __name__ == "__main__":
