@@ -296,6 +296,24 @@ def main() -> int:
                   file=sys.stderr)
             for err in governance_errors:
                 print(f"  {err}", file=sys.stderr)
+    # Deprecation: ALLOW_MULTI_MODULE is superseded by CHANGE_CLASS=spec_sync
+    if allow_multi == "true" and not change_class:
+        print("DEPRECATED: ALLOW_MULTI_MODULE=true is deprecated; "
+              "use CHANGE_CLASS=spec_sync instead. "
+              "ALLOW_MULTI_MODULE will be removed in a future version.",
+              file=sys.stderr)
+
+    # Governance: emergency_override requires PR label or title prefix
+    if change_class == "emergency_override":
+        pr_title = os.environ.get("PR_TITLE", "").strip()
+        pr_labels = os.environ.get("PR_LABELS", "").strip().lower()
+        has_label = "emergency" in pr_labels
+        has_prefix = pr_title.lower().startswith("[emergency]")
+        if not has_label and not has_prefix:
+            print("check_pr_scope: CHANGE_CLASS=emergency_override requires "
+                  "PR label 'emergency' or title prefix '[emergency]'. "
+                  "Set PR_TITLE / PR_LABELS env vars in CI workflow.",
+                  file=sys.stderr)
             return 1
 
     skip_line_limit = change_class in ("emergency_override", "infra_change")

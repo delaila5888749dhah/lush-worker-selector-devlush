@@ -83,13 +83,18 @@ Khi CI quá cứng nhắc (giới hạn dòng, 1 module) gây nghẽn các thay 
 | `spec_sync` | ❌ | ✅ | Đồng bộ code với spec mới sau khi Architect thay đổi interface |
 | `infra_change` | ✅ | ❌ | Thay đổi CI scripts, cấu hình infrastructure |
 
-**Quy tắc sử dụng:**
+**Quy tắc sử dụng (Governance):**
 1. Mọi bypass phải được ghi log lý do trong PR description.
 2. `emergency_override` chỉ được Admin kích hoạt — yêu cầu `CHANGE_CLASS_APPROVED=true` hoặc PR title chứa `[emergency]`.
 3. `spec_sync` yêu cầu PR title chứa `[spec-sync]` hoặc `CHANGE_CLASS_APPROVED=true`.
 4. `infra_change` yêu cầu PR title chứa `[infra]` hoặc `CHANGE_CLASS_APPROVED=true`.
 5. **⚠️ DEPRECATED:** `ALLOW_MULTI_MODULE=true` vẫn hoạt động tạm thời như alias của `spec_sync` nhưng sẽ bị loại bỏ. Mọi workflow mới PHẢI dùng `CHANGE_CLASS=spec_sync`.
 6. CI `check_pr_scope` sẽ từ chối `CHANGE_CLASS` nếu PR title không chứa tag tương ứng (governance enforcement).
+2. `emergency_override` **bắt buộc** có PR label `emergency` hoặc title prefix `[emergency]`. CI tự kiểm tra qua `PR_TITLE`/`PR_LABELS` env var.
+3. `spec_sync` tự động kích hoạt khi PR title chứa `[spec-sync]`.
+4. `infra_change` áp dụng khi thay đổi chỉ ảnh hưởng `ci/`, `.github/`, hoặc `spec/`.
+
+**⚠️ DEPRECATED:** `ALLOW_MULTI_MODULE=true` vẫn hoạt động tạm thời như alias của `spec_sync` nhưng sẽ bị loại bỏ trong phiên bản tương lai. Mọi sử dụng mới phải dùng `CHANGE_CLASS=spec_sync`.
 
 ### 7. Spec Versioning System
 
@@ -121,6 +126,7 @@ CI `check_signature` tự động phát hiện và kiểm tra cả hai nhóm.
 | `check_spec_consistency` | Đảm bảo aggregated spec KHÔNG lệch khỏi segmented files |
 | `check_version_consistency` | Validate spec-version headers nhất quán với VERSIONING.md |
 | Unit tests | `python -m unittest discover tests` |
+**⚠️ Quy tắc chống phân kỳ (Divergence Guard):** CI `check_signature` tự động so sánh danh sách function giữa segmented files và aggregated file. Nếu phát hiện lệch, in WARNING vào CI log. Mọi thay đổi spec phải cập nhật cả hai nguồn đồng thời.
 
 Hệ thống vận hành theo kiến trúc 3 tầng bản địa, lấy Pull Request (PR) và Issue làm trung tâm điều phối. Tuyệt đối không sử dụng AI bên ngoài (Zero-External AI) để duy trì tính toàn vẹn của Copilot Memory.
 

@@ -44,12 +44,14 @@ jobs:
 
     - name: Check version consistency
       run: python ci/check_version_consistency.py
+        ALLOW_MULTI_MODULE: "true"
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
 
     - name: Check spec lock
       run: python ci/check_spec_lock.py
       env:
         GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          fail-on-severity: high
         ALLOW_SPEC_MODIFICATION: "true"
 
     - name: Unit tests

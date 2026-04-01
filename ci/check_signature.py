@@ -495,6 +495,42 @@ def _check_duplicate_across_files(
         elif sig.name not in seen:
             seen[sig.name] = source_file
     return errors
+def _check_aggregated_consistency(
+    segmented_funcs: dict[str, list[list[str]]],
+) -> list[str]:
+    """Verify the aggregated file does not diverge from segmented sources.
+
+    Returns a list of warning messages (non-fatal).  An empty list means
+    the aggregated file is consistent or absent.
+    """
+    if not SPEC_FALLBACK_PATH.exists():
+        return []
+    # Only check when segmented files are the primary source
+    if not any(p.exists() for p in SPEC_INTERFACE_PATHS):
+        return []
+    agg_text = SPEC_FALLBACK_PATH.read_text(encoding="utf-8")
+    agg_funcs = parse_spec_functions(agg_text)
+
+    warnings: list[str] = []
+    seg_names = set(segmented_funcs.keys())
+    agg_names = set(agg_funcs.keys())
+
+    missing_in_agg = seg_names - agg_names
+    extra_in_agg = agg_names - seg_names
+
+    if missing_in_agg:
+        warnings.append(
+            f"spec/interface.md is MISSING functions present in segmented "
+            f"files: {', '.join(sorted(missing_in_agg))}. "
+            f"Update spec/interface.md to match."
+        )
+    if extra_in_agg:
+        warnings.append(
+            f"spec/interface.md has EXTRA functions not in segmented "
+            f"files: {', '.join(sorted(extra_in_agg))}. "
+            f"Update spec/interface.md to match."
+        )
+    return warnings
 
 
 def main() -> int:
@@ -545,6 +581,11 @@ def main() -> int:
     if not spec_functions:
         print("check_signature: no functions found in interface spec files")
         return 1
+
+    # Guard 3.12: check aggregated file consistency
+    divergence_warnings = _check_aggregated_consistency(spec_functions)
+    for warning in divergence_warnings:
+        print(f"check_signature: WARNING: {warning}", file=sys.stderr)
 
     modules_dir = ROOT_DIR / "modules"
     code_functions, code_errors = parse_code_functions(modules_dir)
