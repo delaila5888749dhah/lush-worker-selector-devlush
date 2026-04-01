@@ -1,18 +1,43 @@
-import re
+import threading
 
-_states = set()
+from spec.schema import State
+
+ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
+
+_states = {}
+_states_lock = threading.Lock()
+_current_state = None
 
 
-def add_new_state(state_name: str) -> bool:
-    if not isinstance(state_name, str):
-        return False
-    if state_name == "":
-        return False
-    if not re.match(r'^[a-zA-Z0-9_]+$', state_name):
-        return False
-    if state_name.lower() in {"initial", "final", "error"}:
-        return False
-    if state_name in _states:
-        return False
-    _states.add(state_name)
-    return True
+def add_new_state(state_name):
+    if state_name not in ALLOWED_STATES:
+        raise ValueError(f"state '{state_name}' is not in ALLOWED_STATES")
+    with _states_lock:
+        if state_name in _states:
+            raise ValueError(f"state '{state_name}' already exists")
+        state = State(name=state_name)
+        _states[state_name] = state
+        return state
+
+
+def get_current_state():
+    with _states_lock:
+        return _current_state
+
+
+def transition_to(target_state):
+    global _current_state
+    if target_state not in ALLOWED_STATES:
+        raise ValueError(f"state '{target_state}' is not in ALLOWED_STATES")
+    with _states_lock:
+        if target_state not in _states:
+            raise ValueError(f"state '{target_state}' not registered")
+        _current_state = _states[target_state]
+        return _current_state
+
+
+def reset_states():
+    global _current_state
+    with _states_lock:
+        _states.clear()
+        _current_state = None

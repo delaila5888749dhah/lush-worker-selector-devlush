@@ -33,3 +33,11 @@ class WorkerTask:
     amount: int
     primary_card: CardInfo
     order_queue: List[CardInfo]
+
+
+class SessionFlaggedError(Exception):
+    pass
+
+
+class CycleExhaustedError(Exception):
+    pass
