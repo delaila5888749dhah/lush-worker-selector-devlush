@@ -481,7 +481,7 @@ def main() -> int:
         return 1
 
     all_spec_signatures: list[SignatureRecord] = []
-    all_spec_text = ""
+    spec_texts: list[str] = []
     for sp in spec_paths:
         try:
             sigs = parse_spec_signatures(sp)
@@ -489,7 +489,9 @@ def main() -> int:
             print(f"check_signature: {exc}", file=sys.stderr)
             return 1
         all_spec_signatures.extend(sigs)
-        all_spec_text += sp.read_text(encoding="utf-8") + "\n"
+        spec_texts.append(sp.read_text(encoding="utf-8"))
+
+    all_spec_text = "\n".join(spec_texts) + "\n"
 
     try:
         functions = collect_module_functions(MODULES_DIR)

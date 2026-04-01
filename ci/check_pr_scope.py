@@ -160,13 +160,13 @@ def module_from_path(path: str) -> str | None:
 
 # ── main ───────────────────────────────────────────────────────────
 
-def check(diff_range: str) -> int:
-    """Run scope checks.  Returns 0 on PASS, 1 on FAIL."""
-    entries = get_numstat(diff_range)
+def _analyze_entries(
+    entries: list[tuple[int, int, str]],
+) -> tuple[int, int, set[str]]:
+    """Compute total_lines, excluded_lines, and modules_touched."""
     total_lines = 0
-    modules_touched: set[str] = set()
     excluded_lines = 0
-
+    modules_touched: set[str] = set()
     for added, deleted, filepath in entries:
         changed = added + deleted
         mod = module_from_path(filepath)
@@ -176,6 +176,13 @@ def check(diff_range: str) -> int:
             excluded_lines += changed
         else:
             total_lines += changed
+    return total_lines, excluded_lines, modules_touched
+
+
+def check(diff_range: str) -> int:
+    """Run scope checks.  Returns 0 on PASS, 1 on FAIL."""
+    entries = get_numstat(diff_range)
+    total_lines, excluded_lines, modules_touched = _analyze_entries(entries)
 
     errors: list[str] = []
     if total_lines > MAX_CHANGED_LINES:
@@ -229,12 +236,7 @@ def main() -> int:
         # emergency_override — bypass everything
         diff_range = resolve_diff_range()
         entries = get_numstat(diff_range)
-        total_lines = sum(
-            a + d for a, d, f in entries if not _is_excluded(f)
-        )
-        excluded_lines = sum(
-            a + d for a, d, f in entries if _is_excluded(f)
-        )
+        total_lines, excluded_lines, _ = _analyze_entries(entries)
         print(f"check_pr_scope: PASS ({total_lines} lines changed"
               + (f", {excluded_lines} excluded" if excluded_lines else "")
               + f", change_class={change_class})")
@@ -249,14 +251,7 @@ def main() -> int:
                   "ALLOW_MULTI_MODULE", file=sys.stderr)
         diff_range = resolve_diff_range()
         entries = get_numstat(diff_range)
-        total_lines = 0
-        excluded_lines = 0
-        for added, deleted, filepath in entries:
-            changed = added + deleted
-            if _is_excluded(filepath):
-                excluded_lines += changed
-            else:
-                total_lines += changed
+        total_lines, excluded_lines, _ = _analyze_entries(entries)
         if total_lines > MAX_CHANGED_LINES:
             print("check_pr_scope: FAIL")
             print(f"  total lines changed ({total_lines}) exceeds "
@@ -273,18 +268,9 @@ def main() -> int:
               f"CHANGE_CLASS={change_class}", file=sys.stderr)
         diff_range = resolve_diff_range()
         entries = get_numstat(diff_range)
-        total_lines = 0
-        excluded_lines = 0
-        modules_touched: set[str] = set()
-        for added, deleted, filepath in entries:
-            changed = added + deleted
-            mod = module_from_path(filepath)
-            if mod:
-                modules_touched.add(mod)
-            if _is_excluded(filepath):
-                excluded_lines += changed
-            else:
-                total_lines += changed
+        total_lines, excluded_lines, modules_touched = _analyze_entries(
+            entries
+        )
         if len(modules_touched) > 1:
             print("check_pr_scope: FAIL")
             print(f"  PR touches {len(modules_touched)} modules "
