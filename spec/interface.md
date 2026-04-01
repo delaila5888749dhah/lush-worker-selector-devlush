@@ -7,7 +7,7 @@ Output:
   * State
 
 Error:
-  * Raise ValueError nếu state_name không nằm trong ALLOWED_STATES
+  * Raise ValueError nếu state_name không nằm trong ALLOWED_STATES (xem spec/fsm.md)
   * Raise ValueError nếu state_name đã tồn tại trong registry
 
 Notes:
@@ -16,10 +16,13 @@ Notes:
 
 Function: get_current_state
 
+Input:
+
 Output:
   * State | None
 
 Notes:
+  * Trả về state cuối cùng được thêm, hoặc None nếu registry rỗng
   * Thread-safe (Lock)
 
 Function: transition_to
@@ -32,66 +35,18 @@ Output:
 
 Error:
   * Raise ValueError nếu target_state không nằm trong ALLOWED_STATES
-  * Raise ValueError nếu target_state chưa được đăng ký
+  * Raise ValueError nếu target_state chưa tồn tại trong registry
 
 Notes:
   * Thread-safe (Lock)
 
 Function: reset_states
 
+Input:
+
 Output:
   * None
 
 Notes:
+  * Xóa toàn bộ registry
   * Thread-safe (Lock)
-  * Xoá toàn bộ registry và current_state
-
-Function: wait_for_total
-
-Input:
-  * timeout
-
-Output:
-  * bool
-
-Error:
-  * Raise SessionFlaggedError nếu timeout
-
-Function: enable_network_monitor
-
-Output:
-  * None
-
-Function: select_profile
-
-Input:
-  * zip_code
-
-Output:
-  * BillingProfile
-
-Function: detect_page_state
-
-Output:
-  * str
-
-Function: fill_card
-
-Input:
-  * card_info
-
-Output:
-  * None
-
-Function: fill_billing
-
-Input:
-  * billing_profile
-
-Output:
-  * None
-
-Function: clear_card_fields
-
-Output:
-  * None

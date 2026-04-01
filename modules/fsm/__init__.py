@@ -1,3 +1,11 @@
-from .main import add_new_state
+from spec.schema import State
 
-__all__ = ["State", "add_new_state"]
+from .main import add_new_state, get_current_state, reset_states, transition_to
+
+__all__ = [
+    "State",
+    "add_new_state",
+    "get_current_state",
+    "reset_states",
+    "transition_to",
+]

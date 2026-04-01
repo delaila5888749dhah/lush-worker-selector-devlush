@@ -1,6 +1,6 @@
 import threading
 
-from spec.schema import State
+from spec.schema import InvalidStateError, InvalidTransitionError, State
 
 ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
 
@@ -11,7 +11,7 @@ _current_state = None
 
 def add_new_state(state_name):
     if state_name not in ALLOWED_STATES:
-        raise ValueError(f"state '{state_name}' is not in ALLOWED_STATES")
+        raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
     with _states_lock:
         if state_name in _states:
             raise ValueError(f"state '{state_name}' already exists")
@@ -28,10 +28,10 @@ def get_current_state():
 def transition_to(target_state):
     global _current_state
     if target_state not in ALLOWED_STATES:
-        raise ValueError(f"state '{target_state}' is not in ALLOWED_STATES")
+        raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
     with _states_lock:
         if target_state not in _states:
-            raise ValueError(f"state '{target_state}' not registered")
+            raise InvalidTransitionError(f"state '{target_state}' not registered")
         _current_state = _states[target_state]
         return _current_state
 

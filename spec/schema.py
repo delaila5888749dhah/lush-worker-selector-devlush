@@ -41,3 +41,11 @@ class SessionFlaggedError(Exception):
 
 class CycleExhaustedError(Exception):
     pass
+
+
+class InvalidStateError(Exception):
+    pass
+
+
+class InvalidTransitionError(Exception):
+    pass
