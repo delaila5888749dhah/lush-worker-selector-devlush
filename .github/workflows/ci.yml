@@ -36,3 +36,8 @@ jobs:
 
       - name: Unit tests
         run: python -m unittest discover tests
+      - name: Dependency Review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
