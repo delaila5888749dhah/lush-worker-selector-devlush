@@ -11,6 +11,7 @@ from ci.check_pr_scope import (
     main,
     EXCLUDED_PREFIXES,
     MAX_CHANGED_LINES,
+    VALID_CHANGE_CLASSES,
 )
 
 
@@ -168,6 +169,68 @@ class AllowMultiModuleTests(unittest.TestCase):
             (10, 5, "modules/watchdog/main.py"),
         ]
         self.assertEqual(main(), 1)
+
+
+class ChangeClassTests(unittest.TestCase):
+    """Test the CHANGE_CLASS exception framework."""
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"CHANGE_CLASS": "emergency_override"}, clear=False)
+    def test_emergency_override_bypasses_all(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (200, 100, "modules/fsm/main.py"),
+            (200, 100, "modules/watchdog/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"CHANGE_CLASS": "spec_sync"}, clear=False)
+    def test_spec_sync_bypasses_module_limit(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (10, 5, "modules/fsm/main.py"),
+            (10, 5, "modules/watchdog/main.py"),
+            (10, 5, "modules/billing/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"CHANGE_CLASS": "spec_sync"}, clear=False)
+    def test_spec_sync_still_enforces_line_limit(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (150, 60, "modules/fsm/main.py"),
+        ]
+        self.assertEqual(main(), 1)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"CHANGE_CLASS": "infra_change"}, clear=False)
+    def test_infra_change_bypasses_line_limit(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (300, 200, "modules/fsm/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {"CHANGE_CLASS": "infra_change"}, clear=False)
+    def test_infra_change_still_enforces_module_limit(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (10, 5, "modules/fsm/main.py"),
+            (10, 5, "modules/watchdog/main.py"),
+        ]
+        self.assertEqual(main(), 1)
+
+    @patch.dict("os.environ", {"CHANGE_CLASS": "invalid_class"}, clear=False)
+    def test_invalid_change_class_fails(self):
+        self.assertEqual(main(), 1)
+
+    def test_valid_change_classes_constant(self):
+        self.assertIn("emergency_override", VALID_CHANGE_CLASSES)
+        self.assertIn("spec_sync", VALID_CHANGE_CLASSES)
+        self.assertIn("infra_change", VALID_CHANGE_CLASSES)
 
 
 if __name__ == "__main__":

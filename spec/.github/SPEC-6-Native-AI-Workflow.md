@@ -154,6 +154,29 @@ Mọi PR phải vượt qua **tất cả 4 cổng** trước khi được phép 
 | 3 | **Secret Scanning** | Không có secret bị rò rỉ. Push Protection chặn trước khi push | Revoke secret → rotate → commit lại không chứa secret |
 | 4 | **Copilot Autofix** | Mọi suggestion đã được review (accept/dismiss có lý do) | Human hoặc Agent review từng suggestion trước khi merge |
 
+### Guard 3.10 — Exception Framework & Change Classification (Chống System Freeze)
+Khi CI quá cứng nhắc gây nghẽn các thay đổi hợp lệ, sử dụng `CHANGE_CLASS` env var:
+
+| Change Class | Bypass Line Limit | Bypass Module Limit | Use Case |
+|-------------|-------------------|--------------------|----|
+| `emergency_override` | ✅ | ✅ | Hotfix production, security patch khẩn cấp |
+| `spec_sync` | ❌ | ✅ | Đồng bộ code với spec mới sau khi Architect thay đổi interface |
+| `infra_change` | ✅ | ❌ | Thay đổi CI scripts, cấu hình infrastructure |
+
+**Quy tắc:** Mọi bypass ghi log lý do trong PR. `emergency_override` chỉ Admin kích hoạt.
+
+### Guard 3.11 — Spec Versioning (Kiểm soát phiên bản đặc tả)
+- Mỗi file spec chứa header `spec-version: MAJOR.MINOR`
+- MAJOR bump = breaking change → CI fail → cần `CHANGE_CLASS=spec_sync`
+- MINOR bump = additive → CI phát hiện stub thiếu → Agent tự implement
+- Chi tiết: [spec/VERSIONING.md](../../spec/VERSIONING.md)
+
+### Guard 3.12 — Contract Segmentation (Tách biệt hợp đồng)
+- `spec/core/interface.md` — FSM (core state machine)
+- `spec/integration/interface.md` — Watchdog, Billing, CDP (integration)
+- `spec/interface.md` — Bản tổng hợp tương thích ngược
+- CI `check_signature` đọc cả segmented và fallback files
+
 ---
 
 ## 4. AI Workforce Control (Native Pipeline)

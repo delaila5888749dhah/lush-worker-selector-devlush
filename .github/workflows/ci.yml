@@ -35,6 +35,8 @@ jobs:
       run: python ci/check_pr_scope.py
       env:
         ALLOW_MULTI_MODULE: "true"
+        # CHANGE_CLASS: Set to emergency_override|spec_sync|infra_change
+        #               to bypass CI limits for classified changes
 
     - name: Check spec lock
       run: python ci/check_spec_lock.py

@@ -7,6 +7,12 @@ Architect Directive (AD-6 amendment):
   infrastructure code and tests should never be penalized against a size
   limit.  This avoids the self-blocking paradox where the enforcement
   script itself would exceed the limit it enforces.
+
+Change Classification (Exception Framework):
+  Set CHANGE_CLASS env var to one of:
+    emergency_override — bypass both line limit and module limit
+    spec_sync          — bypass module limit (keep line limit)
+    infra_change       — bypass line limit (keep module limit)
 """
 
 import os
@@ -17,6 +23,11 @@ import sys
 # ── configuration ──────────────────────────────────────────────────
 MAX_CHANGED_LINES = 200
 EXCLUDED_PREFIXES = ("tests/", "ci/")
+VALID_CHANGE_CLASSES = frozenset({
+    "emergency_override",
+    "spec_sync",
+    "infra_change",
+})
 
 # ── git helpers ────────────────────────────────────────────────────
 
@@ -194,10 +205,48 @@ def check(diff_range: str) -> int:
 
 
 def main() -> int:
+    change_class = os.environ.get("CHANGE_CLASS", "").strip().lower()
     allow_multi = os.environ.get("ALLOW_MULTI_MODULE", "").strip().lower()
-    if allow_multi == "true":
-        print("WARNING: Multi-module scope check bypassed by "
-              "ALLOW_MULTI_MODULE", file=sys.stderr)
+
+    # Validate CHANGE_CLASS if provided
+    if change_class and change_class not in VALID_CHANGE_CLASSES:
+        print(f"check_pr_scope: invalid CHANGE_CLASS '{change_class}'; "
+              f"valid values: {', '.join(sorted(VALID_CHANGE_CLASSES))}",
+              file=sys.stderr)
+        return 1
+
+    skip_line_limit = change_class in ("emergency_override", "infra_change")
+    skip_module_limit = (
+        change_class in ("emergency_override", "spec_sync")
+        or allow_multi == "true"
+    )
+
+    if change_class:
+        print(f"WARNING: CHANGE_CLASS={change_class} active",
+              file=sys.stderr)
+
+    if skip_line_limit and skip_module_limit:
+        # emergency_override — bypass everything
+        diff_range = resolve_diff_range()
+        entries = get_numstat(diff_range)
+        total_lines = sum(
+            a + d for a, d, f in entries if not _is_excluded(f)
+        )
+        excluded_lines = sum(
+            a + d for a, d, f in entries if _is_excluded(f)
+        )
+        print(f"check_pr_scope: PASS ({total_lines} lines changed"
+              + (f", {excluded_lines} excluded" if excluded_lines else "")
+              + f", change_class={change_class})")
+        return 0
+
+    if skip_module_limit:
+        if change_class:
+            print(f"WARNING: Module scope check bypassed by "
+                  f"CHANGE_CLASS={change_class}", file=sys.stderr)
+        elif allow_multi == "true":
+            print("WARNING: Multi-module scope check bypassed by "
+                  "ALLOW_MULTI_MODULE", file=sys.stderr)
         diff_range = resolve_diff_range()
         entries = get_numstat(diff_range)
         total_lines = 0
@@ -218,6 +267,34 @@ def main() -> int:
               + (f", {excluded_lines} excluded" if excluded_lines else "")
               + ", multi-module allowed)")
         return 0
+
+    if skip_line_limit:
+        print(f"WARNING: Line limit bypassed by "
+              f"CHANGE_CLASS={change_class}", file=sys.stderr)
+        diff_range = resolve_diff_range()
+        entries = get_numstat(diff_range)
+        total_lines = 0
+        excluded_lines = 0
+        modules_touched: set[str] = set()
+        for added, deleted, filepath in entries:
+            changed = added + deleted
+            mod = module_from_path(filepath)
+            if mod:
+                modules_touched.add(mod)
+            if _is_excluded(filepath):
+                excluded_lines += changed
+            else:
+                total_lines += changed
+        if len(modules_touched) > 1:
+            print("check_pr_scope: FAIL")
+            print(f"  PR touches {len(modules_touched)} modules "
+                  f"({', '.join(sorted(modules_touched))}); max 1 allowed")
+            return 1
+        print(f"check_pr_scope: PASS ({total_lines} lines changed"
+              + (f", {excluded_lines} excluded" if excluded_lines else "")
+              + f", line limit bypassed by {change_class})")
+        return 0
+
     diff_range = resolve_diff_range()
     return check(diff_range)
 

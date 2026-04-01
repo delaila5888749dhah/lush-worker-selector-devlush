@@ -73,6 +73,40 @@ Issue (Human tạo)
   3. Nếu fail do infrastructure (flaky test, runner issue): Human re-run workflow thủ công.
   4. Nếu fail do security gate: Xử lý theo Rule 4, **không** bypass bằng force-merge.
 
+### 6. Exception Framework & Change Classification (Chống System Freeze)
+
+Khi CI quá cứng nhắc (giới hạn dòng, 1 module) gây nghẽn các thay đổi hợp lệ, sử dụng env var `CHANGE_CLASS` trong CI workflow:
+
+| Change Class | Bypass Line Limit | Bypass Module Limit | Use Case |
+|-------------|-------------------|--------------------|----|
+| `emergency_override` | ✅ | ✅ | Hotfix production, security patch khẩn cấp |
+| `spec_sync` | ❌ | ✅ | Đồng bộ code với spec mới sau khi Architect thay đổi interface |
+| `infra_change` | ✅ | ❌ | Thay đổi CI scripts, cấu hình infrastructure |
+
+**Quy tắc sử dụng:**
+1. Mọi bypass phải được ghi log lý do trong PR description.
+2. `emergency_override` chỉ được Admin kích hoạt.
+3. `spec_sync` tự động kích hoạt khi PR title chứa `[spec-sync]`.
+4. `infra_change` áp dụng khi thay đổi chỉ ảnh hưởng `ci/`, `.github/`, hoặc `spec/`.
+5. `ALLOW_MULTI_MODULE=true` vẫn hoạt động như alias của `spec_sync` để tương thích ngược.
+
+### 7. Spec Versioning System
+
+Mỗi file trong `spec/` có phiên bản riêng theo format `MAJOR.MINOR`. Chi tiết tại [spec/VERSIONING.md](../spec/VERSIONING.md).
+
+* **MAJOR bump** (breaking): Xóa/đổi tên function, thay đổi output type → CI fail → cần `CHANGE_CLASS=spec_sync`.
+* **MINOR bump** (additive): Thêm function mới, thêm optional param → CI phát hiện stub thiếu → Agent tự implement.
+
+### 8. Contract Segmentation
+
+Hợp đồng giao diện (`spec/interface.md`) được tách thành 2 nhóm:
+
+* **`spec/core/`** — FSM (Finite State Machine): Các hàm quản lý trạng thái lõi.
+* **`spec/integration/`** — Watchdog, Billing, CDP: Các hàm tích hợp bên ngoài.
+
+File `spec/interface.md` gốc vẫn được giữ lại như bản tổng hợp (aggregated) để tương thích ngược.
+CI `check_signature` tự động phát hiện và kiểm tra cả hai nhóm.
+
 Hệ thống vận hành theo kiến trúc 3 tầng bản địa, lấy Pull Request (PR) và Issue làm trung tâm điều phối. Tuyệt đối không sử dụng AI bên ngoài (Zero-External AI) để duy trì tính toàn vẹn của Copilot Memory.
 
 ### 1. Tầng Định hướng (Human)

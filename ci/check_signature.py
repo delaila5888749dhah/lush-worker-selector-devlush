@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-SPEC_PATH = ROOT_DIR / "spec" / "interface.md"
+SPEC_INTERFACE_PATHS = [
+    ROOT_DIR / "spec" / "core" / "interface.md",
+    ROOT_DIR / "spec" / "integration" / "interface.md",
+]
+SPEC_FALLBACK_PATH = ROOT_DIR / "spec" / "interface.md"
 MODULES_DIR = ROOT_DIR / "modules"
 
 INLINE_FUNCTION_DEF_RE = re.compile(r"^(?:async\s+def|def)\s+\w+")
@@ -261,8 +265,8 @@ def format_location(record: SignatureRecord) -> str:
     if record.file:
         return f"{record.file}"
     if record.line:
-        return f"{SPEC_PATH}:{record.line}"
-    return str(SPEC_PATH)
+        return f"spec:{record.line}"
+    return "spec"
 
 
 def compare_signatures(
@@ -455,26 +459,52 @@ def validate_signatures(
     return errors
 
 
+def resolve_spec_paths() -> list[Path]:
+    """Return the list of interface spec files to validate.
+
+    Prefers the segmented files under spec/core/ and spec/integration/.
+    Falls back to the aggregated spec/interface.md if segmented files are
+    missing.
+    """
+    existing = [p for p in SPEC_INTERFACE_PATHS if p.exists()]
+    if existing:
+        return existing
+    if SPEC_FALLBACK_PATH.exists():
+        return [SPEC_FALLBACK_PATH]
+    return []
+
+
 def main() -> int:
+    spec_paths = resolve_spec_paths()
+    if not spec_paths:
+        print("check_signature: no interface spec files found", file=sys.stderr)
+        return 1
+
+    all_spec_signatures: list[SignatureRecord] = []
+    all_spec_text = ""
+    for sp in spec_paths:
+        try:
+            sigs = parse_spec_signatures(sp)
+        except SpecParseError as exc:
+            print(f"check_signature: {exc}", file=sys.stderr)
+            return 1
+        all_spec_signatures.extend(sigs)
+        all_spec_text += sp.read_text(encoding="utf-8") + "\n"
+
     try:
-        spec_signatures = parse_spec_signatures(SPEC_PATH)
         functions = collect_module_functions(MODULES_DIR)
-    except (SpecParseError, ModuleParseError) as exc:
+    except ModuleParseError as exc:
         print(f"check_signature: {exc}", file=sys.stderr)
         return 1
 
-    compare_signatures(spec_signatures, functions)
+    compare_signatures(all_spec_signatures, functions)
 
-    repo_root = Path(__file__).resolve().parents[1]
-    spec_path = repo_root / "spec" / "interface.md"
-    modules_dir = repo_root / "modules"
-
-    spec_text = spec_path.read_text(encoding="utf-8")
-    spec_functions = parse_spec_functions(spec_text)
+    spec_functions = parse_spec_functions(all_spec_text)
     if not spec_functions:
-        print("check_signature: no functions found in spec/interface.md")
+        print("check_signature: no functions found in interface spec files")
         return 1
 
+    modules_dir = ROOT_DIR / "modules"
     code_functions, code_errors = parse_code_functions(modules_dir)
     if code_errors:
         for error in code_errors:

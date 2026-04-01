@@ -1,5 +1,7 @@
 # Watchdog Specification
 
+spec-version: 1.0
+
 ## Guard 3.3 — Watchdog Lifecycle (Architectural Context)
 
 Guard 3.3 yêu cầu: khi kill worker phải đóng trình duyệt, xóa profile tạm, giải phóng tài nguyên,

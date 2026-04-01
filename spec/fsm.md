@@ -1,5 +1,7 @@
 # FSM Specification
 
+spec-version: 1.0
+
 ## ALLOWED_STATES (Tập đóng)
 - ui_lock
 - success

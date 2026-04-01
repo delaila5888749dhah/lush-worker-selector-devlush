@@ -1,4 +1,13 @@
-# Interface Contract
+# Interface Contract (Aggregated)
+
+spec-version: 1.0
+
+> **Contract Segmentation (v1.0):** Các hợp đồng giao diện đã được tách thành
+> hai nhóm riêng biệt. File này tổng hợp cả hai nhóm để duy trì khả năng
+> tương thích ngược với CI pipeline.
+>
+> - **Core (FSM):** [spec/core/interface.md](core/interface.md)
+> - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
 
 ## Module: fsm
 
