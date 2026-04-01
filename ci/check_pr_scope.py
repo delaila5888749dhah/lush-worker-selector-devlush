@@ -211,9 +211,75 @@ def check(diff_range: str) -> int:
     return 0
 
 
-def main() -> int:
+def _resolve_change_class() -> str:
+    """Resolve CHANGE_CLASS from env, with ALLOW_MULTI_MODULE deprecation.
+
+    If ALLOW_MULTI_MODULE is set and CHANGE_CLASS is not, map it to
+    spec_sync and emit a deprecation warning.  If both are set,
+    CHANGE_CLASS takes precedence and a deprecation warning is emitted.
+    """
     change_class = os.environ.get("CHANGE_CLASS", "").strip().lower()
     allow_multi = os.environ.get("ALLOW_MULTI_MODULE", "").strip().lower()
+
+    if allow_multi == "true":
+        print(
+            "DEPRECATION WARNING: ALLOW_MULTI_MODULE is deprecated and "
+            "will be removed in a future release. Use "
+            "CHANGE_CLASS=spec_sync instead.",
+            file=sys.stderr,
+        )
+        if not change_class:
+            change_class = "spec_sync"
+
+    return change_class
+
+
+def _validate_change_class_governance(change_class: str) -> list[str]:
+    """Validate that CHANGE_CLASS usage is backed by PR-level governance.
+
+    Returns a list of error strings (empty if valid).
+    Rules:
+      - emergency_override: requires PR title containing [emergency] or
+        CHANGE_CLASS_APPROVED=true env var (set by admin workflow).
+      - spec_sync: requires PR title containing [spec-sync].
+      - infra_change: requires changed files to be limited to ci/, .github/,
+        or spec/ (validated elsewhere; here we check PR title [infra]).
+    """
+    errors: list[str] = []
+    pr_title = os.environ.get("PR_TITLE", "").strip().lower()
+    admin_approved = (
+        os.environ.get("CHANGE_CLASS_APPROVED", "").strip().lower() == "true"
+    )
+
+    if change_class == "emergency_override":
+        if not admin_approved and "[emergency]" not in pr_title:
+            errors.append(
+                f"CHANGE_CLASS=emergency_override requires admin approval "
+                f"(CHANGE_CLASS_APPROVED=true) or PR title containing "
+                f"'[emergency]'. PR title: '{pr_title or '<not set>'}'"
+            )
+    elif change_class == "spec_sync":
+        if "[spec-sync]" not in pr_title and not admin_approved:
+            errors.append(
+                f"CHANGE_CLASS=spec_sync requires PR title containing "
+                f"'[spec-sync]' or admin approval "
+                f"(CHANGE_CLASS_APPROVED=true). "
+                f"PR title: '{pr_title or '<not set>'}'"
+            )
+    elif change_class == "infra_change":
+        if "[infra]" not in pr_title and not admin_approved:
+            errors.append(
+                f"CHANGE_CLASS=infra_change requires PR title containing "
+                f"'[infra]' or admin approval "
+                f"(CHANGE_CLASS_APPROVED=true). "
+                f"PR title: '{pr_title or '<not set>'}'"
+            )
+
+    return errors
+
+
+def main() -> int:
+    change_class = _resolve_change_class()
 
     # Validate CHANGE_CLASS if provided
     if change_class and change_class not in VALID_CHANGE_CLASSES:
@@ -222,11 +288,18 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
+    # Governance validation: CHANGE_CLASS must be backed by PR metadata
+    if change_class:
+        governance_errors = _validate_change_class_governance(change_class)
+        if governance_errors:
+            print("check_pr_scope: FAIL — CHANGE_CLASS governance violation",
+                  file=sys.stderr)
+            for err in governance_errors:
+                print(f"  {err}", file=sys.stderr)
+            return 1
+
     skip_line_limit = change_class in ("emergency_override", "infra_change")
-    skip_module_limit = (
-        change_class in ("emergency_override", "spec_sync")
-        or allow_multi == "true"
-    )
+    skip_module_limit = change_class in ("emergency_override", "spec_sync")
 
     if change_class:
         print(f"WARNING: CHANGE_CLASS={change_class} active",
@@ -243,12 +316,8 @@ def main() -> int:
         return 0
 
     if skip_module_limit:
-        if change_class:
-            print(f"WARNING: Module scope check bypassed by "
-                  f"CHANGE_CLASS={change_class}", file=sys.stderr)
-        elif allow_multi == "true":
-            print("WARNING: Multi-module scope check bypassed by "
-                  "ALLOW_MULTI_MODULE", file=sys.stderr)
+        print(f"WARNING: Module scope check bypassed by "
+              f"CHANGE_CLASS={change_class}", file=sys.stderr)
         diff_range = resolve_diff_range()
         entries = get_numstat(diff_range)
         total_lines, excluded_lines, _ = _analyze_entries(entries)

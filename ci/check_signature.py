@@ -474,22 +474,62 @@ def resolve_spec_paths() -> list[Path]:
     return []
 
 
+def _check_duplicate_across_files(
+    all_signatures: list[SignatureRecord],
+    spec_paths: list[Path],
+) -> list[str]:
+    """Detect duplicate function names across different spec files.
+
+    Returns list of error strings.
+    """
+    errors: list[str] = []
+    seen: dict[str, Path] = {}
+    for sig in all_signatures:
+        source_file = sig.file
+        if sig.name in seen and seen[sig.name] != source_file:
+            errors.append(
+                f"Duplicate function '{sig.name}' defined in both "
+                f"{seen[sig.name].relative_to(ROOT_DIR)} and "
+                f"{source_file.relative_to(ROOT_DIR) if source_file else 'unknown'}"
+            )
+        elif sig.name not in seen:
+            seen[sig.name] = source_file
+    return errors
+
+
 def main() -> int:
     spec_paths = resolve_spec_paths()
     if not spec_paths:
         print("check_signature: no interface spec files found", file=sys.stderr)
         return 1
 
+    print(f"check_signature: reading specs from: "
+          f"{', '.join(str(p.relative_to(ROOT_DIR)) for p in spec_paths)}",
+          file=sys.stderr)
+
     all_spec_signatures: list[SignatureRecord] = []
     spec_texts: list[str] = []
     for sp in spec_paths:
         try:
             sigs = parse_spec_signatures(sp)
+            # Tag each signature with its source file for diagnostics
+            for s in sigs:
+                s.file = sp
         except SpecParseError as exc:
-            print(f"check_signature: {exc}", file=sys.stderr)
+            print(f"check_signature: error in {sp.relative_to(ROOT_DIR)}: "
+                  f"{exc}", file=sys.stderr)
             return 1
         all_spec_signatures.extend(sigs)
         spec_texts.append(sp.read_text(encoding="utf-8"))
+
+    # Cross-file duplicate detection
+    dup_errors = _check_duplicate_across_files(all_spec_signatures, spec_paths)
+    if dup_errors:
+        print("check_signature: FAIL — duplicate functions across spec files",
+              file=sys.stderr)
+        for err in dup_errors:
+            print(f"  {err}", file=sys.stderr)
+        return 1
 
     all_spec_text = "\n".join(spec_texts) + "\n"
 
