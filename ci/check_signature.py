@@ -320,13 +320,7 @@ def compare_signatures(
                 f"  actual:   {actual_signature}"
             )
             continue
-
-from __future__ import annotations
-
-import ast
-import sys
-from pathlib import Path
-from typing import Iterable
+    return errors
 
 
 def parse_spec_functions(spec_text: str) -> dict[str, list[list[str]]]:
