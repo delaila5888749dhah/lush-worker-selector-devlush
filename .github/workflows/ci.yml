@@ -39,6 +39,15 @@ jobs:
         GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         ALLOW_SPEC_MODIFICATION: "true"
 
+      - name: Unit tests
+        run: python -m unittest discover tests
+        
+      - name: Dependency Review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
     - name: Unit tests
       run: python -m unittest discover tests
 
