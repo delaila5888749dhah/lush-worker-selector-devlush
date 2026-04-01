@@ -37,7 +37,7 @@ def _notify_total(value):
     global _total_value
     with _lock:
         _total_value = value
-    _total_event.set()
+        _total_event.set()
 
 
 def _reset_monitor():

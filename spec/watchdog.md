@@ -1,9 +1,10 @@
 # Watchdog Specification
 
-## Guard 3.3 — Watchdog Lifecycle
+## Guard 3.3 — Watchdog Lifecycle (Architectural Context)
 
-Khi kill worker: đóng trình duyệt (kill browser process), xóa profile tạm, giải phóng tài nguyên.
-Ngăn rò rỉ bộ nhớ và zombie process.
+Guard 3.3 yêu cầu: khi kill worker phải đóng trình duyệt, xóa profile tạm, giải phóng tài nguyên,
+ngăn rò rỉ bộ nhớ và zombie process. Phạm vi hiện tại của module này bao gồm **Total Watchdog**
+(giám sát tổng tiền qua CDP Network). Phần worker cleanup sẽ được triển khai ở Phase 3+.
 
 ## Functions
 
