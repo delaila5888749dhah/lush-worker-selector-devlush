@@ -170,22 +170,22 @@ Mọi PR phải vượt qua **tất cả 4 cổng** trước khi được phép 
 ### 4.2 — Sơ đồ luồng Native AI
 
 ```
-[Human] ─── Tạo Issue, mô tả Task ──────────────────────────────┐
+[Human] ─── Tạo Issue, mô tả Task ────────────────────────────────┐
    │                                                              │
    ▼                                                              │
-[Architect — Opus 4.6] ◄── đọc repo từ Copilot Memory Index     │
-   │  Phân tích yêu cầu, viết Spec vào Issue comment             │
+[Architect — Opus 4.6] ◄── đọc repo từ Copilot Memory Index       │
+   │  Phân tích yêu cầu, viết Spec vào Issue comment              │
    │                                                              │
    ▼                                                              │
-[Human] ─── Assign Issue cho Copilot ───────────────────────────┐│
+[Human] ─── Assign Issue cho Copilot ────────────────────────────┐│
    │                                                             ││
    ▼                                                             ││
-[Developer — Codex 5.2] (Copilot Coding Agent)                  ││
-   │  Tự đọc repo + Issue Spec qua GitHub API                   ││
-   │  Tạo branch → Sinh code + test → Push PR                   ││
+[Developer — Codex 5.2] (Copilot Coding Agent)                   ││
+   │  Tự đọc repo + Issue Spec qua GitHub API                    ││
+   │  Tạo branch → Sinh code + test → Push PR                    ││
    │                                                             ││
    ▼                                                             ││
-[CI Pipeline] ◄── GitHub Actions tự chạy                        ││
+[CI Pipeline] ◄── GitHub Actions tự chạy                         ││
    │  ├── check_import_scope                                     ││
    │  ├── check_signature                                        ││
    │  ├── check_pr_scope                                         ││
@@ -200,18 +200,18 @@ Mọi PR phải vượt qua **tất cả 4 cổng** trước khi được phép 
    │  └── Copilot Autofix (suggestions reviewed)                 ││
    │                                                             ││
    ▼                                                             ││
-[Reviewer — GPT-5.4] ◄── Tự động qua PR Ruleset                ││
+[Reviewer — GPT-5.4] ◄── Tự động qua PR Ruleset                  ││
    │                                                             ││
    ├── APPROVED ──► [Human] ──► Merge ──► ✅ Done               ││
    │                                                             ││
-   └── REQUEST_CHANGES ──► Auto-Fix Loop                        ││
+   └── REQUEST_CHANGES ──► Auto-Fix Loop                         ││
           │                                                      ││
-          ├── Lần 1-2: Agent tự đọc review → fix → push lại     ││
+          ├── Lần 1-2: Agent tự đọc review → fix → push lại      ││
           │                                                      ││
           └── Lần ≥3: ⚡ Circuit Breaker                         ││
                  │                                               ││
                  └── [Cross-Inspector — Gemini 3.1 Pro]          ││
-                        Phân xử độc lập → mã code chốt hạ       ││
+                        Phân xử độc lập → mã code chốt hạ        ││
 ```
 
 ### 4.3 — Nguyên tắc làm việc
