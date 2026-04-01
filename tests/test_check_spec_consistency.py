@@ -5,7 +5,6 @@ from ci.check_spec_consistency import (
     check_consistency,
     ROOT_DIR,
 )
-from pathlib import Path
 
 
 class ExtractFunctionsTests(unittest.TestCase):
