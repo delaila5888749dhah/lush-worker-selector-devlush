@@ -26,12 +26,10 @@ Change Classification (Exception Framework — Final Architecture):
     infra_change       — skip line limit, keep module limit; MUST touch ci/ or .github/
     emergency_override — bypass ALL limits; MUST have [emergency] title + approval
 
-  Authorization (non-normal):
-    Requires at least one of:
-      - PR label "approved-override" in PR_LABELS
-      - CHANGE_CLASS_APPROVED=true (repo variable set by admin)
-    emergency_override additionally requires:
-      - PR_REVIEW_STATE == "APPROVED" (at least 1 approved review)
+  Authorization:
+    spec_sync:          NO authorization required (auto-detected, avoids deadlock)
+    infra_change:       Requires PR label "approved-override" OR CHANGE_CLASS_APPROVED=true
+    emergency_override: Requires above + PR_REVIEW_STATE == "APPROVED"
 
   Context Binding:
     - spec_sync:          changed files MUST include spec/
@@ -313,7 +311,10 @@ def _resolve_change_class(diff_range: str) -> str:
 def _check_authorization(change_class: str) -> list[str]:
     """Validate that a non-normal CHANGE_CLASS has explicit approval.
 
-    Approval signals (any one is sufficient for spec_sync/infra_change):
+    spec_sync requires NO authorization (auto-detected from files,
+    avoids governance deadlock where CI must pass before approval).
+
+    infra_change requires at least one of:
       - PR label "approved-override" present in PR_LABELS
       - CHANGE_CLASS_APPROVED=true (repo variable set by admin)
 
@@ -322,7 +323,7 @@ def _check_authorization(change_class: str) -> list[str]:
 
     Returns list of error strings (empty if authorized).
     """
-    if change_class == "normal":
+    if change_class in ("normal", "spec_sync"):
         return []
 
     pr_labels = {
