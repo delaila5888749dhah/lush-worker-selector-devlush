@@ -176,7 +176,10 @@ class ChangeClassTests(unittest.TestCase):
 
     @patch("ci.check_pr_scope.get_numstat")
     @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
-    @patch.dict("os.environ", {"CHANGE_CLASS": "emergency_override"}, clear=False)
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "emergency_override",
+        "PR_TITLE": "[emergency] hotfix",
+    }, clear=False)
     def test_emergency_override_bypasses_all(self, mock_resolve, mock_numstat):
         mock_numstat.return_value = [
             (200, 100, "modules/fsm/main.py"),
@@ -231,6 +234,38 @@ class ChangeClassTests(unittest.TestCase):
         self.assertIn("emergency_override", VALID_CHANGE_CLASSES)
         self.assertIn("spec_sync", VALID_CHANGE_CLASSES)
         self.assertIn("infra_change", VALID_CHANGE_CLASSES)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "emergency_override",
+        "PR_TITLE": "[emergency] hotfix",
+    }, clear=False)
+    def test_emergency_override_with_title_prefix(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (200, 100, "modules/fsm/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "emergency_override",
+        "PR_TITLE": "normal PR",
+        "PR_LABELS": "",
+    }, clear=False)
+    def test_emergency_override_without_governance_fails(self):
+        self.assertEqual(main(), 1)
+
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "emergency_override",
+        "PR_LABELS": "bug,emergency,urgent",
+    }, clear=False)
+    def test_emergency_override_with_label(self, mock_resolve, mock_numstat):
+        mock_numstat.return_value = [
+            (200, 100, "modules/fsm/main.py"),
+        ]
+        self.assertEqual(main(), 0)
 
 
 if __name__ == "__main__":

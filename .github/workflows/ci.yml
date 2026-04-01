@@ -35,14 +35,13 @@ jobs:
       run: python ci/check_pr_scope.py
       env:
         ALLOW_MULTI_MODULE: "true"
-        # CHANGE_CLASS: Set to emergency_override|spec_sync|infra_change
-        #               to bypass CI limits for classified changes
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
 
     - name: Check spec lock
       run: python ci/check_spec_lock.py
       env:
         GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          fail-on-severity: high
         ALLOW_SPEC_MODIFICATION: "true"
 
     - name: Unit tests

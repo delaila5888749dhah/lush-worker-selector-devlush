@@ -163,7 +163,10 @@ Khi CI quá cứng nhắc gây nghẽn các thay đổi hợp lệ, sử dụng 
 | `spec_sync` | ❌ | ✅ | Đồng bộ code với spec mới sau khi Architect thay đổi interface |
 | `infra_change` | ✅ | ❌ | Thay đổi CI scripts, cấu hình infrastructure |
 
-**Quy tắc:** Mọi bypass ghi log lý do trong PR. `emergency_override` chỉ Admin kích hoạt.
+**Governance:**
+- `emergency_override` bắt buộc có PR label `emergency` hoặc title prefix `[emergency]`. CI tự validate qua `PR_TITLE`/`PR_LABELS` env vars.
+- Mọi bypass ghi log lý do trong PR description.
+- `ALLOW_MULTI_MODULE` đã **DEPRECATED** — sử dụng `CHANGE_CLASS=spec_sync` thay thế.
 
 ### Guard 3.11 — Spec Versioning (Kiểm soát phiên bản đặc tả)
 - Mỗi file spec chứa header `spec-version: MAJOR.MINOR`
@@ -176,6 +179,7 @@ Khi CI quá cứng nhắc gây nghẽn các thay đổi hợp lệ, sử dụng 
 - `spec/integration/interface.md` — Watchdog, Billing, CDP (integration)
 - `spec/interface.md` — Bản tổng hợp tương thích ngược
 - CI `check_signature` đọc cả segmented và fallback files
+- **Divergence Guard:** CI tự động so sánh function list giữa segmented và aggregated files. WARNING nếu phát hiện lệch.
 
 ---
 
