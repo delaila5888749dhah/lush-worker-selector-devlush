@@ -99,11 +99,11 @@ class RunPaymentStepTests(unittest.TestCase):
     def test_zip_code_forwarded_to_select_profile(self):
         with patch("integration.orchestrator.billing") as mock_billing:
             mock_billing.select_profile.side_effect = CycleExhaustedError("empty")
-            try:
+            with self.assertRaises(CycleExhaustedError):
                 run_payment_step(_make_task(), zip_code="90210")
-            except CycleExhaustedError:
-                pass
         mock_billing.select_profile.assert_called_once_with("90210")
+
+
 
     def test_fill_card_called_with_primary_card(self):
         task = _make_task()
