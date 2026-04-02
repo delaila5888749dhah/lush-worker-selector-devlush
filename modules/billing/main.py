@@ -134,8 +134,6 @@ def select_profile(zip_code):
                 f"No billing profiles available in billing pool directory '{pool_dir}' "
                 f"(exists={exists})"
             )
-            index = _cursor
-            _cursor = (_cursor + 1) % len(_profiles)
 
         profile = _profiles[index]
         if profile.phone is None or profile.email is None:
