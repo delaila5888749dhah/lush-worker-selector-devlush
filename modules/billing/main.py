@@ -130,7 +130,12 @@ def select_profile(zip_code):
             raise CycleExhaustedError("No billing profiles available")
 
         index = _find_matching_index(normalized_zip)
-        if index is None:
+            pool_dir = _pool_dir()
+            exists = pool_dir.is_dir()
+            raise CycleExhaustedError(
+                f"No billing profiles available in billing pool directory '{pool_dir}' "
+                f"(exists={exists})"
+            )
             index = _cursor
             _cursor = (_cursor + 1) % len(_profiles)
 
