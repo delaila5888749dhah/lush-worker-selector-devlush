@@ -11,6 +11,8 @@ _profiles = []
 _cursor = 0
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
+_PHONE_FIRST_DIGITS = "23456789"
+_PHONE_OTHER_DIGITS = "0123456789"
 
 
 def _pool_dir():
@@ -74,11 +76,15 @@ def _load_profiles_locked():
                 if profile is not None:
                     profiles.append(profile)
     random.shuffle(profiles)
-    _profiles = profiles
-    _cursor = 0
     if profiles:
         _profiles = profiles
         _cursor = 0
+
+
+def _generate_phone():
+    first = random.choice(_PHONE_FIRST_DIGITS)
+    rest = "".join(random.choice(_PHONE_OTHER_DIGITS) for _ in range(9))
+    return f"{first}{rest}"
 
 
 def _generate_email(first_name, last_name):
@@ -122,16 +128,17 @@ def select_profile(zip_code):
     with _lock:
         _load_profiles_locked()
         if not _profiles:
-            raise CycleExhaustedError("No billing profiles available")
-
-        index = _find_matching_index(normalized_zip)
-        if index is None:
             pool_dir = _pool_dir()
             exists = pool_dir.is_dir()
             raise CycleExhaustedError(
                 f"No billing profiles available in billing pool directory '{pool_dir}' "
                 f"(exists={exists})"
             )
+
+        index = _find_matching_index(normalized_zip)
+        if index is None:
+            index = _cursor
+            _cursor = (_cursor + 1) % len(_profiles)
 
         profile = _profiles[index]
         if profile.phone is None or profile.email is None:
