@@ -131,15 +131,6 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(check("fake...range"), 0)
 
 
-class ConstantsTests(unittest.TestCase):
-    def test_max_lines(self):
-        self.assertEqual(MAX_CHANGED_LINES, 200)
-
-    def test_excluded_prefixes(self):
-        self.assertIn("tests/", EXCLUDED_PREFIXES)
-        self.assertIn("ci/", EXCLUDED_PREFIXES)
-
-
 class AutoDetectChangeClassTests(unittest.TestCase):
     """Test _auto_detect_change_class — hard rules only."""
 

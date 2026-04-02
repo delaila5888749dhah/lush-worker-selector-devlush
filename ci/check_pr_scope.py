@@ -363,17 +363,17 @@ def check(diff_range: str) -> int:
         )
 
     if errors:
-        print("check_pr_scope: FAIL")
+        print("check_pr_scope: FAIL", file=sys.stderr)
         for err in errors:
-            print(f"  {err}")
+            print(f"  {err}", file=sys.stderr)
         if excluded_lines:
             print(f"  (excluded {excluded_lines} lines in "
-                  f"{', '.join(EXCLUDED_PREFIXES)})")
+                  f"{', '.join(EXCLUDED_PREFIXES)})", file=sys.stderr)
         return 1
 
     print(f"check_pr_scope: PASS ({total_lines} lines changed"
           + (f", {excluded_lines} excluded" if excluded_lines else "")
-          + ")")
+          + ")", file=sys.stderr)
     return 0
 
 
@@ -437,16 +437,16 @@ def main() -> int:
         )
 
     if errors:
-        print("check_pr_scope: FAIL")
+        print("check_pr_scope: FAIL", file=sys.stderr)
         for err in errors:
-            print(f"  {err}")
+            print(f"  {err}", file=sys.stderr)
         _emit_audit_log(change_class, "GRANTED", "MATCH", "FAIL")
         return 1
 
     _emit_audit_log(change_class, "GRANTED", "MATCH", "PASS")
     print(f"check_pr_scope: PASS ({total_lines} lines changed"
           + (f", {excluded_lines} excluded" if excluded_lines else "")
-          + f", change_class={change_class})")
+          + f", change_class={change_class})", file=sys.stderr)
     return 0
 
 
