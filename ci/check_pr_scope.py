@@ -2,19 +2,23 @@
 """Check that a PR stays within scope: ≤ 200 changed lines (excluding
 ci/ and tests/) and touches at most one module under modules/.
 
-Architect Directive (AD-6 amendment):
-  ci/ and tests/ are excluded from the line count because CI scripts are
-  infrastructure code and tests should never be penalized against a size
-  limit.  This avoids the self-blocking paradox where the enforcement
-  script itself would exceed the limit it enforces.
+Exception Framework (AI_CONTEXT.md §6):
+  CHANGE_CLASS is REQUIRED for every PR.  If not set explicitly via
+  env var, it is auto-detected from PR title and changed files using
+  deterministic rules (no scoring heuristics).
 
-Change Classification (Exception Framework):
-  Set CHANGE_CLASS env var to one of:
-    emergency_override — bypass both line limit and module limit
-    spec_sync          — bypass module limit (keep line limit)
-    infra_change       — bypass line limit (keep module limit)
+  Authorization is required for all non-normal CHANGE_CLASS values.
+  Context binding ensures CHANGE_CLASS matches PR content.
+  All override usage is logged as structured JSON audit trail.
+
+Change Classes:
+  normal             — no bypasses (default)
+  spec_sync          — bypass line + module limit (spec refactor)
+  infra_change       — bypass line limit only (CI/infra changes)
+  emergency_override — bypass line + module limit (hotfix/security)
 """
 
+import json
 import os
 import re
 import subprocess
@@ -24,6 +28,7 @@ import sys
 MAX_CHANGED_LINES = 200
 EXCLUDED_PREFIXES = ("tests/", "ci/")
 VALID_CHANGE_CLASSES = frozenset({
+    "normal",
     "emergency_override",
     "spec_sync",
     "infra_change",
@@ -150,12 +155,153 @@ def get_numstat(diff_range: str) -> list[tuple[int, int, str]]:
     return entries
 
 
+def _get_changed_files(diff_range: str) -> list[str]:
+    """Return list of changed file paths from git diff --name-only."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", diff_range],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        return []
+    return [f for f in result.stdout.splitlines() if f.strip()]
+
+
 def module_from_path(path: str) -> str | None:
     norm = _normalize(path)
     if not norm.startswith("modules/"):
         return None
     parts = norm.split("/")
     return parts[1] if len(parts) >= 2 and parts[1] else None
+
+
+# ── change classification (deterministic, rule-based) ──────────────
+
+def _auto_detect_change_class(
+    pr_title: str, changed_files: list[str],
+) -> str:
+    """Deterministic rule-based auto-detection of CHANGE_CLASS.
+
+    Priority (first match wins):
+      1. [emergency] in title  → emergency_override
+      2. [spec-sync] in title  → spec_sync
+      3. [infra] in title      → infra_change
+      4. spec/ in changed files → spec_sync
+      5. ci/ or .github/ in files → infra_change
+      6. default               → normal
+    """
+    title_lower = pr_title.lower()
+    if "[emergency]" in title_lower:
+        return "emergency_override"
+    if "[spec-sync]" in title_lower:
+        return "spec_sync"
+    if "[infra]" in title_lower:
+        return "infra_change"
+
+    has_spec = any(_normalize(f).startswith("spec/") for f in changed_files)
+    has_infra = any(
+        _normalize(f).startswith("ci/")
+        or _normalize(f).startswith(".github/")
+        for f in changed_files
+    )
+    if has_spec:
+        return "spec_sync"
+    if has_infra:
+        return "infra_change"
+    return "normal"
+
+
+def _resolve_change_class(diff_range: str) -> str:
+    """Resolve CHANGE_CLASS: explicit env var takes priority, else auto-detect."""
+    explicit = os.environ.get("CHANGE_CLASS", "").strip().lower()
+    if explicit:
+        return explicit
+    pr_title = os.environ.get("PR_TITLE", "").strip()
+    changed_files = _get_changed_files(diff_range)
+    return _auto_detect_change_class(pr_title, changed_files)
+
+
+def _check_authorization(change_class: str) -> list[str]:
+    """Check authorization for non-normal CHANGE_CLASS.
+
+    Per AI_CONTEXT.md §6 — Authorization:
+      All non-normal require: label 'approved-override' OR
+      CHANGE_CLASS_APPROVED=true.
+      emergency_override additionally needs APPROVED review.
+    """
+    if change_class == "normal":
+        return []
+
+    pr_labels = os.environ.get("PR_LABELS", "").strip().lower()
+    admin_approved = (
+        os.environ.get("CHANGE_CLASS_APPROVED", "").strip().lower()
+    )
+    has_label = "approved-override" in pr_labels
+    has_admin = admin_approved == "true"
+
+    if not has_label and not has_admin:
+        return [
+            f"CHANGE_CLASS={change_class} requires explicit authorization: "
+            f"PR label 'approved-override' or CHANGE_CLASS_APPROVED=true"
+        ]
+
+    if change_class == "emergency_override":
+        review_state = (
+            os.environ.get("PR_REVIEW_STATE", "").strip().upper()
+        )
+        if review_state != "APPROVED":
+            return [
+                f"CHANGE_CLASS=emergency_override requires at least 1 "
+                f"APPROVED review (current: {review_state or 'NONE'})"
+            ]
+
+    return []
+
+
+def _check_context_binding(
+    change_class: str, changed_files: list[str],
+) -> list[str]:
+    """Validate CHANGE_CLASS matches PR content.
+
+    Per AI_CONTEXT.md §6 — Context Binding:
+      emergency_override: title MUST contain [emergency]
+      spec_sync: files MUST include spec/
+      infra_change: files MUST include ci/ or .github/
+      normal: always passes
+    """
+    if change_class == "normal":
+        return []
+
+    if change_class == "emergency_override":
+        pr_title = os.environ.get("PR_TITLE", "").strip().lower()
+        if "[emergency]" not in pr_title:
+            return [
+                "CHANGE_CLASS=emergency_override requires "
+                "'[emergency]' in PR title"
+            ]
+
+    elif change_class == "spec_sync":
+        has_spec = any(
+            _normalize(f).startswith("spec/") for f in changed_files
+        )
+        if not has_spec:
+            return [
+                "CHANGE_CLASS=spec_sync requires changes in spec/ "
+                "directory"
+            ]
+
+    elif change_class == "infra_change":
+        has_infra = any(
+            _normalize(f).startswith("ci/")
+            or _normalize(f).startswith(".github/")
+            for f in changed_files
+        )
+        if not has_infra:
+            return [
+                "CHANGE_CLASS=infra_change requires changes in "
+                "ci/ or .github/ directory"
+            ]
+
+    return []
 
 
 # ── main ───────────────────────────────────────────────────────────
@@ -177,6 +323,26 @@ def _analyze_entries(
         else:
             total_lines += changed
     return total_lines, excluded_lines, modules_touched
+
+
+def _emit_audit_log(
+    change_class: str,
+    authorization: str,
+    context_binding: str,
+    validation: str,
+) -> None:
+    """Emit structured audit trail for override usage."""
+    if change_class == "normal":
+        return
+    log = {
+        "change_class": change_class,
+        "pr_title": os.environ.get("PR_TITLE", ""),
+        "pr_labels": os.environ.get("PR_LABELS", ""),
+        "authorization": authorization,
+        "context_binding": context_binding,
+        "validation": validation,
+    }
+    print(f"AUDIT_LOG: {json.dumps(log)}")
 
 
 def check(diff_range: str) -> int:
@@ -212,97 +378,76 @@ def check(diff_range: str) -> int:
 
 
 def main() -> int:
-    change_class = os.environ.get("CHANGE_CLASS", "").strip().lower()
-    allow_multi = os.environ.get("ALLOW_MULTI_MODULE", "").strip().lower()
+    diff_range = resolve_diff_range()
+    change_class = _resolve_change_class(diff_range)
 
-    # Validate CHANGE_CLASS if provided
-    if change_class and change_class not in VALID_CHANGE_CLASSES:
+    # Validate CHANGE_CLASS
+    if change_class not in VALID_CHANGE_CLASSES:
         print(f"check_pr_scope: invalid CHANGE_CLASS '{change_class}'; "
               f"valid values: {', '.join(sorted(VALID_CHANGE_CLASSES))}",
               file=sys.stderr)
         return 1
 
-    # Deprecation: ALLOW_MULTI_MODULE is superseded by CHANGE_CLASS=spec_sync
-    if allow_multi == "true" and not change_class:
-        print("DEPRECATED: ALLOW_MULTI_MODULE=true is deprecated; "
-              "use CHANGE_CLASS=spec_sync instead. "
-              "ALLOW_MULTI_MODULE will be removed in a future version.",
-              file=sys.stderr)
+    # Normal: enforce all limits, no governance needed
+    if change_class == "normal":
+        return check(diff_range)
 
-    # Governance: emergency_override requires PR label or title prefix
-    if change_class == "emergency_override":
-        pr_title = os.environ.get("PR_TITLE", "").strip()
-        pr_labels = os.environ.get("PR_LABELS", "").strip().lower()
-        has_label = "emergency" in pr_labels
-        has_prefix = pr_title.lower().startswith("[emergency]")
-        if not has_label and not has_prefix:
-            print("check_pr_scope: CHANGE_CLASS=emergency_override requires "
-                  "PR label 'emergency' or title prefix '[emergency]'. "
-                  "Set PR_TITLE / PR_LABELS env vars in CI workflow.",
-                  file=sys.stderr)
-            return 1
+    # Non-normal: governance checks
+    changed_files = _get_changed_files(diff_range)
 
-    skip_line_limit = change_class in ("emergency_override", "infra_change")
-    skip_module_limit = (
-        change_class in ("emergency_override", "spec_sync")
-        or allow_multi == "true"
+    # Authorization (AI_CONTEXT.md §6)
+    auth_errors = _check_authorization(change_class)
+    if auth_errors:
+        print("check_pr_scope: FAIL", file=sys.stderr)
+        for err in auth_errors:
+            print(f"  {err}", file=sys.stderr)
+        _emit_audit_log(change_class, "DENIED", "N/A", "FAIL")
+        return 1
+
+    # Context binding (AI_CONTEXT.md §6)
+    binding_errors = _check_context_binding(change_class, changed_files)
+    if binding_errors:
+        print("check_pr_scope: FAIL", file=sys.stderr)
+        for err in binding_errors:
+            print(f"  {err}", file=sys.stderr)
+        _emit_audit_log(change_class, "GRANTED", "MISMATCH", "FAIL")
+        return 1
+
+    # Bypass table (AI_CONTEXT.md §6)
+    skip_line_limit = change_class in (
+        "spec_sync", "infra_change", "emergency_override",
+    )
+    skip_module_limit = change_class in (
+        "spec_sync", "emergency_override",
     )
 
-    if change_class:
-        print(f"WARNING: CHANGE_CLASS={change_class} active",
-              file=sys.stderr)
+    entries = get_numstat(diff_range)
+    total_lines, excluded_lines, modules_touched = _analyze_entries(entries)
 
-    if skip_line_limit and skip_module_limit:
-        # emergency_override — bypass everything
-        diff_range = resolve_diff_range()
-        entries = get_numstat(diff_range)
-        total_lines, excluded_lines, _ = _analyze_entries(entries)
-        print(f"check_pr_scope: PASS ({total_lines} lines changed"
-              + (f", {excluded_lines} excluded" if excluded_lines else "")
-              + f", change_class={change_class})")
-        return 0
-
-    if skip_module_limit:
-        if change_class:
-            print(f"WARNING: Module scope check bypassed by "
-                  f"CHANGE_CLASS={change_class}", file=sys.stderr)
-        elif allow_multi == "true":
-            print("WARNING: Multi-module scope check bypassed by "
-                  "ALLOW_MULTI_MODULE", file=sys.stderr)
-        diff_range = resolve_diff_range()
-        entries = get_numstat(diff_range)
-        total_lines, excluded_lines, _ = _analyze_entries(entries)
-        if total_lines > MAX_CHANGED_LINES:
-            print("check_pr_scope: FAIL")
-            print(f"  total lines changed ({total_lines}) exceeds "
-                  f"{MAX_CHANGED_LINES} (excluding "
-                  f"{', '.join(EXCLUDED_PREFIXES)})")
-            return 1
-        print(f"check_pr_scope: PASS ({total_lines} lines changed"
-              + (f", {excluded_lines} excluded" if excluded_lines else "")
-              + ", multi-module allowed)")
-        return 0
-
-    if skip_line_limit:
-        print(f"WARNING: Line limit bypassed by "
-              f"CHANGE_CLASS={change_class}", file=sys.stderr)
-        diff_range = resolve_diff_range()
-        entries = get_numstat(diff_range)
-        total_lines, excluded_lines, modules_touched = _analyze_entries(
-            entries
+    errors: list[str] = []
+    if not skip_line_limit and total_lines > MAX_CHANGED_LINES:
+        errors.append(
+            f"total lines changed ({total_lines}) exceeds "
+            f"{MAX_CHANGED_LINES} (excluding {', '.join(EXCLUDED_PREFIXES)})"
         )
-        if len(modules_touched) > 1:
-            print("check_pr_scope: FAIL")
-            print(f"  PR touches {len(modules_touched)} modules "
-                  f"({', '.join(sorted(modules_touched))}); max 1 allowed")
-            return 1
-        print(f"check_pr_scope: PASS ({total_lines} lines changed"
-              + (f", {excluded_lines} excluded" if excluded_lines else "")
-              + f", line limit bypassed by {change_class})")
-        return 0
+    if not skip_module_limit and len(modules_touched) > 1:
+        errors.append(
+            f"PR touches {len(modules_touched)} modules "
+            f"({', '.join(sorted(modules_touched))}); max 1 allowed"
+        )
 
-    diff_range = resolve_diff_range()
-    return check(diff_range)
+    if errors:
+        print("check_pr_scope: FAIL")
+        for err in errors:
+            print(f"  {err}")
+        _emit_audit_log(change_class, "GRANTED", "MATCH", "FAIL")
+        return 1
+
+    _emit_audit_log(change_class, "GRANTED", "MATCH", "PASS")
+    print(f"check_pr_scope: PASS ({total_lines} lines changed"
+          + (f", {excluded_lines} excluded" if excluded_lines else "")
+          + f", change_class={change_class})")
+    return 0
 
 
 if __name__ == "__main__":
