@@ -255,6 +255,12 @@ def check_import_statements(
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
+                # Block spec imports from modules/
+                if alias.name == "spec" or alias.name.startswith("spec."):
+                    rel_path = os.path.relpath(file_path, repo_root)
+                    errors.append((rel_path, node.lineno,
+                                   f"imports {alias.name} (spec/ is contract only, not a runtime dependency)"))
+                    continue
                 root = resolve_import_root(alias.name)
                 if root in module_names and root != current_module:
                     rel_path = os.path.relpath(file_path, repo_root)
@@ -281,6 +287,12 @@ def check_import_statements(
                         errors.append((rel_path, node.lineno, f"imports {target.name}"))
                 continue
             if not node.module:
+                continue
+            # Block spec imports from modules/
+            if node.module == "spec" or node.module.startswith("spec."):
+                rel_path = os.path.relpath(file_path, repo_root)
+                errors.append((rel_path, node.lineno,
+                               f"imports from {node.module} (spec/ is contract only, not a runtime dependency)"))
                 continue
             for target in iter_import_targets(node):
                 if target.is_wildcard:
@@ -309,6 +321,11 @@ def main():
         return 0
 
     module_names = find_module_names(modules_dir)
+
+    # modules/common is a shared library — importing from it is always allowed
+    SHARED_MODULES = {"common"}
+    enforced_module_names = [m for m in module_names if m not in SHARED_MODULES]
+
     diff_range = resolve_diff_range()
     changed_files = get_changed_files(diff_range)
 
@@ -320,6 +337,8 @@ def main():
             continue
         module_name = module_from_path(normalized, module_names)
         if not module_name:
+            continue
+        if module_name in SHARED_MODULES:
             continue
         current_package = current_package_from_path(normalized)
         file_path = os.path.join(repo_root, normalized)
@@ -341,7 +360,7 @@ def main():
         check_import_statements(
             module_name,
             current_package,
-            module_names,
+            enforced_module_names,
             file_path,
             tree,
             errors,

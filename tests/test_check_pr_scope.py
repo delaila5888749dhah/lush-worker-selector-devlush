@@ -1,14 +1,19 @@
+import os
 import unittest
 from unittest.mock import patch, MagicMock
 import subprocess
 
+import tempfile
+
 from ci.check_pr_scope import (
     _normalize,
     _is_excluded,
+    _parse_labels,
     _resolve_change_class,
     _auto_detect_change_class,
     _check_authorization,
     _check_context_binding,
+    _export_to_github_env,
     module_from_path,
     get_numstat,
     check,
@@ -59,6 +64,43 @@ class ModuleFromPathTests(unittest.TestCase):
 
     def test_spec(self):
         self.assertIsNone(module_from_path("spec/schema.py"))
+
+
+class ParseLabelsTests(unittest.TestCase):
+    """Test _parse_labels — security-critical exact match parsing."""
+
+    def test_single_label(self):
+        self.assertEqual(_parse_labels("approved-override"), {"approved-override"})
+
+    def test_multiple_labels(self):
+        result = _parse_labels("approved-override,bug,critical")
+        self.assertEqual(result, {"approved-override", "bug", "critical"})
+
+    def test_whitespace_stripped(self):
+        result = _parse_labels("  approved-override , bug ")
+        self.assertEqual(result, {"approved-override", "bug"})
+
+    def test_case_normalized(self):
+        result = _parse_labels("Approved-Override,BUG")
+        self.assertEqual(result, {"approved-override", "bug"})
+
+    def test_empty_string(self):
+        self.assertEqual(_parse_labels(""), set())
+
+    def test_empty_entries_ignored(self):
+        result = _parse_labels("approved-override,,,,bug")
+        self.assertEqual(result, {"approved-override", "bug"})
+
+    def test_exact_match_security(self):
+        """Substring 'approved-override' inside longer label must NOT match."""
+        labels = _parse_labels("not-approved-override")
+        self.assertNotIn("approved-override", labels)
+        self.assertIn("not-approved-override", labels)
+
+    def test_suffix_attack(self):
+        """'approved-override-requested' must NOT grant access."""
+        labels = _parse_labels("approved-override-requested")
+        self.assertNotIn("approved-override", labels)
 
 
 class CheckTests(unittest.TestCase):
@@ -131,15 +173,6 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(check("fake...range"), 0)
 
 
-class ConstantsTests(unittest.TestCase):
-    def test_max_lines(self):
-        self.assertEqual(MAX_CHANGED_LINES, 200)
-
-    def test_excluded_prefixes(self):
-        self.assertIn("tests/", EXCLUDED_PREFIXES)
-        self.assertIn("ci/", EXCLUDED_PREFIXES)
-
-
 class AutoDetectChangeClassTests(unittest.TestCase):
     """Test _auto_detect_change_class — hard rules only."""
 
@@ -179,6 +212,48 @@ class AutoDetectChangeClassTests(unittest.TestCase):
             "spec_sync",
         )
 
+    def test_spec_sync_from_title_tag(self):
+        """[spec-sync] in PR title maps to spec_sync regardless of file set."""
+        self.assertEqual(
+            _auto_detect_change_class("[spec-sync] bump interface version", ["modules/fsm/main.py"]),
+            "spec_sync",
+        )
+
+    def test_infra_from_title_tag(self):
+        """[infra] in PR title maps to infra_change regardless of file set."""
+        self.assertEqual(
+            _auto_detect_change_class("[infra] update workflows", ["modules/fsm/main.py"]),
+            "infra_change",
+        )
+
+    def test_title_tag_spec_sync_overrides_file_based_detection(self):
+        """[spec-sync] title tag wins over ci/ files (title priority #2 > file priority #4)."""
+        self.assertEqual(
+            _auto_detect_change_class("[spec-sync] sync spec", ["ci/check_pr_scope.py"]),
+            "spec_sync",
+        )
+
+    def test_title_infra_yields_to_emergency(self):
+        """[emergency] title tag must still win over [infra] (priority #1)."""
+        self.assertEqual(
+            _auto_detect_change_class("[emergency] [infra] hotfix", ["ci/check.py"]),
+            "emergency_override",
+        )
+
+    def test_title_spec_sync_case_insensitive(self):
+        """[spec-sync] detection is case-insensitive."""
+        self.assertEqual(
+            _auto_detect_change_class("[SPEC-SYNC] update", ["modules/fsm/main.py"]),
+            "spec_sync",
+        )
+
+    def test_title_infra_case_insensitive(self):
+        """[infra] detection is case-insensitive."""
+        self.assertEqual(
+            _auto_detect_change_class("[INFRA] update", ["modules/fsm/main.py"]),
+            "infra_change",
+        )
+
     def test_fallback_to_normal(self):
         self.assertEqual(
             _auto_detect_change_class("simple fix", ["modules/fsm/main.py"]),
@@ -211,8 +286,15 @@ class AuthorizationTests(unittest.TestCase):
     def test_normal_needs_no_authorization(self):
         self.assertEqual(_check_authorization("normal"), [])
 
-    def test_spec_sync_needs_no_authorization(self):
-        """spec_sync is auto-detected; no approval needed (avoids deadlock)."""
+    @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": ""}, clear=True)
+    def test_spec_sync_without_approval_fails(self):
+        """spec_sync requires authorization per AI_CONTEXT.md §6."""
+        errors = _check_authorization("spec_sync")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("requires explicit authorization", errors[0])
+
+    @patch.dict("os.environ", {"PR_LABELS": "approved-override", "PR_REVIEW_STATE": ""}, clear=True)
+    def test_spec_sync_with_label_passes(self):
         self.assertEqual(_check_authorization("spec_sync"), [])
 
     @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": ""}, clear=True)
@@ -247,6 +329,20 @@ class AuthorizationTests(unittest.TestCase):
     def test_emergency_without_label_or_admin_fails(self):
         """Even with review, still needs label or admin approval."""
         errors = _check_authorization("emergency_override")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("requires explicit authorization", errors[0])
+
+    @patch.dict("os.environ", {"PR_LABELS": "not-approved-override", "PR_REVIEW_STATE": ""}, clear=True)
+    def test_substring_attack_rejected(self):
+        """Label 'not-approved-override' must NOT grant access (exact match)."""
+        errors = _check_authorization("infra_change")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("requires explicit authorization", errors[0])
+
+    @patch.dict("os.environ", {"PR_LABELS": "approved-override-requested", "PR_REVIEW_STATE": ""}, clear=True)
+    def test_suffix_attack_rejected(self):
+        """Label 'approved-override-requested' must NOT grant access."""
+        errors = _check_authorization("infra_change")
         self.assertEqual(len(errors), 1)
         self.assertIn("requires explicit authorization", errors[0])
 
@@ -402,9 +498,10 @@ class ChangeClassIntegrationTests(unittest.TestCase):
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "",
         "PR_TITLE": "update interfaces",
+        "PR_LABELS": "approved-override",
     }, clear=False)
     def test_auto_detect_spec_sync_bypasses_limits(self, mock_resolve, mock_numstat, mock_files):
-        """Auto-detected spec_sync skips line limit AND module limit, no approval needed."""
+        """Auto-detected spec_sync skips line limit AND module limit."""
         mock_numstat.return_value = [
             (200, 100, "spec/fsm.md"),
             (10, 5, "modules/fsm/main.py"),
@@ -418,6 +515,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "spec_sync",
         "PR_TITLE": "update interfaces",
+        "PR_LABELS": "approved-override",
     }, clear=False)
     def test_spec_sync_bypasses_both_limits(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
@@ -433,6 +531,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "spec_sync",
         "PR_TITLE": "update interfaces",
+        "PR_LABELS": "approved-override",
     }, clear=False)
     def test_spec_sync_without_spec_files_fails(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
@@ -506,6 +605,26 @@ class ConstantsTests(unittest.TestCase):
         self.assertIn("emergency_override", VALID_CHANGE_CLASSES)
         self.assertIn("spec_sync", VALID_CHANGE_CLASSES)
         self.assertIn("infra_change", VALID_CHANGE_CLASSES)
+
+
+class ExportToGithubEnvTests(unittest.TestCase):
+    """Tests for _export_to_github_env()."""
+
+    def test_writes_to_github_env_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".env",
+                                         delete=False) as f:
+            env_file = f.name
+        with patch.dict("os.environ", {"GITHUB_ENV": env_file}):
+            _export_to_github_env("CHANGE_CLASS", "spec_sync")
+        with open(env_file) as f:
+            content = f.read()
+        self.assertIn("CHANGE_CLASS=spec_sync\n", content)
+        os.unlink(env_file)
+
+    def test_no_op_when_github_env_not_set(self):
+        with patch.dict("os.environ", {}, clear=True):
+            # Should not raise
+            _export_to_github_env("CHANGE_CLASS", "normal")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import threading
 
-from spec.schema import InvalidStateError, InvalidTransitionError, State
+from modules.common.exceptions import InvalidStateError, InvalidTransitionError
+from modules.common.types import State
 
 ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
 

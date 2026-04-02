@@ -1,6 +1,11 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP)
 
-spec-version: 1.0
+spec-version: 2.0
+
+> **v2.0 Breaking Changes:**
+> - Exception types (SessionFlaggedError) moved to modules.common.exceptions
+> - Data types moved to modules.common.types
+> - spec/ is no longer a runtime dependency
 
 ## Module: watchdog
 

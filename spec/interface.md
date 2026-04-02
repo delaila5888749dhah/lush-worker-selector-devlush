@@ -1,13 +1,18 @@
 # Interface Contract (Aggregated)
 
-spec-version: 1.0
+spec-version: 2.0
 
-> **Contract Segmentation (v1.0):** Interface contracts have been split into
+> **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
 > compatibility with the CI pipeline.
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v2.0 Breaking Changes:**
+> - Exception types moved from spec.schema to modules.common.exceptions
+> - Data types moved from spec.schema to modules.common.types
+> - spec/ is no longer a runtime dependency
 
 ## Module: fsm
 

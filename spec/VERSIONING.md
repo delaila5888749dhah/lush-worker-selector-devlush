@@ -44,9 +44,17 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 1.0 | 2026-04-01 |
-| `spec/integration/interface.md` | 1.0 | 2026-04-01 |
-| `spec/interface.md` (aggregated) | 1.0 | 2026-04-01 |
+| `spec/core/interface.md` | 2.0 | 2026-04-02 |
+| `spec/integration/interface.md` | 2.0 | 2026-04-02 |
+| `spec/interface.md` (aggregated) | 2.0 | 2026-04-02 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
+
+## Changelog
+
+### v2.0 (2026-04-02) — BREAKING
+- **Exception types** (`InvalidStateError`, `InvalidTransitionError`, `SessionFlaggedError`, `CycleExhaustedError`) moved from `spec.schema` to `modules.common.exceptions`
+- **Data types** (`State`, `CardInfo`, `BillingProfile`, `WorkerTask`) moved from `spec.schema` to `modules.common.types`
+- `spec/` is no longer a runtime dependency — enforces architecture boundary between contract and implementation
+- All `modules/` imports rewired to `modules.common`

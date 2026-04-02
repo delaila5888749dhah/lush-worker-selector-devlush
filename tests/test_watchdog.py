@@ -7,7 +7,7 @@ from modules.watchdog.main import (
     enable_network_monitor,
     wait_for_total,
 )
-from spec.schema import SessionFlaggedError
+from modules.common.exceptions import SessionFlaggedError
 
 
 class WatchdogTests(unittest.TestCase):

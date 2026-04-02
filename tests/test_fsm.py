@@ -6,7 +6,8 @@ from modules.fsm.main import (
     reset_states,
     transition_to,
 )
-from spec.schema import InvalidStateError, InvalidTransitionError, State
+from modules.common.exceptions import InvalidStateError, InvalidTransitionError
+from modules.common.types import State
 
 
 class FSMTests(unittest.TestCase):

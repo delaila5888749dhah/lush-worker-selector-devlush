@@ -1,6 +1,11 @@
 # Interface Contract — Core (FSM)
 
-spec-version: 1.0
+spec-version: 2.0
+
+> **v2.0 Breaking Changes:**
+> - Exception types (InvalidStateError, InvalidTransitionError) moved to modules.common.exceptions
+> - State type moved to modules.common.types
+> - spec/ is no longer a runtime dependency
 
 ## Module: fsm
 

@@ -104,27 +104,53 @@ def is_spec_path(path: str) -> bool:
     return normalized == "spec" or normalized.startswith("spec/")
 
 
-def main() -> None:
-    allow_spec_modification = os.environ.get("ALLOW_SPEC_MODIFICATION")
-    if allow_spec_modification and allow_spec_modification.strip().lower() == "true":
-        sys.stderr.write(
-            "WARNING: Spec modification allowed by environment variable\n"
-        )
-        sys.exit(0)
+def _parse_labels(raw: str) -> set[str]:
+    """Parse comma-separated labels into a normalized set (exact match)."""
+    return {label.strip().lower() for label in raw.split(",")
+            if label.strip()}
 
+
+def _resolve_change_class() -> str:
+    """Resolve CHANGE_CLASS from env var (no auto-detect here)."""
+    return os.environ.get("CHANGE_CLASS", "").strip().lower()
+
+
+def _is_authorized() -> bool:
+    """Check authorization: label 'approved-override' OR CHANGE_CLASS_APPROVED=true."""
+    labels = _parse_labels(os.environ.get("PR_LABELS", ""))
+    admin_approved = os.environ.get("CHANGE_CLASS_APPROVED", "").strip().lower()
+    return "approved-override" in labels or admin_approved == "true"
+
+
+def main() -> None:
     diff_range = resolve_diff_range()
     changed_files = get_changed_files(diff_range)
     spec_files = [path for path in changed_files if is_spec_path(path)]
 
-    if spec_files:
-        print("check_spec_lock: spec files modified:", file=sys.stderr)
-        for path in spec_files:
-            print(path, file=sys.stderr)
-        print("Spec modification is forbidden", file=sys.stderr)
-        sys.exit(1)
+    if not spec_files:
+        print("check_spec_lock: PASS", file=sys.stderr)
+        sys.exit(0)
 
-    print("check_spec_lock: PASS")
-    sys.exit(0)
+    # Spec files modified — check if spec_sync is authorized
+    change_class = _resolve_change_class()
+
+    if change_class == "spec_sync" and _is_authorized():
+        print("check_spec_lock: PASS (spec_sync authorized)",
+              file=sys.stderr)
+        sys.exit(0)
+
+    # Unauthorized spec modification
+    print("check_spec_lock: FAIL — spec files modified:", file=sys.stderr)
+    for path in spec_files:
+        print(f"  {path}", file=sys.stderr)
+    if change_class != "spec_sync":
+        print("  Spec modification requires CHANGE_CLASS=spec_sync",
+              file=sys.stderr)
+    else:
+        print("  CHANGE_CLASS=spec_sync requires authorization: "
+              "PR label 'approved-override' or CHANGE_CLASS_APPROVED=true",
+              file=sys.stderr)
+    sys.exit(1)
 
 
 if __name__ == "__main__":

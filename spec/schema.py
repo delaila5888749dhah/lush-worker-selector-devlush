@@ -1,3 +1,13 @@
+"""Spec schema — contract-only definitions.
+
+DEPRECATED: Runtime code should import from modules.common instead.
+  - Types:      modules.common.types (State, CardInfo, BillingProfile, WorkerTask)
+  - Exceptions: modules.common.exceptions (InvalidStateError, etc.)
+
+This file is retained as a contract reference only.  It MUST NOT be
+imported by modules/ at runtime (violates spec ↔ implementation boundary).
+"""
+
 from dataclasses import dataclass
 from typing import List, Optional
 

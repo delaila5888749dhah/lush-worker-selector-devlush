@@ -1,6 +1,6 @@
 import threading
 
-from spec.schema import SessionFlaggedError
+from modules.common.exceptions import SessionFlaggedError
 
 _lock = threading.Lock()
 _monitor_enabled = False

@@ -1,4 +1,4 @@
-from spec.schema import State
+from modules.common.types import State
 
 from .main import add_new_state, get_current_state, reset_states, transition_to
 
