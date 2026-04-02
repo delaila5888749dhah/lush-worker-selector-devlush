@@ -211,8 +211,15 @@ class AuthorizationTests(unittest.TestCase):
     def test_normal_needs_no_authorization(self):
         self.assertEqual(_check_authorization("normal"), [])
 
-    def test_spec_sync_needs_no_authorization(self):
-        """spec_sync is auto-detected; no approval needed (avoids deadlock)."""
+    @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": ""}, clear=True)
+    def test_spec_sync_without_approval_fails(self):
+        """spec_sync requires authorization per AI_CONTEXT.md §6."""
+        errors = _check_authorization("spec_sync")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("requires explicit authorization", errors[0])
+
+    @patch.dict("os.environ", {"PR_LABELS": "approved-override", "PR_REVIEW_STATE": ""}, clear=True)
+    def test_spec_sync_with_label_passes(self):
         self.assertEqual(_check_authorization("spec_sync"), [])
 
     @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": ""}, clear=True)
@@ -402,9 +409,10 @@ class ChangeClassIntegrationTests(unittest.TestCase):
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "",
         "PR_TITLE": "update interfaces",
+        "PR_LABELS": "approved-override",
     }, clear=False)
     def test_auto_detect_spec_sync_bypasses_limits(self, mock_resolve, mock_numstat, mock_files):
-        """Auto-detected spec_sync skips line limit AND module limit, no approval needed."""
+        """Auto-detected spec_sync skips line limit AND module limit."""
         mock_numstat.return_value = [
             (200, 100, "spec/fsm.md"),
             (10, 5, "modules/fsm/main.py"),
@@ -418,6 +426,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "spec_sync",
         "PR_TITLE": "update interfaces",
+        "PR_LABELS": "approved-override",
     }, clear=False)
     def test_spec_sync_bypasses_both_limits(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
@@ -433,6 +442,7 @@ class ChangeClassIntegrationTests(unittest.TestCase):
     @patch.dict("os.environ", {
         "CHANGE_CLASS": "spec_sync",
         "PR_TITLE": "update interfaces",
+        "PR_LABELS": "approved-override",
     }, clear=False)
     def test_spec_sync_without_spec_files_fails(self, mock_resolve, mock_numstat, mock_files):
         mock_numstat.return_value = [
