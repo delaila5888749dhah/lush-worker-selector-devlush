@@ -59,10 +59,8 @@ def _parse_profile_line(line):
     )
 
 
-def _load_profiles_locked():
-    global _profiles, _cursor
-    if _profiles:
-        return
+def _read_profiles_from_disk():
+    """Read and parse profiles from disk. Must be called without holding _lock."""
     pool_dir = _pool_dir()
     profiles = []
     if pool_dir.is_dir():
@@ -76,9 +74,7 @@ def _load_profiles_locked():
                 if profile is not None:
                     profiles.append(profile)
     random.shuffle(profiles)
-    if profiles:
-        _profiles = profiles
-        _cursor = 0
+    return profiles
 
 
 def _generate_phone():
@@ -123,10 +119,26 @@ def _fill_missing(profile):
 
 
 def select_profile(zip_code):
-    global _cursor
+    global _profiles, _cursor
     normalized_zip = _normalize_zip(zip_code)
+
+    # Fast path: check if pool is already loaded before doing any I/O
     with _lock:
-        _load_profiles_locked()
+        needs_load = not _profiles
+
+    if needs_load:
+        # Do filesystem I/O outside the lock so other threads are not blocked.
+        # Multiple threads may load concurrently on a cold start; the redundant
+        # work is intentional — it trades a small amount of extra disk reads for
+        # significantly lower lock contention on large pools.
+        loaded = _read_profiles_from_disk()
+        # Publish under the lock; double-check in case another thread loaded first
+        with _lock:
+            if not _profiles and loaded:
+                _profiles = loaded
+                _cursor = 0
+
+    with _lock:
         if not _profiles:
             pool_dir = _pool_dir()
             exists = pool_dir.is_dir()

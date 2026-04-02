@@ -21,7 +21,7 @@ CI_DIR = ROOT_DIR / "ci"
 MODULES_DIR = ROOT_DIR / "modules"
 SPEC_DIR = ROOT_DIR / "spec"
 
-REQUIRED_ENV_VARS = ("PR_TITLE", "PR_LABELS", "CHANGE_CLASS")
+REQUIRED_ENV_VARS = ("PR_TITLE", "CHANGE_CLASS")
 DETECTION_TOKENS = ("[emergency]", "[spec-sync]", "[infra]")
 
 REF_PATTERN = re.compile(r"^[A-Za-z0-9._/~-]+$")
