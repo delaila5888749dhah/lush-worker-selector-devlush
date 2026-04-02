@@ -287,13 +287,18 @@ def _resolve_change_class(diff_range: str) -> str:
     """Resolve CHANGE_CLASS: explicit env var OR auto-detect from files.
 
     Priority:
-      1. Explicit CHANGE_CLASS env var (if set and valid)
+      1. Explicit CHANGE_CLASS env var (if set and valid; reject if invalid)
       2. Auto-detect from PR title + changed files
     """
     explicit = os.environ.get("CHANGE_CLASS", "").strip().lower()
 
-    if explicit and explicit in VALID_CHANGE_CLASSES:
-        print(f"check_pr_scope: CHANGE_CLASS from env: {explicit}",
+    if explicit:
+        if explicit in VALID_CHANGE_CLASSES:
+            print(f"check_pr_scope: CHANGE_CLASS from env: {explicit}",
+                  file=sys.stderr)
+            return explicit
+        # Explicit but invalid — return as-is so main() rejects it
+        print(f"check_pr_scope: CHANGE_CLASS from env is invalid: {explicit}",
               file=sys.stderr)
         return explicit
 
