@@ -12,7 +12,6 @@ _cursor = 0
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
 _PHONE_FIRST_DIGITS = "23456789"
-_PHONE_OTHER_DIGITS = "0123456789"
 
 
 def _pool_dir():
