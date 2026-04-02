@@ -78,9 +78,10 @@ def _load_profiles_locked():
     random.shuffle(profiles)
     _profiles = profiles
     _cursor = 0
-
-
-def _generate_phone():
+    if profiles:
+        _profiles = profiles
+        _cursor = 0
+        _initialized = True
     first = random.choice(_PHONE_FIRST_DIGITS)
     rest = "".join(random.choice(_PHONE_OTHER_DIGITS) for _ in range(9))
     return f"{first}{rest}"
