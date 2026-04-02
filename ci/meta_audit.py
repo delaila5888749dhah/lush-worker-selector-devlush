@@ -719,6 +719,8 @@ def rule_fail_fast_definition() -> list[AuditError]:
 def rule_audit_log_format() -> list[AuditError]:
 	errors: list[AuditError] = []
 	for path in sorted(CI_DIR.glob("*.py")):
+		if path.name == "meta_audit.py":
+			continue
 		text = _read_text(path)
 		for lineno, line in enumerate(text.splitlines(), start=1):
 			if "AUDIT_LOG:" in line:

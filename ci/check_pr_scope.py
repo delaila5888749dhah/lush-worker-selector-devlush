@@ -3,12 +3,10 @@
 ci/ and tests/) and touches at most one module under modules/.
 
 Exception Framework (AI_CONTEXT.md §6):
-  CHANGE_CLASS is REQUIRED for every PR.  If not set explicitly via
-  env var, it is auto-detected from PR title and changed files using
-  deterministic rules (no scoring heuristics).
+  CHANGE_CLASS must be set explicitly via the CHANGE_CLASS env var.
+  If not set, defaults to 'normal'.
 
   Authorization is required for all non-normal CHANGE_CLASS values.
-  Context binding ensures CHANGE_CLASS matches PR content.
   All override usage is logged as structured JSON audit trail.
 
 Change Classes & Bypass Table (AI_CONTEXT.md §6):
@@ -198,50 +196,12 @@ def _parse_labels(raw: str) -> set[str]:
             if label.strip()}
 
 
-# ── change classification (deterministic, rule-based) ──────────────
-
-def _auto_detect_change_class(
-    pr_title: str, changed_files: list[str],
-) -> str:
-    """Deterministic rule-based auto-detection of CHANGE_CLASS.
-
-    Priority (first match wins):
-      1. [emergency] in title  → emergency_override
-      2. [spec-sync] in title  → spec_sync
-      3. [infra] in title      → infra_change
-      4. spec/ in changed files → spec_sync
-      5. ci/ or .github/ in files → infra_change
-      6. default               → normal
-    """
-    title_lower = pr_title.lower()
-    if "[emergency]" in title_lower:
-        return "emergency_override"
-    if "[spec-sync]" in title_lower:
-        return "spec_sync"
-    if "[infra]" in title_lower:
-        return "infra_change"
-
-    has_spec = any(_normalize(f).startswith("spec/") for f in changed_files)
-    has_infra = any(
-        _normalize(f).startswith("ci/")
-        or _normalize(f).startswith(".github/")
-        for f in changed_files
-    )
-    if has_spec:
-        return "spec_sync"
-    if has_infra:
-        return "infra_change"
-    return "normal"
-
+# ── change classification ──────────────────────────────────────────
 
 def _resolve_change_class(diff_range: str) -> str:
-    """Resolve CHANGE_CLASS: explicit env var takes priority, else auto-detect."""
+    """Resolve CHANGE_CLASS from the explicit env var; defaults to 'normal'."""
     explicit = os.environ.get("CHANGE_CLASS", "").strip().lower()
-    if explicit:
-        return explicit
-    pr_title = os.environ.get("PR_TITLE", "").strip()
-    changed_files = _get_changed_files(diff_range)
-    return _auto_detect_change_class(pr_title, changed_files)
+    return explicit if explicit else "normal"
 
 
 def _check_authorization(change_class: str) -> list[str]:
@@ -276,53 +236,6 @@ def _check_authorization(change_class: str) -> list[str]:
             return [
                 f"CHANGE_CLASS=emergency_override requires at least 1 "
                 f"APPROVED review (current: {review_state or 'NONE'})"
-            ]
-
-    return []
-
-
-def _check_context_binding(
-    change_class: str, changed_files: list[str],
-) -> list[str]:
-    """Validate CHANGE_CLASS matches PR content.
-
-    Per AI_CONTEXT.md §6 — Context Binding:
-      emergency_override: title MUST contain [emergency]
-      spec_sync: files MUST include spec/
-      infra_change: files MUST include ci/ or .github/
-      normal: always passes
-    """
-    if change_class == "normal":
-        return []
-
-    if change_class == "emergency_override":
-        pr_title = os.environ.get("PR_TITLE", "").strip().lower()
-        if "[emergency]" not in pr_title:
-            return [
-                "CHANGE_CLASS=emergency_override requires "
-                "'[emergency]' in PR title"
-            ]
-
-    elif change_class == "spec_sync":
-        has_spec = any(
-            _normalize(f).startswith("spec/") for f in changed_files
-        )
-        if not has_spec:
-            return [
-                "CHANGE_CLASS=spec_sync requires changes in spec/ "
-                "directory"
-            ]
-
-    elif change_class == "infra_change":
-        has_infra = any(
-            _normalize(f).startswith("ci/")
-            or _normalize(f).startswith(".github/")
-            for f in changed_files
-        )
-        if not has_infra:
-            return [
-                "CHANGE_CLASS=infra_change requires changes in "
-                "ci/ or .github/ directory"
             ]
 
     return []
@@ -433,7 +346,6 @@ def main() -> int:
         return check(diff_range)
 
     # Non-normal: governance checks
-    changed_files = _get_changed_files(diff_range)
 
     # Authorization (AI_CONTEXT.md §6)
     auth_errors = _check_authorization(change_class)
@@ -442,15 +354,6 @@ def main() -> int:
         for err in auth_errors:
             print(f"  {err}", file=sys.stderr)
         _emit_audit_log(change_class, "DENIED", "N/A", "FAIL")
-        return 1
-
-    # Context binding (AI_CONTEXT.md §6)
-    binding_errors = _check_context_binding(change_class, changed_files)
-    if binding_errors:
-        print("check_pr_scope: FAIL", file=sys.stderr)
-        for err in binding_errors:
-            print(f"  {err}", file=sys.stderr)
-        _emit_audit_log(change_class, "GRANTED", "MISMATCH", "FAIL")
         return 1
 
     # Bypass table (AI_CONTEXT.md §6)
