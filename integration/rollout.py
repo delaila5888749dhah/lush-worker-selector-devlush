@@ -80,10 +80,15 @@ def advance():
         The new target worker count, or None if advancement is not possible.
     """
     global _current_step_index
-    if not can_advance():
-        return None
-    monitor.save_baseline()
     with _lock:
+        if _rollback_active:
+            return None
+        if _current_step_index >= len(ROLLOUT_STEPS) - 1:
+            return None
+        reasons = monitor.check_rollback_needed()
+        if reasons:
+            return None
+        monitor.save_baseline()
         _current_step_index += 1
         return ROLLOUT_STEPS[_current_step_index]
 
