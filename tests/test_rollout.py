@@ -230,7 +230,7 @@ class TestThreadSafety(RolloutResetMixin, unittest.TestCase):
         self.assertGreaterEqual(idx, 0)
         self.assertLess(idx, len(SCALE_STEPS))
 
-    def test_concurrent_try_scale_up_does_not_exceed_max(self):
+    def test_concurrent_try_scale_up_does_not_exceed_max_scale_step(self):
         errors = []
         actions = []
         thread_count = 8

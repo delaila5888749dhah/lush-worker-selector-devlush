@@ -100,9 +100,8 @@ def try_scale_up():
             )
             return SCALE_STEPS[_current_step_index], "rollback", reasons
 
-        current_step_index = _current_step_index
-        if current_step_index >= len(SCALE_STEPS) - 1:
-            return SCALE_STEPS[current_step_index], "at_max", []
+        if _current_step_index >= len(SCALE_STEPS) - 1:
+            return SCALE_STEPS[_current_step_index], "at_max", []
 
         _current_step_index += 1
         new_count = SCALE_STEPS[_current_step_index]
