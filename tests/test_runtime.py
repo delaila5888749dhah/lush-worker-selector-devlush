@@ -104,8 +104,8 @@ class TestApplyScale(RuntimeResetMixin, unittest.TestCase):
 
 
 class TestWorkerCrash(RuntimeResetMixin, unittest.TestCase):
-    def test_crash_records_restart(self):
-        """A worker that raises outside the inner try records a restart."""
+    def test_crash_removes_worker_from_active_set(self):
+        """A failed standalone worker exits cleanly and is deregistered."""
         crash_event = threading.Event()
 
         def crashing_fn(_):
@@ -118,8 +118,7 @@ class TestWorkerCrash(RuntimeResetMixin, unittest.TestCase):
         crash_event.wait(timeout=2)
         time.sleep(0.1)
         runtime._running = False
-        # After crash, monitor should have recorded errors
-        self.assertGreater(monitor.get_error_rate(), 0)
+        self.assertEqual(get_active_workers(), [])
 
     def test_crash_does_not_stop_other_workers(self):
         """One crashing worker must not kill another."""
@@ -168,6 +167,25 @@ class TestStartStop(RuntimeResetMixin, unittest.TestCase):
 
 
 class TestRuntimeLoop(RuntimeResetMixin, unittest.TestCase):
+    def test_loop_restarts_crashed_worker(self):
+        calls = []
+        wait_event = threading.Event()
+
+        def task_fn(_):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            wait_event.wait(timeout=1)
+
+        with patch("integration.runtime.rollout.try_scale_up",
+                   return_value=(1, "at_max", [])):
+            start(task_fn, interval=0.05)
+            time.sleep(0.3)
+            self.assertGreater(monitor.get_restarts_last_hour(), 0)
+            self.assertEqual(len(get_active_workers()), 1)
+            wait_event.set()
+            stop(timeout=2)
+
     def test_loop_scales_workers(self):
         """Runtime loop should scale workers based on rollout."""
         rollout.configure(check_rollback_fn=lambda: [],
