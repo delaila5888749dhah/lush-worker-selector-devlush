@@ -116,7 +116,7 @@ class TestEvaluate(RolloutResetMixin, unittest.TestCase):
         healthy, reasons = evaluate()
         self.assertFalse(healthy)
         self.assertTrue(is_rollback_active())
-        self.assertTrue(len(reasons) > 0)
+        self.assertGreater(len(reasons), 0)
 
     def test_rollback_reasons_stored(self):
         for _ in range(4):
