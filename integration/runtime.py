@@ -1,5 +1,4 @@
 """Runtime orchestrator for worker scaling and monitoring."""
-
 import logging
 import threading
 import time
@@ -7,7 +6,6 @@ from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 _logger = logging.getLogger(__name__)
 _lock = threading.Lock()
-# Active workers: {worker_id: threading.Thread}
 _workers: dict = {}
 _worker_counter = 0
 _running = False
@@ -18,13 +16,10 @@ _WORKER_TIMEOUT = 30
 _MAX_CONSECUTIVE_ROLLBACKS = 3
 _consecutive_rollbacks = 0
 _pending_restarts = 0
-
 def _should_stop_worker(worker_id):
-    """Standalone workers stop only when removed; runtime workers also stop on shutdown."""
     return worker_id not in _workers or (not _running and _loop_thread is not None)
 
 def _log_event(worker_id, state, action, metrics=None):
-    """Log: timestamp | worker_id | state | action | metrics."""
     _logger.info("%s | %s | %s | %s | %s", time.strftime("%Y-%m-%dT%H:%M:%S"),
                  worker_id, state, action, metrics or "")
 def _safe_sleep(interval):
@@ -40,7 +35,6 @@ def _ensure_rollout_configured():
     if check_fn is None and save_fn is None:
         rollout.configure(monitor.check_rollback_needed, monitor.save_baseline)
 def _worker_fn(worker_id, task_fn):
-    """Run *task_fn* in a loop until the worker is removed or runtime stops."""
     global _pending_restarts
     _log_event(worker_id, "running", "start")
     try:
@@ -92,7 +86,6 @@ def get_active_workers():
     with _lock:
         return list(_workers.keys())
 def _apply_scale(target_count, task_fn):
-    """Start or stop workers so that the active count matches *target_count*."""
     global _pending_restarts
     with _lock:
         current_ids = list(_workers.keys())
@@ -115,7 +108,6 @@ def _apply_scale(target_count, task_fn):
         _log_event("runtime", "scaling", "scale_down",
                    {"from": current_count, "to": target_count})
 def _runtime_loop(task_fn, interval):
-    """Main loop: read metrics → call rollout → apply scale."""
     global _consecutive_rollbacks
     while True:
         with _lock:
@@ -183,7 +175,6 @@ def stop(timeout=None):
     _log_event("runtime", "stopped", "runtime_stop")
     return True
 def is_running():
-    """Return True if the runtime loop is active."""
     with _lock:
         return _running
 def get_status():
