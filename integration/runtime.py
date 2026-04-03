@@ -158,10 +158,7 @@ def stop(timeout=None):
         if not stop_worker(wid, timeout=max(0, deadline - time.monotonic())):
             all_stopped = False
     with _lock:
-        if loop_stopped and all_stopped:
-            _state = "STOPPED"
-        else:
-            _state = "STOPPED"
+        _state = "STOPPED"
     if not loop_stopped or not all_stopped:
         return False
     _log_event("runtime", "stopped", "runtime_stop")
