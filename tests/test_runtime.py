@@ -7,8 +7,10 @@ from integration import runtime
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 from integration.runtime import (
+    ALLOWED_STATES,
     _apply_scale,
     get_active_workers,
+    get_state,
     get_status,
     is_running,
     reset,
@@ -439,6 +441,103 @@ class TestLifecycleStateModel(RuntimeResetMixin, unittest.TestCase):
         stop(timeout=2)
         self.assertTrue(start(lambda _: time.sleep(0.5), interval=0.05))
         stop(timeout=2)
+# ── Lifecycle state machine audit ────────────────────────────────
+
+
+class TestLifecycleStateMachine(RuntimeResetMixin, unittest.TestCase):
+    """Phase 6 — validate INIT → RUNNING → STOPPING → STOPPED transitions."""
+
+    def test_allowed_states_set(self):
+        self.assertEqual(ALLOWED_STATES, {"INIT", "RUNNING", "STOPPING", "STOPPED"})
+
+    def test_initial_state_is_init(self):
+        self.assertEqual(get_state(), "INIT")
+
+    def test_start_transitions_to_running(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        self.assertEqual(get_state(), "RUNNING")
+        stop(timeout=2)
+
+    def test_stop_transitions_to_stopped(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        stop(timeout=2)
+        self.assertEqual(get_state(), "STOPPED")
+
+    def test_start_allowed_from_init(self):
+        self.assertEqual(get_state(), "INIT")
+        self.assertTrue(start(lambda _: time.sleep(0.5), interval=0.05))
+        stop(timeout=2)
+
+    def test_start_allowed_from_stopped(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        stop(timeout=2)
+        self.assertEqual(get_state(), "STOPPED")
+        self.assertTrue(start(lambda _: time.sleep(0.5), interval=0.05))
+        stop(timeout=2)
+
+    def test_start_blocked_while_running(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        self.assertFalse(start(lambda _: None, interval=0.05))
+        self.assertEqual(get_state(), "RUNNING")
+        stop(timeout=2)
+
+    def test_stopping_blocks_start(self):
+        """Verify STOPPING state blocks start()."""
+        with runtime._lock:
+            runtime._state = "STOPPING"
+        self.assertFalse(start(lambda _: None, interval=0.05))
+        with runtime._lock:
+            runtime._state = "INIT"
+
+    def test_stop_only_from_running(self):
+        self.assertFalse(stop(timeout=1))
+        self.assertEqual(get_state(), "INIT")
+
+    def test_stop_from_stopped_returns_false(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        stop(timeout=2)
+        self.assertEqual(get_state(), "STOPPED")
+        self.assertFalse(stop(timeout=1))
+
+    def test_restart_no_state_leak(self):
+        """Validate restart cycle does not leak state."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(0.1)
+        stop(timeout=2)
+        self.assertEqual(get_state(), "STOPPED")
+        self.assertEqual(get_active_workers(), [])
+        status = get_status()
+        self.assertEqual(status["worker_count"], 0)
+        self.assertFalse(status["running"])
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        self.assertEqual(get_state(), "RUNNING")
+        self.assertTrue(is_running())
+        stop(timeout=2)
+
+    def test_reset_returns_to_init(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(0.1)
+        reset()
+        self.assertEqual(get_state(), "INIT")
+
+    def test_get_status_includes_state(self):
+        status = get_status()
+        self.assertIn("state", status)
+        self.assertEqual(status["state"], "INIT")
+
+    def test_deterministic_full_cycle(self):
+        """INIT → RUNNING → STOPPED → RUNNING → STOPPED → INIT."""
+        self.assertEqual(get_state(), "INIT")
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        self.assertEqual(get_state(), "RUNNING")
+        stop(timeout=2)
+        self.assertEqual(get_state(), "STOPPED")
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        self.assertEqual(get_state(), "RUNNING")
+        stop(timeout=2)
+        self.assertEqual(get_state(), "STOPPED")
+        reset()
+        self.assertEqual(get_state(), "INIT")
 
 
 if __name__ == "__main__":
