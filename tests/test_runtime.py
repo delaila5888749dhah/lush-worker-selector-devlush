@@ -285,5 +285,136 @@ class TestReset(RuntimeResetMixin, unittest.TestCase):
         self.assertEqual(status["worker_count"], 0)
 
 
+# ── Zombie worker cleanup audit ──────────────────────────────────
+
+
+class TestZombieWorkerCleanup(RuntimeResetMixin, unittest.TestCase):
+    """Validate no zombie workers exist after stop/timeout/crash scenarios."""
+
+    def test_timeout_worker_eventually_cleaned_up(self):
+        """Worker that times out on stop_worker cleans up once its task ends."""
+        barrier = threading.Event()
+        wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
+        # stop_worker times out
+        self.assertFalse(stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT))
+        self.assertIn(wid, get_active_workers())
+        # Unblock the worker so it can exit naturally
+        barrier.set()
+        time.sleep(0.2)
+        # Worker must have cleaned itself up via the finally block
+        self.assertNotIn(wid, get_active_workers())
+        self.assertNotIn(wid, runtime._stop_requests)
+
+    def test_stop_requests_cleaned_after_timeout_worker_exits(self):
+        """_stop_requests has no stale entries after a timed-out worker exits."""
+        barrier = threading.Event()
+        wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
+        stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT)
+        self.assertIn(wid, runtime._stop_requests)
+        barrier.set()
+        time.sleep(0.2)
+        self.assertEqual(runtime._stop_requests, set())
+
+    def test_rapid_start_stop_no_zombies(self):
+        """Rapid start/stop cycles must leave zero workers in registry."""
+        for _ in range(10):
+            barrier = threading.Event()
+            wid = start_worker(lambda _: barrier.wait(timeout=1))
+            barrier.set()
+            stop_worker(wid, timeout=CLEANUP_TIMEOUT)
+        self.assertEqual(get_active_workers(), [])
+        self.assertEqual(runtime._stop_requests, set())
+
+    def test_multiple_crashes_no_zombies(self):
+        """Multiple crashed workers must all be deregistered."""
+        runtime._running = True
+        events = []
+        for _ in range(5):
+            ev = threading.Event()
+            events.append(ev)
+
+            def crash_fn(_, e=ev):
+                e.set()
+                raise RuntimeError("boom")
+
+            start_worker(crash_fn)
+        # Wait for all crashes to fire
+        for ev in events:
+            ev.wait(timeout=2)
+        time.sleep(0.2)
+        runtime._running = False
+        self.assertEqual(get_active_workers(), [])
+        self.assertEqual(runtime._stop_requests, set())
+
+    def test_crash_cleans_stop_requests(self):
+        """A worker that was asked to stop but crashes has no stale _stop_requests."""
+        runtime._running = True
+        barrier = threading.Event()
+
+        def delayed_crash(_):
+            barrier.wait(timeout=2)
+            raise RuntimeError("late crash")
+
+        wid = start_worker(delayed_crash)
+        # Mark worker for stop
+        with runtime._lock:
+            runtime._stop_requests.add(wid)
+        barrier.set()
+        time.sleep(0.3)
+        runtime._running = False
+        self.assertNotIn(wid, get_active_workers())
+        self.assertNotIn(wid, runtime._stop_requests)
+
+    def test_stop_runtime_timeout_eventual_cleanup(self):
+        """Workers from stop() timeout path clean up once they finish."""
+        worker_block = threading.Event()
+        with patch("integration.runtime.rollout.try_scale_up",
+                    return_value=(2, "at_max", [])):
+            start(lambda _: worker_block.wait(timeout=WORKER_BLOCK_TIMEOUT),
+                  interval=1)
+            time.sleep(WARMUP_DELAY)
+            # stop() will timeout, leaving workers active
+            self.assertFalse(stop(timeout=INSUFFICIENT_TIMEOUT))
+            self.assertNotEqual(get_active_workers(), [])
+            # Unblock workers so they can exit naturally
+            worker_block.set()
+            time.sleep(0.5)
+            self.assertEqual(get_active_workers(), [])
+            self.assertEqual(runtime._stop_requests, set())
+
+    def test_start_worker_thread_failure_no_zombie(self):
+        """If thread.start() fails, worker must not linger in _workers."""
+        with patch("threading.Thread.start", side_effect=RuntimeError("no resources")):
+            with self.assertRaises(RuntimeError):
+                start_worker(lambda _: None)
+        self.assertEqual(get_active_workers(), [])
+        self.assertEqual(runtime._stop_requests, set())
+
+    def test_concurrent_start_stop_no_zombies(self):
+        """Concurrent start and stop operations must leave a consistent registry."""
+        errors = []
+
+        def worker_task(_):
+            time.sleep(0.02)
+
+        def start_stop_cycle():
+            try:
+                wid = start_worker(worker_task)
+                time.sleep(0.01)
+                stop_worker(wid, timeout=CLEANUP_TIMEOUT)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=start_stop_cycle) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        time.sleep(0.3)
+        self.assertEqual(errors, [])
+        self.assertEqual(get_active_workers(), [])
+        self.assertEqual(runtime._stop_requests, set())
+
+
 if __name__ == "__main__":
     unittest.main()

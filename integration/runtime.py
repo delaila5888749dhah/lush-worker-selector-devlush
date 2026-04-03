@@ -31,8 +31,8 @@ def _ensure_rollout_configured():
         rollout.configure(monitor.check_rollback_needed, monitor.save_baseline)
 def _worker_fn(worker_id, task_fn):
     global _pending_restarts
-    _log_event(worker_id, "running", "start")
     try:
+        _log_event(worker_id, "running", "start")
         while True:
             with _lock:
                 if _should_stop_worker(worker_id):
@@ -58,7 +58,13 @@ def start_worker(task_fn):
         wid = f"worker-{_worker_counter}"
         t = threading.Thread(target=_worker_fn, args=(wid, task_fn), daemon=True)
         _workers[wid] = t
-    t.start(); return wid
+    try:
+        t.start()
+    except Exception:
+        with _lock:
+            _workers.pop(wid, None)
+        raise
+    return wid
 def stop_worker(worker_id, timeout=None):
     """Remove a worker from the active set and join its thread."""
     with _lock:
