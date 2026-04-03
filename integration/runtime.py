@@ -66,7 +66,7 @@ def stop_worker(worker_id, timeout=None):
         if thread is None:
             return False
         _stop_requests.add(worker_id)
-    thread.join(timeout=timeout or _WORKER_TIMEOUT)
+    thread.join(timeout=_WORKER_TIMEOUT if timeout is None else timeout)
     if thread.is_alive(): _logger.warning("Worker %s did not stop within timeout", worker_id); return False
     with _lock:
         _stop_requests.discard(worker_id); _workers.pop(worker_id, None)
@@ -136,20 +136,23 @@ def stop(timeout=None):
     """Stop the runtime loop and all active workers."""
     global _running, _loop_thread
     timeout = _WORKER_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + timeout
     with _lock:
         if not _running:
             return False
         _running = False
         loop_thread = _loop_thread
-    if loop_thread is not None: loop_thread.join(timeout=timeout)
-    if loop_thread is not None and loop_thread.is_alive(): return False
+    if loop_thread is not None: loop_thread.join(timeout=max(0, deadline - time.monotonic()))
+    loop_stopped = loop_thread is None or not loop_thread.is_alive()
     with _lock:
-        _loop_thread = None; wids = list(_workers.keys())
+        if loop_stopped:
+            _loop_thread = None
+        wids = list(_workers.keys())
     all_stopped = True
     for wid in wids:
-        if not stop_worker(wid, timeout=timeout):
+        if not stop_worker(wid, timeout=max(0, deadline - time.monotonic())):
             all_stopped = False
-    if not all_stopped:
+    if not loop_stopped or not all_stopped:
         return False
     _log_event("runtime", "stopped", "runtime_stop")
     return True

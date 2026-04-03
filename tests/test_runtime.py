@@ -65,6 +65,16 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
     def test_stop_nonexistent_worker(self):
         self.assertFalse(stop_worker("no-such-worker"))
 
+    def test_stop_running_worker_timeout_keeps_worker_active(self):
+        barrier = threading.Event()
+        wid = start_worker(lambda _: barrier.wait(timeout=1))
+        try:
+            self.assertFalse(stop_worker(wid, timeout=0))
+            self.assertIn(wid, get_active_workers())
+        finally:
+            barrier.set()
+            stop_worker(wid, timeout=2)
+
 
 # ── Scale up / down ──────────────────────────────────────────────
 
@@ -161,6 +171,17 @@ class TestStartStop(RuntimeResetMixin, unittest.TestCase):
 
     def test_stop_when_not_running(self):
         self.assertFalse(stop(timeout=1))
+
+    def test_stop_timeout_returns_false_when_worker_still_alive(self):
+        worker_block = threading.Event()
+        with patch("integration.runtime.rollout.try_scale_up",
+                   return_value=(1, "at_max", [])):
+            start(lambda _: worker_block.wait(timeout=1), interval=1)
+            time.sleep(0.2)
+            self.assertFalse(stop(timeout=0.01))
+            self.assertNotEqual(get_active_workers(), [])
+            worker_block.set()
+            time.sleep(1.1)
 
 
 # ── Runtime loop integration ─────────────────────────────────────
