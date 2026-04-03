@@ -387,6 +387,52 @@ class TestStartStopRace(RuntimeResetMixin, unittest.TestCase):
         self.assertLessEqual(results.count(True), 1)
         self.assertFalse(is_running())
 
+    def test_no_duplicate_loop_thread_during_stopping(self):
+        """_loop_thread must not be replaced while state is STOPPING."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(0.1)
+        with runtime._lock:
+            runtime._state = "STOPPING"
+            original_thread = runtime._loop_thread
+        # Attempt start while STOPPING — must be rejected
+        self.assertFalse(start(lambda _: None, interval=0.05))
+        with runtime._lock:
+            self.assertIs(runtime._loop_thread, original_thread)
+            runtime._state = "RUNNING"
+        stop(timeout=2)
+
+    def test_concurrent_start_stop_deterministic(self):
+        """start() and stop() racing from separate threads — at most one wins each iteration."""
+        for _ in range(10):
+            start_result = [None]
+            stop_result = [None]
+            barrier = threading.Barrier(2)
+
+            def do_start():
+                barrier.wait()
+                start_result[0] = start(lambda _: time.sleep(0.5), interval=0.05)
+
+            def do_stop():
+                barrier.wait()
+                stop_result[0] = stop(timeout=2)
+
+            t1 = threading.Thread(target=do_start)
+            t2 = threading.Thread(target=do_stop)
+            t1.start()
+            t2.start()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+            # Mutual exclusion: start() and stop() must not both succeed
+            # while leaving the runtime RUNNING — that would mean stop()
+            # claimed it stopped a lifecycle that is still active.
+            if start_result[0] and stop_result[0]:
+                self.assertNotEqual(get_state(), "RUNNING")
+            # Clean up for next iteration
+            if is_running():
+                stop(timeout=2)
+            if get_state() != "INIT":
+                reset()
+
 
 class TestWorkerRegistryConsistency(RuntimeResetMixin, unittest.TestCase):
     """Worker registry must stay consistent under concurrent operations."""
