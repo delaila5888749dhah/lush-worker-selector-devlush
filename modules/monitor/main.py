@@ -118,16 +118,18 @@ def get_baseline_success_rate():
 def get_metrics():
     """Return a snapshot of all current metrics as a dict."""
     with _lock:
-        total = _success_count + _error_count
-        success_rate = _success_count / total if total > 0 else 1.0
-        error_rate = _error_count / total if total > 0 else 0.0
+        success_count = _success_count
+        error_count = _error_count
+        total = success_count + error_count
+        success_rate = success_count / total if total > 0 else 1.0
+        error_rate = error_count / total if total > 0 else 0.0
         cutoff = time.time() - 3600
         restarts_hour = sum(1 for ts in _restart_timestamps if ts >= cutoff)
         baseline = _baseline_success_rate
 
     return {
-        "success_count": _success_count,
-        "error_count": _error_count,
+        "success_count": success_count,
+        "error_count": error_count,
         "success_rate": success_rate,
         "error_rate": error_rate,
         "memory_usage_bytes": get_memory_usage_bytes(),
