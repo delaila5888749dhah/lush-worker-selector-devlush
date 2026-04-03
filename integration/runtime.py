@@ -60,7 +60,7 @@ def start_worker(task_fn):
         _workers[wid] = t
     try:
         t.start()
-    except Exception:
+    except (RuntimeError, OSError):
         with _lock:
             _workers.pop(wid, None)
         raise
