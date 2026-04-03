@@ -71,16 +71,16 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
     def test_stop_nonexistent_worker(self):
         self.assertFalse(stop_worker("no-such-worker"))
 
-    def test_stop_running_worker_timeout_keeps_worker_active(self):
+    def test_stop_running_worker_timeout_removes_zombie(self):
         barrier = threading.Event()
         wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
         try:
             self.assertFalse(stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT))
-            self.assertIn(wid, get_active_workers())
-            self.assertTrue(runtime._workers[wid].is_alive())
+            # Zombie cleaned from registry even though thread is alive
+            self.assertNotIn(wid, get_active_workers())
         finally:
             barrier.set()
-            stop_worker(wid, timeout=CLEANUP_TIMEOUT)
+            time.sleep(0.2)
 
 
 # ── Scale up / down ──────────────────────────────────────────────
@@ -92,29 +92,29 @@ class TestApplyScale(RuntimeResetMixin, unittest.TestCase):
 
     def test_scale_up(self):
         from integration import runtime
-        runtime._running = True
+        runtime._state = "RUNNING"
         _apply_scale(3, self._noop)
         self.assertEqual(len(get_active_workers()), 3)
-        runtime._running = False
+        runtime._state = "INIT"
         time.sleep(0.1)
 
     def test_scale_down(self):
         from integration import runtime
-        runtime._running = True
+        runtime._state = "RUNNING"
         _apply_scale(3, self._noop)
         self.assertEqual(len(get_active_workers()), 3)
         _apply_scale(1, self._noop)
         self.assertEqual(len(get_active_workers()), 1)
-        runtime._running = False
+        runtime._state = "INIT"
         time.sleep(0.1)
 
     def test_scale_to_zero(self):
         from integration import runtime
-        runtime._running = True
+        runtime._state = "RUNNING"
         _apply_scale(2, self._noop)
         _apply_scale(0, self._noop)
         self.assertEqual(len(get_active_workers()), 0)
-        runtime._running = False
+        runtime._state = "INIT"
 
 
 # ── Worker crash handling ────────────────────────────────────────
@@ -130,17 +130,17 @@ class TestWorkerCrash(RuntimeResetMixin, unittest.TestCase):
             raise RuntimeError("boom")
 
         from integration import runtime
-        runtime._running = True
+        runtime._state = "RUNNING"
         start_worker(crashing_fn)
         crash_event.wait(timeout=2)
         time.sleep(0.1)
-        runtime._running = False
+        runtime._state = "INIT"
         self.assertEqual(get_active_workers(), [])
 
     def test_crash_does_not_stop_other_workers(self):
         """One crashing worker must not kill another."""
         from integration import runtime
-        runtime._running = True
+        runtime._state = "RUNNING"
         good_barrier = threading.Event()
         start_worker(lambda _: good_barrier.wait(timeout=2))
 
@@ -152,7 +152,7 @@ class TestWorkerCrash(RuntimeResetMixin, unittest.TestCase):
         # Good worker should still be in the active list
         self.assertGreaterEqual(len(get_active_workers()), 1)
         good_barrier.set()
-        runtime._running = False
+        runtime._state = "INIT"
         time.sleep(0.1)
 
 
@@ -187,7 +187,8 @@ class TestStartStop(RuntimeResetMixin, unittest.TestCase):
             time.sleep(WARMUP_DELAY)
             self.assertFalse(stop(timeout=INSUFFICIENT_TIMEOUT))
             self.assertFalse(is_running())
-            self.assertNotEqual(get_active_workers(), [])
+            # Zombie workers cleaned from registry
+            self.assertEqual(get_active_workers(), [])
             worker_block.set()
             time.sleep(1.1)
 
@@ -283,6 +284,161 @@ class TestReset(RuntimeResetMixin, unittest.TestCase):
         self.assertEqual(get_active_workers(), [])
         status = get_status()
         self.assertEqual(status["worker_count"], 0)
+
+
+# ── Concurrency stress tests ─────────────────────────────────────
+
+
+class TestSingleLoopThreadInvariant(RuntimeResetMixin, unittest.TestCase):
+    """Only one loop thread may exist at a time."""
+
+    def test_concurrent_start_only_one_succeeds(self):
+        """Multiple threads calling start() concurrently — exactly one wins."""
+        results = []
+        barrier = threading.Barrier(10)
+
+        def try_start():
+            barrier.wait()
+            results.append(start(lambda _: time.sleep(0.5), interval=0.05))
+
+        threads = [threading.Thread(target=try_start) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(results.count(False), 9)
+        stop(timeout=2)
+
+    def test_start_blocked_during_stopping(self):
+        """start() must return False while stop() is in progress."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(0.1)
+        with runtime._lock:
+            runtime._state = "STOPPING"
+        self.assertFalse(start(lambda _: None, interval=0.05))
+        with runtime._lock:
+            runtime._state = "RUNNING"
+        stop(timeout=2)
+
+
+class TestNoZombieWorkers(RuntimeResetMixin, unittest.TestCase):
+    """Worker registry must never contain stale entries."""
+
+    def test_rapid_start_stop_no_zombies(self):
+        """Rapidly starting and stopping workers leaves no zombies."""
+        runtime._state = "RUNNING"
+        for _ in range(20):
+            wid = start_worker(lambda _: time.sleep(0.01))
+            stop_worker(wid, timeout=2)
+        self.assertEqual(get_active_workers(), [])
+        runtime._state = "INIT"
+
+    def test_crashed_workers_cleaned_up(self):
+        """All crashed workers are removed from registry."""
+        runtime._state = "RUNNING"
+        events = []
+        for _ in range(5):
+            ev = threading.Event()
+            events.append(ev)
+
+            def crash_fn(_, e=ev):
+                e.set()
+                raise RuntimeError("boom")
+
+            start_worker(crash_fn)
+        for ev in events:
+            ev.wait(timeout=2)
+        time.sleep(0.2)
+        self.assertEqual(get_active_workers(), [])
+        runtime._state = "INIT"
+
+
+class TestStartStopRace(RuntimeResetMixin, unittest.TestCase):
+    """start() and stop() racing must not corrupt state."""
+
+    def test_start_stop_interleaved(self):
+        """Repeated start/stop cycles must always end in a clean state."""
+        for _ in range(10):
+            started = start(lambda _: time.sleep(0.5), interval=0.05)
+            if started:
+                stop(timeout=2)
+            self.assertFalse(is_running())
+            self.assertEqual(get_active_workers(), [])
+
+    def test_concurrent_stop_only_one_succeeds(self):
+        """Multiple threads calling stop() — at most one returns True."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(0.1)
+        results = []
+        barrier = threading.Barrier(5)
+
+        def try_stop():
+            barrier.wait()
+            results.append(stop(timeout=2))
+
+        threads = [threading.Thread(target=try_stop) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        self.assertLessEqual(results.count(True), 1)
+        self.assertFalse(is_running())
+
+
+class TestWorkerRegistryConsistency(RuntimeResetMixin, unittest.TestCase):
+    """Worker registry must stay consistent under concurrent operations."""
+
+    def test_concurrent_worker_spawn(self):
+        """Spawning workers from multiple threads yields unique IDs."""
+        runtime._state = "RUNNING"
+        ids = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(10)
+
+        def spawn():
+            barrier.wait()
+            wid = start_worker(lambda _: time.sleep(0.5))
+            with lock:
+                ids.append(wid)
+
+        threads = [threading.Thread(target=spawn) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        self.assertEqual(len(ids), 10)
+        self.assertEqual(len(set(ids)), 10)
+        runtime._state = "INIT"
+
+
+class TestLifecycleStateModel(RuntimeResetMixin, unittest.TestCase):
+    """Lifecycle state transitions are deterministic."""
+
+    def test_state_after_init(self):
+        self.assertEqual(runtime._state, "INIT")
+
+    def test_state_after_start(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        self.assertEqual(runtime._state, "RUNNING")
+        stop(timeout=2)
+
+    def test_state_after_stop(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        stop(timeout=2)
+        self.assertEqual(runtime._state, "STOPPED")
+
+    def test_state_after_reset(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        reset()
+        self.assertEqual(runtime._state, "INIT")
+
+    def test_restart_after_stop(self):
+        """start() succeeds after a clean stop() cycle."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        stop(timeout=2)
+        self.assertTrue(start(lambda _: time.sleep(0.5), interval=0.05))
+        stop(timeout=2)
 
 
 if __name__ == "__main__":

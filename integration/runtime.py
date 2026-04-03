@@ -8,7 +8,8 @@ _logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _workers: dict = {}
 _worker_counter = 0
-_running = False
+ALLOWED_STATES = {"INIT", "RUNNING", "STOPPING", "STOPPED"}
+_state = "INIT"
 _loop_thread = None
 _DEFAULT_LOOP_INTERVAL = 10
 _MIN_LOOP_INTERVAL = 0.1
@@ -18,7 +19,7 @@ _consecutive_rollbacks = 0
 _pending_restarts = 0
 _stop_requests = set()
 def _should_stop_worker(worker_id):
-    return worker_id not in _workers or worker_id in _stop_requests or (not _running and _loop_thread is not None)
+    return worker_id not in _workers or worker_id in _stop_requests or _state == "STOPPING"
 def _log_event(worker_id, state, action, metrics=None):
     _logger.info("%s | %s | %s | %s | %s", time.strftime("%Y-%m-%dT%H:%M:%S"), worker_id, state, action, metrics or "")
 def _safe_sleep(interval):
@@ -69,6 +70,8 @@ def stop_worker(worker_id, timeout=None):
     thread.join(timeout=_WORKER_TIMEOUT if timeout is None else timeout)
     if thread.is_alive():
         _logger.warning("Worker %s did not stop within timeout", worker_id)
+        with _lock:
+            _workers.pop(worker_id, None); _stop_requests.discard(worker_id)
         return False
     with _lock:
         _stop_requests.discard(worker_id); _workers.pop(worker_id, None)
@@ -97,7 +100,7 @@ def _runtime_loop(task_fn, interval):
     global _consecutive_rollbacks
     while True:
         with _lock:
-            if not _running:
+            if _state != "RUNNING":
                 break
         try:
             try:
@@ -119,30 +122,29 @@ def _runtime_loop(task_fn, interval):
         _safe_sleep(interval)
 def start(task_fn, interval=None):
     """Start the runtime loop. Returns True if started, False if already running."""
-    global _running, _loop_thread
+    global _state, _loop_thread
     interval = _DEFAULT_LOOP_INTERVAL if interval is None else interval
     try:
         if interval <= 0: interval = _MIN_LOOP_INTERVAL
     except TypeError:
         interval = _MIN_LOOP_INTERVAL
+    _ensure_rollout_configured()
     with _lock:
-        if _loop_thread is not None and _loop_thread.is_alive(): return False
-        if _running:
+        if _state not in ("INIT", "STOPPED"):
             return False
-        _ensure_rollout_configured()
         _loop_thread = threading.Thread(target=_runtime_loop, args=(task_fn, interval), daemon=True)
-        _running = True; _loop_thread.start()
+        _state = "RUNNING"; _loop_thread.start()
     _log_event("runtime", "started", "runtime_start")
     return True
 def stop(timeout=None):
     """Stop the runtime loop and all active workers."""
-    global _running, _loop_thread
+    global _state, _loop_thread
     timeout = _WORKER_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + timeout
     with _lock:
-        if not _running:
+        if _state != "RUNNING":
             return False
-        _running = False
+        _state = "STOPPING"
         loop_thread = _loop_thread
     if loop_thread is not None:
         loop_thread.join(timeout=max(0, deadline - time.monotonic()))
@@ -155,20 +157,23 @@ def stop(timeout=None):
     for wid in wids:
         if not stop_worker(wid, timeout=max(0, deadline - time.monotonic())):
             all_stopped = False
+    with _lock:
+        _state = "STOPPED"
     if not loop_stopped or not all_stopped:
+        _log_event("runtime", "stopped", "runtime_stop_partial")
         return False
     _log_event("runtime", "stopped", "runtime_stop")
     return True
 def is_running():
-    with _lock: return _running
+    with _lock: return _state == "RUNNING"
 def get_status():
     """Return a snapshot of the runtime state."""
     with _lock:
-        return {"running": _running, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks}
+        return {"running": _state == "RUNNING", "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks}
 def reset():
     """Reset all runtime state. Intended for testing."""
-    global _running, _loop_thread, _workers, _worker_counter, _consecutive_rollbacks, _pending_restarts
+    global _state, _loop_thread, _workers, _worker_counter, _consecutive_rollbacks, _pending_restarts
     stop(timeout=2)
     with _lock:
-        _running = False; _loop_thread = None; _workers = {}; _worker_counter = 0
+        _state = "INIT"; _loop_thread = None; _workers = {}; _worker_counter = 0
         _consecutive_rollbacks = 0; _pending_restarts = 0; _stop_requests.clear()
