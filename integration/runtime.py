@@ -145,7 +145,12 @@ def stop(timeout=None):
     if loop_thread is not None and loop_thread.is_alive(): return False
     with _lock:
         _loop_thread = None; wids = list(_workers.keys())
-    for wid in wids: stop_worker(wid, timeout=timeout)
+    all_stopped = True
+    for wid in wids:
+        if not stop_worker(wid, timeout=timeout):
+            all_stopped = False
+    if not all_stopped:
+        return False
     _log_event("runtime", "stopped", "runtime_stop")
     return True
 def is_running():
