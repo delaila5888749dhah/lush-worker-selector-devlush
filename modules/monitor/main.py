@@ -46,7 +46,10 @@ def record_error():
 def record_restart():
     """Record a worker restart event with current timestamp."""
     with _lock:
-        _restart_timestamps.append(time.time())
+        now = time.time()
+        _restart_timestamps.append(now)
+        cutoff = now - 3600
+        _restart_timestamps[:] = [ts for ts in _restart_timestamps if ts >= cutoff]
 
 
 def get_success_rate():
