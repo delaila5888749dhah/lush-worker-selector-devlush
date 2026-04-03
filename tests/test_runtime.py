@@ -71,6 +71,8 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
         try:
             self.assertFalse(stop_worker(wid, timeout=0))
             self.assertIn(wid, get_active_workers())
+            from integration import runtime
+            self.assertTrue(runtime._workers[wid].is_alive())
         finally:
             barrier.set()
             stop_worker(wid, timeout=2)
@@ -179,6 +181,7 @@ class TestStartStop(RuntimeResetMixin, unittest.TestCase):
             start(lambda _: worker_block.wait(timeout=1), interval=1)
             time.sleep(0.2)
             self.assertFalse(stop(timeout=0.01))
+            self.assertFalse(is_running())
             self.assertNotEqual(get_active_workers(), [])
             worker_block.set()
             time.sleep(1.1)
