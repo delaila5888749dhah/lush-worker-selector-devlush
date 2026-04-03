@@ -78,7 +78,7 @@ def try_scale_up():
 
         check_fn = _check_rollback_fn
         save_fn = _save_baseline_fn
-        step_index = _current_step_index
+        captured_step_index = _current_step_index
 
     # Call callbacks outside the lock to avoid holding it during I/O
     reasons = check_fn() if check_fn is not None else []
@@ -101,12 +101,12 @@ def try_scale_up():
             )
             return SCALE_STEPS[_current_step_index], "rollback", reasons
 
-        if _current_step_index != step_index:
-            if _current_step_index >= len(SCALE_STEPS) - 1:
-                return SCALE_STEPS[_current_step_index], "at_max", []
-            step_index = _current_step_index
-        if step_index >= len(SCALE_STEPS) - 1:
-            return SCALE_STEPS[step_index], "at_max", []
+        current_step_index = _current_step_index
+        if current_step_index != captured_step_index:
+            if current_step_index >= len(SCALE_STEPS) - 1:
+                return SCALE_STEPS[current_step_index], "at_max", []
+        elif current_step_index >= len(SCALE_STEPS) - 1:
+            return SCALE_STEPS[current_step_index], "at_max", []
 
         _current_step_index += 1
         new_count = SCALE_STEPS[_current_step_index]
