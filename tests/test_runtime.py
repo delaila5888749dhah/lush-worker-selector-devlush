@@ -3,6 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from integration import runtime
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 from integration.runtime import (
@@ -74,9 +75,8 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
         barrier = threading.Event()
         wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
         try:
-            self.assertFalse(stop_worker(wid, timeout=0))
+            self.assertFalse(stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT))
             self.assertIn(wid, get_active_workers())
-            from integration import runtime
             self.assertTrue(runtime._workers[wid].is_alive())
         finally:
             barrier.set()
