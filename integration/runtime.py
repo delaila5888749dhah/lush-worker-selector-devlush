@@ -238,8 +238,8 @@ def get_deployment_status():
         "trace_id": status["trace_id"],
         "metrics": metrics,
     }
-_ERROR_RATE_THRESHOLD = 0.05
-_MAX_RESTARTS_PER_HOUR = 3
+_ERROR_RATE_THRESHOLD = getattr(monitor, "_ERROR_RATE_THRESHOLD", 0.05)
+_MAX_RESTARTS_PER_HOUR = getattr(monitor, "_MAX_RESTARTS_PER_HOUR", 3)
 def verify_deployment():
     """Verify production deployment status.
 
@@ -260,8 +260,10 @@ def verify_deployment():
     workers_active = ds["worker_count"] > 0 and len(ds["active_workers"]) > 0
     no_startup_errors = True
     if not service_running:
+        no_startup_errors = False
         errors.append(f"Service not running: state={ds['state']}")
     if not workers_active:
+        no_startup_errors = False
         errors.append(f"No active workers: worker_count={ds['worker_count']}")
     if ds["consecutive_rollbacks"] > 0:
         no_startup_errors = False

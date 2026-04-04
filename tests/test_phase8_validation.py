@@ -338,6 +338,7 @@ class TestDeploymentVerification(Phase8ResetMixin, unittest.TestCase):
         result = verify_deployment()
         self.assertFalse(result["passed"])
         self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
 
     def test_verify_fails_after_stop(self):
         """After stop(), verify_deployment must report failure."""
@@ -347,6 +348,7 @@ class TestDeploymentVerification(Phase8ResetMixin, unittest.TestCase):
         result = verify_deployment()
         self.assertFalse(result["passed"])
         self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
 
     def test_verify_detects_error_rate_above_threshold(self):
         """High error rate must cause verification failure."""

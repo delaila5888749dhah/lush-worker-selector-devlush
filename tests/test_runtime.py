@@ -1145,6 +1145,7 @@ class TestVerifyDeployment(RuntimeResetMixin, unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertFalse(result["checks"]["service_running"])
         self.assertFalse(result["checks"]["workers_active"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
         self.assertGreater(len(result["errors"]), 0)
 
     def test_verify_passes_when_healthy(self):
@@ -1212,7 +1213,12 @@ class TestVerifyDeployment(RuntimeResetMixin, unittest.TestCase):
             mock_mon.get_metrics.side_effect = RuntimeError("unavailable")
             result = verify_deployment()
             self.assertFalse(result["checks"]["no_startup_errors"])
-            self.assertTrue(any("unavailable" in e.lower() for e in result["errors"]))
+            self.assertTrue(
+                any(
+                    "monitor metrics unavailable while service running" in e.lower()
+                    for e in result["errors"]
+                )
+            )
         stop(timeout=2)
 
     def test_verify_after_stop(self):
@@ -1223,6 +1229,7 @@ class TestVerifyDeployment(RuntimeResetMixin, unittest.TestCase):
         result = verify_deployment()
         self.assertFalse(result["passed"])
         self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
 
 
 if __name__ == "__main__":
