@@ -1021,6 +1021,7 @@ class TestTraceIdLifecycle(RuntimeResetMixin, unittest.TestCase):
         tid = get_trace_id()
         self.assertIsNotNone(tid)
         self.assertEqual(len(tid), 12)
+        self.assertRegex(tid, r'^[0-9a-f]{12}$')
 
     def test_trace_id_persists_through_stop(self):
         start(lambda _: time.sleep(0.5), interval=0.1)
@@ -1053,7 +1054,8 @@ class TestTraceIdLifecycle(RuntimeResetMixin, unittest.TestCase):
 class TestStructuredLogFormat(RuntimeResetMixin, unittest.TestCase):
     """Log format must have exactly 6 pipe-separated fields including trace_id."""
 
-    def test_log_contains_trace_id(self):
+    def _capture_log_event(self, worker_id, state, action):
+        """Capture a single _log_event call and return the formatted log line."""
         from integration import runtime
 
         captured = []
@@ -1063,27 +1065,19 @@ class TestStructuredLogFormat(RuntimeResetMixin, unittest.TestCase):
             captured.append(msg % args)
             original_info(msg, *args, **kwargs)
 
-        start(lambda _: time.sleep(0.5), interval=0.1)
         with patch.object(runtime._logger, "info", side_effect=capture_info):
-            runtime._log_event("test-worker", "running", "test_action")
+            runtime._log_event(worker_id, state, action)
+        return captured
 
+    def test_log_contains_trace_id(self):
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        captured = self._capture_log_event("test-worker", "running", "test_action")
         self.assertTrue(len(captured) > 0, "Expected at least one log line")
         self.assertIn(get_trace_id(), captured[0])
 
     def test_log_format_has_six_fields(self):
-        from integration import runtime
-
-        captured = []
-        original_info = runtime._logger.info
-
-        def capture_info(msg, *args, **kwargs):
-            captured.append(msg % args)
-            original_info(msg, *args, **kwargs)
-
         start(lambda _: time.sleep(0.5), interval=0.1)
-        with patch.object(runtime._logger, "info", side_effect=capture_info):
-            runtime._log_event("test-worker", "running", "test_action")
-
+        captured = self._capture_log_event("test-worker", "running", "test_action")
         self.assertTrue(len(captured) > 0, "Expected at least one log line")
         fields = captured[0].split(" | ")
         self.assertEqual(len(fields), 6, f"Expected 6 fields, got {len(fields)}: {captured[0]}")
