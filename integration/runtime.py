@@ -13,6 +13,7 @@ _workers: dict = {}
 _worker_counter = 0
 _loop_thread = None
 _trace_id = None
+_trace_lock = threading.Lock()
 _NO_TRACE = "no-trace"
 _DEFAULT_LOOP_INTERVAL = 10
 _MIN_LOOP_INTERVAL = 0.1
@@ -24,7 +25,8 @@ _stop_requests = set()
 def _should_stop_worker(worker_id):
     return worker_id not in _workers or worker_id in _stop_requests or _state == "STOPPING"
 def _log_event(worker_id, state, action, metrics=None):
-    tid = _trace_id or _NO_TRACE
+    with _trace_lock:
+        tid = _trace_id or _NO_TRACE
     _logger.info("%s | %s | %s | %s | %s | %s", time.strftime("%Y-%m-%dT%H:%M:%S"), worker_id, tid, state, action, metrics or "")
 def _safe_sleep(interval):
     try: time.sleep(interval)
@@ -163,9 +165,10 @@ def start(task_fn, interval=None):
     with _lock:
         if _state not in ("INIT", "STOPPED"):
             return False
-        _trace_id = uuid.uuid4().hex[:12]
         _loop_thread = threading.Thread(target=_runtime_loop, args=(task_fn, interval), daemon=True)
         _state = "RUNNING"; _loop_thread.start()
+    with _trace_lock:
+        _trace_id = uuid.uuid4().hex[:12]
     _log_event("runtime", "started", "runtime_start")
     return True
 def stop(timeout=None):
@@ -200,14 +203,16 @@ def is_running():
     with _lock: return _state == "RUNNING"
 def get_status():
     """Return a snapshot of the runtime state."""
+    with _trace_lock:
+        tid = _trace_id
     with _lock:
-        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": _trace_id}
+        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid}
 def get_state():
     """Return the current lifecycle state."""
     with _lock: return _state
 def get_trace_id():
     """Return the current trace_id, or None if not started."""
-    with _lock: return _trace_id
+    with _trace_lock: return _trace_id
 def reset():
     """Reset all runtime state. Intended for testing."""
     global _state, _loop_thread, _workers, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id
@@ -215,4 +220,5 @@ def reset():
     with _lock:
         _state = "INIT"; _loop_thread = None; _workers = {}; _worker_counter = 0
         _consecutive_rollbacks = 0; _pending_restarts = 0; _stop_requests.clear()
+    with _trace_lock:
         _trace_id = None

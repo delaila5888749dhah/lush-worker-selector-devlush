@@ -1055,7 +1055,7 @@ class TestStructuredLogFormat(RuntimeResetMixin, unittest.TestCase):
     """Log format must have exactly 6 pipe-separated fields including trace_id."""
 
     def _capture_log_event(self, worker_id, state, action):
-        """Capture a single _log_event call and return the formatted log line."""
+        """Capture _log_event calls and return a list of formatted log lines."""
         from integration import runtime
 
         captured = []
