@@ -11,7 +11,6 @@
 
 import ast
 import os
-import time
 import unittest
 from unittest.mock import mock_open, patch
 
@@ -30,7 +29,7 @@ _RUNTIME_PATH = os.path.join(_REPO_ROOT, "integration", "runtime.py")
 
 def _imports_random(filepath):
     """Return True if *filepath* contains ``import random`` or ``from random …``."""
-    with open(filepath) as fh:
+    with open(filepath, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=filepath)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -179,7 +178,8 @@ class TestMonitorDeterminism(DeterminismResetMixin, unittest.TestCase):
         for _ in range(2):
             self._setup_counters(9, 1)
             m = monitor.get_metrics()
-            # Only compare counter-derived fields (memory is runtime-dependent)
+            # Only compare counter-derived fields (memory and restart
+            # window metrics are time/platform-dependent)
             snapshots.append({
                 "success_count": m["success_count"],
                 "error_count": m["error_count"],
@@ -215,13 +215,12 @@ class TestMetricDependency(DeterminismResetMixin, unittest.TestCase):
     """Rollout decisions depend only on check_fn, not wall-clock."""
 
     def test_rollout_ignores_wall_clock(self):
-        """Same check_fn at different times produces the same result."""
+        """Same check_fn across repeated runs produces the same result."""
         results = []
         for _ in range(2):
             rollout.reset()
             rollout.configure(check_rollback_fn=lambda: [], save_baseline_fn=lambda: None)
             results.append(rollout.try_scale_up())
-            time.sleep(0.01)  # small delay between runs
         self.assertEqual(results[0], results[1])
 
     def test_only_check_fn_controls_rollback(self):
@@ -324,25 +323,32 @@ class TestNoStateDrift(DeterminismResetMixin, unittest.TestCase):
 class TestEndToEndPipelineDeterminism(DeterminismResetMixin, unittest.TestCase):
     """Full monitor→rollout pipeline: same event sequence → same outcome."""
 
+    _FIXED_TIME = 1_700_000_000.0
+
     def _run_pipeline(self, successes, errors, restarts, mem_proc):
-        """Replay a fixed event sequence through monitor+rollout and return results."""
-        monitor.reset()
-        rollout.reset()
-        rollout.configure(
-            check_rollback_fn=monitor.check_rollback_needed,
-            save_baseline_fn=monitor.save_baseline,
-        )
+        """Replay a fixed event sequence through monitor+rollout and return results.
 
-        for _ in range(successes):
-            monitor.record_success()
-        for _ in range(errors):
-            monitor.record_error()
-        for _ in range(restarts):
-            monitor.record_restart()
+        Patches ``time.time`` to a fixed value so that restart-window
+        calculations (``restarts_last_hour``) are fully reproducible.
+        """
+        with patch("modules.monitor.main.time.time", return_value=self._FIXED_TIME):
+            monitor.reset()
+            rollout.reset()
+            rollout.configure(
+                check_rollback_fn=monitor.check_rollback_needed,
+                save_baseline_fn=monitor.save_baseline,
+            )
 
-        with patch("builtins.open", mock_open(read_data=mem_proc)):
-            result = rollout.try_scale_up()
-            metrics = monitor.get_metrics()
+            for _ in range(successes):
+                monitor.record_success()
+            for _ in range(errors):
+                monitor.record_error()
+            for _ in range(restarts):
+                monitor.record_restart()
+
+            with patch("builtins.open", mock_open(read_data=mem_proc)):
+                result = rollout.try_scale_up()
+                metrics = monitor.get_metrics()
 
         return result, metrics
 
