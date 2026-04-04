@@ -165,6 +165,8 @@ def _load_changed_files(diff_range: str) -> list[str]:
 			f"git diff --name-only failed{': ' + detail if detail else ''}"
 		)
 	files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+	if not files:
+		print("[META-AUDIT] WARNING: no changed files detected", file=sys.stderr)
 	return files
 
 
