@@ -262,6 +262,74 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
     │   ├── No regressions to existing tests
     │   └── CI fully green
     └── 🏁 Milestone: System auto-scales based on runtime metrics, behavior engine operational, all decision paths tested
+
+└── Phase 10 — Behavior Layer (Blueprint-safe) (Status: Designed)
+    ├── Purpose:
+    │   ├── Thêm behavioral delay vào worker execution layer
+    │   ├── Mô phỏng hành vi người dùng thực (typing, click, hesitation)
+    │   └── KHÔNG thay đổi control logic, scaling, hoặc orchestration
+    ├── 10.1 — Architecture:
+    │   ├── Behavior wrapper ONLY tại worker execution layer:
+    │   │   └── worker_fn → wrap(task_fn)
+    │   └── KHÔNG:
+    │       ├── Inject vào runtime loop
+    │       ├── Inject vào scaling logic
+    │       └── Modify orchestration flow
+    ├── 10.2 — FSM Context (MANDATORY):
+    │   ├── BehaviorState MUST include context:
+    │   │   ├── IDLE — between actions, awaiting next step
+    │   │   ├── FILLING_FORM — form field interaction (recipient, billing)
+    │   │   ├── PAYMENT — payment data entry (card number, CVV)
+    │   │   ├── VBV — 3DS iframe handling
+    │   │   └── POST_ACTION — after submit, waiting for result
+    │   └── Rule: Delay decision MUST depend on current context
+    ├── 10.3 — CRITICAL_SECTION Awareness (Phase 9 alignment):
+    │   ├── CRITICAL_SECTION (defined in Phase 9):
+    │   │   ├── Payment submit (Complete Purchase execution)
+    │   │   ├── VBV/3DS handling (iframe interaction + wait)
+    │   │   └── API wait (CDP Network.responseReceived pending)
+    │   └── Rule: If in CRITICAL_SECTION → NO delay injected
+    ├── 10.4 — SAFE POINT / SAFE ZONE Rule:
+    │   ├── Delay ONLY permitted at (SAFE ZONE):
+    │   │   ├── UI interaction (typing, click, hover)
+    │   │   └── Non-critical steps (form navigation, field focus)
+    │   └── Delay NOT permitted at:
+    │       ├── Execution control (scaling, lifecycle transitions)
+    │       └── System coordination (runtime loop, watchdog checks)
+    ├── 10.5 — NO-DELAY Zone (STRICT):
+    │   └── Behavior layer MUST NOT inject delay vào:
+    │       ├── Payment submit (Complete Purchase click event)
+    │       ├── Watchdog timeout checks
+    │       ├── Network wait (CDP Network.responseReceived)
+    │       ├── VBV iframe load/interaction
+    │       └── Page reload operations
+    ├── 10.6 — Action-Aware Delay (Bounded):
+    │   ├── Delay MUST depend on action type:
+    │   │   ├── typing — key-by-key with hesitation (Blueprint §4: CDP gõ phím, quy tắc 4x4)
+    │   │   ├── click — bounding box calculation + hover + offset (Blueprint §4: Bounding Box Click)
+    │   │   └── thinking — review/hesitation before action (Blueprint §5: Hesitation)
+    │   ├── Delay bound:
+    │   │   ├── Bounded per UI interaction type (appropriate for human-like behavior)
+    │   │   └── MUST NOT affect watchdog timeout or system-level deadlines
+    │   └── Deterministic: Seed-based random (Blueprint §2: Gắn Seed Hành Vi)
+    │       └── Reproducible execution: same seed → same behavior pattern
+    ├── 10.7 — Non-Interference Rule (MANDATORY):
+    │   └── Behavior layer MUST NOT:
+    │       ├── Break critical execution timing (no delay in CRITICAL_SECTION)
+    │       ├── Disrupt FSM flow (state transitions unchanged by behavior)
+    │       ├── Cause runtime side-effects (no state mutation outside behavior)
+    │       ├── Alter execution order (step sequence unchanged)
+    │       └── Change success/failure outcome (logic path unchanged)
+    ├── 10.8 — Phase 9 Alignment (STRICT):
+    │   ├── Phase 10 MUST respect:
+    │   │   ├── SAFE_POINT — behavior operates within safe boundaries only
+    │   │   └── CRITICAL_SECTION — zero interference during critical operations
+    │   └── Phase 10 MUST NOT operate outside permitted scope
+    ├── Constraints:
+    │   ├── KHÔNG thay đổi kiến trúc wrapper (wrapper pattern only)
+    │   ├── KHÔNG thêm module mới (uses existing modules/delay/)
+    │   └── KHÔNG mở rộng scope (behavior delay only, no new features)
+    └── 🏁 Milestone: Behavior layer designed, Blueprint-safe, Phase 9 aligned, ready for implementation
 ```
 
 ---
@@ -521,6 +589,7 @@ PR bị REQUEST_CHANGES
 | P7 | System audit-consistent, production-hardened, zero confirmed remaining issues |
 | P8 | Production monitoring active, deployment verified, baseline recorded, extension spec defined |
 | P9 | System auto-scales based on runtime metrics, behavior engine operational, all decision paths tested |
+| P10 | Behavior layer designed, Blueprint-safe, Phase 9 aligned, ready for implementation |
 
 ---
 
@@ -533,3 +602,4 @@ PR bị REQUEST_CHANGES
 | 2.1 | 2026-04-04 | **Phase 8 — Production Deployment & Monitoring.** Thêm Phase 8 vào workflow. Định nghĩa `get_deployment_status()`, extension spec cho future upgrades. |
 | 2.2 | 2026-04-04 | **Spec Reconstruction — Phase 7 & Phase 8.** Tái dựng Phase 7 (Post-Finalization Audit Validation) từ lịch sử PR #112–#138. Mở rộng Phase 8 thành full spec từ lịch sử PR #142–#150. Thêm P7 vào milestones table. Đồng bộ spec với system đã triển khai (CHANGE_CLASS=spec_sync). |
 | 2.3 | 2026-04-04 | **Phase 9 — Behavior & Scaling Intelligence.** Bổ sung Phase 9 từ lịch sử PR #160 (Issue #155 Task 1: Behavior Decision Engine, Issue #159 Task 2: Scaling Execution Layer). Thêm P9 vào milestones table. Đồng bộ spec với system đã triển khai (CHANGE_CLASS=spec_sync). |
+| 2.4 | 2026-04-04 | **Phase 10 — Behavior Layer (Blueprint-safe).** Bổ sung Phase 10 spec: CRITICAL_SECTION awareness, SAFE POINT/SAFE ZONE rule, FSM context (BehaviorState), NO-DELAY zone, bounded UI delay, non-interference rule, Phase 9 alignment. Thêm P10 vào milestones table. Đồng bộ spec với Blueprint (CHANGE_CLASS=spec_sync). |
