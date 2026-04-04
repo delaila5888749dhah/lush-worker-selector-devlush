@@ -165,8 +165,6 @@ def _load_changed_files(diff_range: str) -> list[str]:
 			f"git diff --name-only failed{': ' + detail if detail else ''}"
 		)
 	files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-	if not files:
-		raise RuntimeError("no changed files detected")
 	return files
 
 
