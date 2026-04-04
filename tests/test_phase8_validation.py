@@ -265,11 +265,21 @@ class TestBehaviorTracking(Phase8ResetMixin, unittest.TestCase):
         time.sleep(WARMUP_DELAY)
         # Inject a crashing worker into the already running system
         from integration.runtime import start_worker
+        initial_error_count = monitor.get_metrics()["error_count"]
         def _crash(_):
             raise RuntimeError("boom")
         start_worker(_crash)
-        time.sleep(0.3)
-        # System must still be RUNNING
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if monitor.get_metrics()["error_count"] > initial_error_count:
+                break
+            time.sleep(0.05)
+        self.assertGreater(
+            monitor.get_metrics()["error_count"],
+            initial_error_count,
+            "Injected crashing worker did not execute before runtime health assertions",
+        )
+        # System must still be RUNNING after the crash is observed
         self.assertEqual(get_state(), "RUNNING")
         ds = get_deployment_status()
         self.assertTrue(ds["running"])
@@ -277,10 +287,20 @@ class TestBehaviorTracking(Phase8ResetMixin, unittest.TestCase):
 
     def test_crash_reflected_in_error_metrics(self):
         """Worker crashes must be visible through the monitoring metrics."""
-        monitor.record_error()
+        baseline = get_deployment_status()["metrics"]["error_count"]
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        from integration.runtime import start_worker
+
+        def _crash(_):
+            raise RuntimeError("boom")
+
+        start_worker(_crash)
+        time.sleep(0.3)
         ds = get_deployment_status()
-        self.assertGreater(ds["metrics"]["error_count"], 0)
+        self.assertGreater(ds["metrics"]["error_count"], baseline)
         self.assertGreater(ds["metrics"]["error_rate"], 0.0)
+        stop(timeout=2)
 
     def test_state_stays_in_allowed_states_during_lifecycle(self):
         """State must be a member of ALLOWED_STATES at every observation point."""
@@ -329,10 +349,13 @@ class TestBehaviorTracking(Phase8ResetMixin, unittest.TestCase):
         for _ in range(5):
             monitor.record_error()
         rates = [get_deployment_status()["metrics"]["error_rate"] for _ in range(5)]
-        self.assertTrue(
-            all(r == rates[0] for r in rates),
-            f"Error rate should be stable: {rates}",
-        )
+        for rate in rates[1:]:
+            self.assertAlmostEqual(
+                rate,
+                rates[0],
+                delta=1e-12,
+                msg=f"Error rate should be stable: {rates}",
+            )
 
     def test_error_rate_over_threshold_detected(self):
         """Error rate >5% must be detected by check_rollback_needed."""
