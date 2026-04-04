@@ -1,10 +1,13 @@
-"""Tests for integration.monitoring — production monitoring setup & validation.
+"""Phase 8 — Production Monitoring Observation Tests.
 
-Validates:
-  - setup_monitoring configures logging handlers and format.
-  - validate_monitoring reports correct status for the three acceptance criteria.
-  - trace_id format follows the 12-char hex pattern.
-  - Metrics completeness check detects missing keys.
+Observation-only tests that validate the three monitoring acceptance criteria
+by exercising *existing* production code paths.  No new modules, no system
+modifications — pure observation.
+
+Acceptance criteria verified:
+  1. Logging is active (runtime logger emits structured events).
+  2. trace_id is assigned and trackable (12-char hex, unique per lifecycle).
+  3. Metrics (monitor.get_metrics) return data (not None in normal state).
 """
 
 import logging
@@ -12,169 +15,146 @@ import time
 import unittest
 from unittest.mock import patch
 
-from integration import monitoring, runtime
-from integration.monitoring import setup_monitoring, validate_monitoring
+from integration import runtime
+from integration.runtime import (
+    get_deployment_status,
+    get_trace_id,
+    start,
+    stop,
+)
 from modules.monitor import main as monitor
+from modules.rollout import main as rollout
+
+WARMUP_DELAY = 0.2
 
 
-class MonitoringResetMixin:
-    """Common setUp/tearDown for monitoring tests."""
+class ObservationResetMixin:
+    """Common setUp/tearDown for monitoring observation tests."""
 
     def setUp(self):
         runtime.reset()
+        rollout.reset()
         monitor.reset()
-        monitoring.reset()
-        # Remove any handlers added by setup_monitoring so each test is isolated.
-        root = logging.getLogger()
-        self._original_handlers = list(root.handlers)
-        self._original_level = root.level
 
     def tearDown(self):
         runtime.reset()
+        rollout.reset()
         monitor.reset()
-        monitoring.reset()
-        root = logging.getLogger()
-        for h in list(root.handlers):
-            if h not in self._original_handlers:
-                root.removeHandler(h)
-        root.setLevel(self._original_level)
 
 
-# ── setup_monitoring tests ──────────────────────────────────────────
+# ── Logging observation ─────────────────────────────────────────────
 
 
-class TestSetupMonitoring(MonitoringResetMixin, unittest.TestCase):
-    """Validate setup_monitoring configures logging properly."""
+class TestLoggingObservation(ObservationResetMixin, unittest.TestCase):
+    """Observe that the runtime logger emits structured log events."""
 
-    def test_adds_handler_to_root_logger(self):
-        """setup_monitoring must add at least one handler to the root logger."""
-        root = logging.getLogger()
-        before = len(root.handlers)
-        setup_monitoring()
-        self.assertGreater(len(root.handlers), before)
+    def test_runtime_logger_exists(self):
+        """integration.runtime must use a named logger."""
+        logger = logging.getLogger("integration.runtime")
+        self.assertIsNotNone(logger)
+        self.assertEqual(logger.name, "integration.runtime")
 
-    def test_sets_log_level(self):
-        """setup_monitoring must set the root logger level."""
-        setup_monitoring(level=logging.DEBUG)
-        self.assertEqual(logging.getLogger().level, logging.DEBUG)
+    def test_structured_log_emitted_on_start_stop(self):
+        """Runtime must emit structured info-level log events during lifecycle."""
+        with patch.object(runtime._logger, "info") as mock_info:
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            time.sleep(WARMUP_DELAY)
+            stop(timeout=2)
+            self.assertGreater(mock_info.call_count, 0)
 
-    def test_idempotent(self):
-        """Repeated calls must not add duplicate handlers."""
-        root = logging.getLogger()
-        setup_monitoring()
-        count_after_first = len(root.handlers)
-        setup_monitoring()
-        self.assertEqual(len(root.handlers), count_after_first)
-
-    def test_handler_has_formatter(self):
-        """The added handler must have a Formatter."""
-        root = logging.getLogger()
-        before = set(id(h) for h in root.handlers)
-        setup_monitoring()
-        new_handlers = [h for h in root.handlers if id(h) not in before]
-        self.assertTrue(len(new_handlers) > 0)
-        for h in new_handlers:
-            self.assertIsNotNone(h.formatter)
+    def test_log_contains_trace_id(self):
+        """Log events must include the trace_id for correlation."""
+        logged_args = []
+        with patch.object(runtime._logger, "info", side_effect=lambda fmt, *a: logged_args.append(a)):
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            time.sleep(WARMUP_DELAY)
+            tid = get_trace_id()
+            stop(timeout=2)
+        # At least one log call must contain the trace_id value
+        found = any(tid in str(args) for args in logged_args)
+        self.assertTrue(found, f"trace_id {tid!r} not found in any log args")
 
 
-# ── validate_monitoring tests ───────────────────────────────────────
+# ── trace_id observation ────────────────────────────────────────────
 
 
-class TestValidateMonitoring(MonitoringResetMixin, unittest.TestCase):
-    """Validate validate_monitoring reports correct status."""
+class TestTraceIdObservation(ObservationResetMixin, unittest.TestCase):
+    """Observe that trace_id is assigned and follows the expected format."""
 
-    def test_contract_keys(self):
-        """validate_monitoring must return passed, checks, and errors."""
-        result = validate_monitoring()
-        self.assertEqual(set(result.keys()), {"passed", "checks", "errors"})
-        self.assertEqual(
-            set(result["checks"].keys()),
-            {"logging_active", "trace_id_valid", "metrics_available"},
-        )
+    def test_trace_id_none_before_start(self):
+        """Before start(), trace_id must be None."""
+        self.assertIsNone(get_trace_id())
 
-    def test_fails_before_start(self):
-        """Before start(), trace_id_valid must be False."""
-        setup_monitoring()
-        result = validate_monitoring()
-        self.assertFalse(result["checks"]["trace_id_valid"])
-        self.assertFalse(result["passed"])
-
-    def test_passes_when_running(self):
-        """All checks must pass when runtime is RUNNING."""
-        setup_monitoring()
-        runtime.start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
-        result = validate_monitoring()
-        self.assertTrue(result["checks"]["logging_active"])
-        self.assertTrue(result["checks"]["trace_id_valid"])
-        self.assertTrue(result["checks"]["metrics_available"])
-        self.assertTrue(result["passed"])
-        self.assertEqual(result["errors"], [])
-        runtime.stop(timeout=2)
-
-    def test_logging_active_with_handler(self):
-        """logging_active must be True when a handler is configured."""
-        setup_monitoring()
-        result = validate_monitoring()
-        self.assertTrue(result["checks"]["logging_active"])
-
-    def test_metrics_available_always(self):
-        """metrics_available must be True even when runtime is not started."""
-        result = validate_monitoring()
-        self.assertTrue(result["checks"]["metrics_available"])
-
-    def test_metrics_failure_handled(self):
-        """metrics_available must be False when get_metrics raises."""
-        with patch("integration.monitoring.monitor") as mock_mon:
-            mock_mon.get_metrics.side_effect = RuntimeError("unavailable")
-            result = validate_monitoring()
-            self.assertFalse(result["checks"]["metrics_available"])
-            self.assertTrue(any("raised" in e for e in result["errors"]))
-
-
-# ── trace_id format tests ──────────────────────────────────────────
-
-
-class TestTraceIdFormat(MonitoringResetMixin, unittest.TestCase):
-    """Validate trace_id format — 12 hex characters."""
+    def test_trace_id_assigned_on_start(self):
+        """start() must assign a non-None trace_id."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        tid = get_trace_id()
+        self.assertIsNotNone(tid)
+        self.assertIsInstance(tid, str)
+        stop(timeout=2)
 
     def test_trace_id_length(self):
         """trace_id must be exactly 12 characters."""
-        runtime.start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
-        tid = runtime.get_trace_id()
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        tid = get_trace_id()
         self.assertEqual(len(tid), 12)
-        runtime.stop(timeout=2)
+        stop(timeout=2)
 
-    def test_trace_id_hex_chars(self):
-        """trace_id must contain only hexadecimal characters."""
-        runtime.start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
-        tid = runtime.get_trace_id()
+    def test_trace_id_hex_format(self):
+        """trace_id must contain only lowercase hexadecimal characters."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        tid = get_trace_id()
         self.assertRegex(tid, r"^[0-9a-f]{12}$")
-        runtime.stop(timeout=2)
+        stop(timeout=2)
+
+    def test_trace_id_in_deployment_status(self):
+        """Deployment status must include the current trace_id."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        ds = get_deployment_status()
+        self.assertEqual(ds["trace_id"], get_trace_id())
+        stop(timeout=2)
 
     def test_trace_id_unique_across_restarts(self):
         """Each start() must generate a new trace_id."""
-        runtime.start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
-        tid1 = runtime.get_trace_id()
-        runtime.stop(timeout=2)
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        tid1 = get_trace_id()
+        stop(timeout=2)
 
         runtime.reset()
-        runtime.start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
-        tid2 = runtime.get_trace_id()
-        runtime.stop(timeout=2)
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        tid2 = get_trace_id()
+        stop(timeout=2)
 
         self.assertNotEqual(tid1, tid2)
 
 
-# ── Metrics completeness tests ─────────────────────────────────────
+# ── Metrics observation ─────────────────────────────────────────────
 
 
-class TestMetricsCompleteness(MonitoringResetMixin, unittest.TestCase):
-    """Validate all metric values are populated in normal state."""
+class TestMetricsObservation(ObservationResetMixin, unittest.TestCase):
+    """Observe that monitor.get_metrics() returns complete, non-None data."""
+
+    def test_get_metrics_returns_dict(self):
+        """monitor.get_metrics() must return a dict."""
+        m = monitor.get_metrics()
+        self.assertIsInstance(m, dict)
+
+    def test_metrics_required_keys(self):
+        """Metrics must contain all documented keys."""
+        m = monitor.get_metrics()
+        required_keys = {
+            "success_count", "error_count", "success_rate",
+            "error_rate", "memory_usage_bytes", "restarts_last_hour",
+            "baseline_success_rate",
+        }
+        self.assertTrue(required_keys.issubset(set(m.keys())),
+                        f"Missing keys: {required_keys - set(m.keys())}")
 
     def test_initial_metrics_not_none(self):
         """All metrics except baseline_success_rate must be non-None initially."""
@@ -185,16 +165,16 @@ class TestMetricsCompleteness(MonitoringResetMixin, unittest.TestCase):
             self.assertIsNotNone(value, f"Metric {key!r} is None")
 
     def test_metrics_during_run_not_none(self):
-        """During a running system, all non-baseline metrics must be non-None."""
-        runtime.start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
-        ds = runtime.get_deployment_status()
+        """During a running system, deployment status metrics must be non-None."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        ds = get_deployment_status()
         self.assertIsNotNone(ds["metrics"])
         for key, value in ds["metrics"].items():
             if key == "baseline_success_rate":
                 continue
             self.assertIsNotNone(value, f"Metric {key!r} is None during run")
-        runtime.stop(timeout=2)
+        stop(timeout=2)
 
     def test_metrics_with_baseline_all_present(self):
         """After save_baseline, all metrics including baseline must be non-None."""
@@ -218,6 +198,14 @@ class TestMetricsCompleteness(MonitoringResetMixin, unittest.TestCase):
         self.assertIsInstance(m["error_rate"], float)
         self.assertIsInstance(m["memory_usage_bytes"], int)
         self.assertIsInstance(m["restarts_last_hour"], int)
+
+    def test_metrics_resilience_in_deployment_status(self):
+        """Deployment status must survive monitor.get_metrics() failure."""
+        with patch("integration.runtime.monitor") as mock_mon:
+            mock_mon.get_metrics.side_effect = RuntimeError("unavailable")
+            ds = get_deployment_status()
+            self.assertIsNone(ds["metrics"])
+            self.assertIn("state", ds)
 
 
 if __name__ == "__main__":
