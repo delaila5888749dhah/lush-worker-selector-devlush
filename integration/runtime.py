@@ -76,7 +76,7 @@ def stop_worker(worker_id, timeout=None):
     try:
         thread.join(timeout=_WORKER_TIMEOUT if timeout is None else timeout)
     except RuntimeError:
-        pass
+        _logger.debug("join() on not-yet-started thread for %s; will self-cleanup via _worker_fn", worker_id)
     if thread.is_alive():
         _logger.warning("Worker %s did not stop within timeout", worker_id)
         with _lock:
