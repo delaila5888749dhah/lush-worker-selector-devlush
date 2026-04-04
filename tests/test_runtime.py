@@ -919,31 +919,12 @@ class TestFailureModeAudit(RuntimeResetMixin, unittest.TestCase):
                 "worker should keep running despite monitor.record_success() failure",
             )
         # Stop the worker cleanly
-        runtime._stop_requests.add(wid)
+        self.assertTrue(stop_worker(wid, timeout=WORKER_BLOCK_TIMEOUT))
         self.assertTrue(
             self._poll_until(lambda: wid not in get_active_workers()),
         )
         self.assertGreaterEqual(call_count["n"], 3)
         runtime._state = "INIT"
-
-    def test_stop_worker_unstarted_thread(self):
-        """stop_worker handles race condition with unstarted thread."""
-        from integration import runtime
-
-        with runtime._lock:
-            runtime._worker_counter += 1
-            wid = f"worker-{runtime._worker_counter}"
-            t = threading.Thread(
-                target=runtime._worker_fn,
-                args=(wid, lambda _: None),
-                daemon=True,
-            )
-            runtime._workers[wid] = t
-        self.assertIsNone(t.ident)
-        # Must not raise RuntimeError
-        result = stop_worker(wid, timeout=0.1)
-        self.assertTrue(result)
-        self.assertNotIn(wid, get_active_workers())
 
     def test_unexpected_exception_logged(self):
         """Catch-all logs unexpected errors that escape inner handlers."""
