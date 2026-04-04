@@ -40,13 +40,21 @@ def _worker_fn(worker_id, task_fn):
                     break
             try:
                 task_fn(worker_id)
-                monitor.record_success()
+                try:
+                    monitor.record_success()
+                except Exception:
+                    _logger.warning("monitor.record_success() failed for %s", worker_id, exc_info=True)
             except Exception as exc:
-                monitor.record_error()
+                try:
+                    monitor.record_error()
+                except Exception:
+                    _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
                 with _lock:
                     if worker_id in _workers and worker_id not in _stop_requests: _pending_restarts += 1
                 _log_event(worker_id, "error", "task_failed", {"error": str(exc)})
                 break
+    except Exception as exc:
+        _logger.error("Unexpected error in worker %s: %s", worker_id, exc, exc_info=True)
     finally:
         with _lock:
             _stop_requests.discard(worker_id); _workers.pop(worker_id, None)
@@ -81,7 +89,11 @@ def stop_worker(worker_id, timeout=None):
         # eventual start → immediate stop via _should_stop_worker.
         _logger.debug("join() on not-yet-started thread for %s; will self-cleanup via _worker_fn", worker_id)
     else:
-        thread.join(timeout=_WORKER_TIMEOUT if timeout is None else timeout)
+        try:
+            thread.join(timeout=_WORKER_TIMEOUT if timeout is None else timeout)
+        except RuntimeError as exc:
+            _logger.warning("RuntimeError joining worker %s: %s", worker_id, exc, exc_info=True)
+            return False
     if thread.is_alive():
         _logger.warning("Worker %s did not stop within timeout", worker_id)
         with _lock:

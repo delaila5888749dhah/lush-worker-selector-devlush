@@ -850,5 +850,160 @@ class TestRegistryConcurrency(RuntimeResetMixin, unittest.TestCase):
         self.assertNotIn(wid, get_active_workers())
 
 
+# ── Failure Mode Audit ────────────────────────────────────────────
+
+
+class TestFailureModeAudit(RuntimeResetMixin, unittest.TestCase):
+    """Task 6 — ensure all failure modes are handled, no silent failures."""
+
+    def test_crash_with_monitor_error_still_cleans_up(self):
+        """Worker cleanup completes even when monitor fails during crash."""
+        from integration import runtime
+
+        runtime._state = "RUNNING"
+
+        def crashing_fn(_):
+            raise RuntimeError("task boom")
+
+        with patch.object(monitor, "record_error", side_effect=Exception("monitor boom")):
+            wid = start_worker(crashing_fn)
+            self.assertTrue(
+                self._poll_until(lambda: wid not in get_active_workers()),
+                "worker should be cleaned up even when monitor.record_error() fails",
+            )
+        runtime._state = "INIT"
+
+    def test_crash_with_monitor_error_still_logs_task_error(self):
+        """Original task error is always logged, even when monitor fails."""
+        from integration import runtime
+
+        runtime._state = "RUNNING"
+        logged = threading.Event()
+
+        def crashing_fn(_):
+            raise RuntimeError("original error")
+
+        original_log_event = runtime._log_event
+
+        def spy_log_event(wid, state, action, metrics=None):
+            original_log_event(wid, state, action, metrics)
+            if action == "task_failed":
+                logged.set()
+
+        with patch.object(monitor, "record_error", side_effect=Exception("monitor boom")):
+            with patch.object(runtime, "_log_event", side_effect=spy_log_event):
+                start_worker(crashing_fn)
+                self.assertTrue(
+                    logged.wait(timeout=2),
+                    "task_failed must be logged even when monitor.record_error() fails",
+                )
+        runtime._state = "INIT"
+
+    def test_success_with_monitor_failure_continues_worker(self):
+        """Worker survives monitor.record_success() failure and keeps running."""
+        from integration import runtime
+
+        runtime._state = "RUNNING"
+        call_count = {"n": 0}
+        barrier = threading.Event()
+
+        def counting_fn(_):
+            call_count["n"] += 1
+            if call_count["n"] >= 3:
+                barrier.set()
+
+        with patch.object(monitor, "record_success", side_effect=Exception("monitor boom")):
+            wid = start_worker(counting_fn)
+            self.assertTrue(
+                barrier.wait(timeout=2),
+                "worker should keep running despite monitor.record_success() failure",
+            )
+        # Stop the worker cleanly
+        self.assertTrue(stop_worker(wid, timeout=WORKER_BLOCK_TIMEOUT))
+        self.assertTrue(
+            self._poll_until(lambda: wid not in get_active_workers()),
+        )
+        self.assertGreaterEqual(call_count["n"], 3)
+        runtime._state = "INIT"
+
+    def test_unexpected_exception_logged(self):
+        """Catch-all logs unexpected errors that escape inner handlers."""
+        from integration import runtime
+
+        runtime._state = "RUNNING"
+        logged = threading.Event()
+
+        original_error = runtime._logger.error
+
+        def spy_error(msg, *args, **kwargs):
+            original_error(msg, *args, **kwargs)
+            if "Unexpected error" in str(msg):
+                logged.set()
+
+        # Simulate unexpected error: patch _log_event to raise on "running"/"start"
+        original_log = runtime._log_event
+
+        def exploding_log(wid, state, action, metrics=None):
+            if state == "running" and action == "start":
+                raise RuntimeError("unexpected log failure")
+            original_log(wid, state, action, metrics)
+
+        with patch.object(runtime, "_log_event", side_effect=exploding_log):
+            with patch.object(runtime._logger, "error", side_effect=spy_error):
+                wid = start_worker(lambda _: None)
+                self.assertTrue(
+                    logged.wait(timeout=2),
+                    "unexpected exception must be logged by catch-all handler",
+                )
+        self.assertTrue(
+            self._poll_until(lambda: wid not in get_active_workers()),
+        )
+        runtime._state = "INIT"
+
+    def test_timeout_stop_deterministic_state(self):
+        """State is consistent after stop timeout."""
+        from integration import runtime
+
+        runtime._state = "RUNNING"
+        barrier = threading.Event()
+        wid = start_worker(lambda _: barrier.wait(timeout=5))
+
+        self.assertTrue(
+            self._poll_until(lambda: wid in get_active_workers()),
+        )
+        # Stop with very short timeout — worker won't finish in time
+        result = stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT)
+        # Whether or not it timed out, the state must be clean
+        barrier.set()
+        self.assertTrue(
+            self._poll_until(lambda: wid not in get_active_workers()),
+        )
+        # Worker must not remain in _stop_requests forever
+        with runtime._lock:
+            self.assertNotIn(wid, runtime._stop_requests)
+        runtime._state = "INIT"
+
+    def test_crash_recovery_state(self):
+        """System restarts worker after crash via _pending_restarts."""
+        from integration import runtime
+
+        runtime._state = "RUNNING"
+        crash_event = threading.Event()
+
+        def crashing_fn(_):
+            crash_event.set()
+            raise RuntimeError("crash")
+
+        start_worker(crashing_fn)
+        crash_event.wait(timeout=2)
+        self.assertTrue(
+            self._poll_until(lambda: get_active_workers() == []),
+        )
+        # _pending_restarts should be incremented
+        with runtime._lock:
+            self.assertGreaterEqual(runtime._pending_restarts, 1)
+        runtime._state = "INIT"
+
+
 if __name__ == "__main__":
     unittest.main()
