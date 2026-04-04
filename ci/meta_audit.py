@@ -166,7 +166,10 @@ def _load_changed_files(diff_range: str) -> list[str]:
 		)
 	files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
 	if not files:
-		print("[META-AUDIT] WARNING: no changed files detected", file=sys.stderr)
+		print(
+			f"[META-AUDIT] WARNING: no changed files detected for diff range '{diff_range}'",
+			file=sys.stderr,
+		)
 	return files
 
 

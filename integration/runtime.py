@@ -226,7 +226,8 @@ def get_deployment_status():
     status = get_status()
     try:
         metrics = monitor.get_metrics()
-    except Exception:
+    except Exception as exc:
+        _logger.warning("monitor.get_metrics() failed in get_deployment_status(): %s", exc, exc_info=True)
         metrics = None
     return {
         "running": status["running"],

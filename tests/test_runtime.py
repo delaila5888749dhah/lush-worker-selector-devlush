@@ -1104,7 +1104,7 @@ class TestDeploymentStatus(RuntimeResetMixin, unittest.TestCase):
 
     def test_deployment_status_during_run(self):
         start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.2)
+        time.sleep(WARMUP_DELAY)
         ds = get_deployment_status()
         self.assertTrue(ds["running"])
         self.assertEqual(ds["state"], "RUNNING")
