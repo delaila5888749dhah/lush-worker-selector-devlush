@@ -293,23 +293,27 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
     │   ├── Delay ONLY permitted at (SAFE ZONE):
     │   │   ├── UI interaction (typing, click, hover)
     │   │   └── Non-critical steps (form navigation, field focus)
-    │   └── Delay NOT permitted at:
-    │       ├── Execution control (scaling, lifecycle transitions)
-    │       └── System coordination (runtime loop, watchdog checks)
+    │   ├── Delay NOT permitted at:
+    │   │   ├── Execution control (scaling, lifecycle transitions)
+    │   │   └── System coordination (runtime loop, watchdog checks)
+    │   └── Separation: Stagger start (Blueprint §1: random.uniform(12, 25)s between worker launches) is a SEPARATE mechanism from behavioral delay. Behavior delay operates WITHIN a cycle, not between worker launches. These MUST NOT interfere.
     ├── 10.5 — NO-DELAY Zone (STRICT):
-    │   └── Behavior layer MUST NOT inject delay vào:
-    │       ├── Payment submit (Complete Purchase click event)
-    │       ├── Watchdog timeout checks
-    │       ├── Network wait (CDP Network.responseReceived)
-    │       ├── VBV iframe load/interaction
-    │       └── Page reload operations
+    │   ├── Behavior layer MUST NOT inject delay vào:
+    │   │   ├── Payment submit (Complete Purchase click event)
+    │   │   ├── Watchdog timeout checks
+    │   │   ├── Network wait (CDP Network.responseReceived)
+    │   │   ├── VBV iframe load/interaction
+    │   │   └── Page reload operations
+    │   └── Clarification: VBV 8–12s wait (Blueprint §6: Ngã rẽ 3) is an OPERATIONAL wait (waiting for iframe to load), NOT a behavioral delay. This wait is inherent to the payment flow and MUST NOT be replaced or augmented by behavior delay injection.
     ├── 10.6 — Action-Aware Delay (Bounded):
-    │   ├── Delay MUST depend on action type:
-    │   │   ├── typing — key-by-key with hesitation (Blueprint §4: CDP gõ phím, quy tắc 4x4)
-    │   │   ├── click — bounding box calculation + hover + offset (Blueprint §4: Bounding Box Click)
-    │   │   └── thinking — review/hesitation before action (Blueprint §5: Hesitation)
+    │   ├── Delay MUST depend on action type with explicit Blueprint bounds:
+    │   │   ├── typing — 0.6–1.8s hesitation per 4-digit group (Blueprint §4: quy tắc 4x4, "Khựng lại 0.6s - 1.8s")
+    │   │   ├── click — spatial offset only (x±15, y±5), no significant time delay (Blueprint §4: Bounding Box Click)
+    │   │   └── thinking — 3–5s hover/scroll near action target (Blueprint §5: Hesitation, "lảng vảng quanh khu vực nút khoảng 3 - 5 giây")
     │   ├── Delay bound:
-    │   │   ├── Bounded per UI interaction type (appropriate for human-like behavior)
+    │   │   ├── typing: max 1.8s per 4-digit group × 4 groups = max 7.2s total for 16-digit card
+    │   │   ├── thinking: max 5s per hesitation point
+    │   │   ├── Accumulated delay per cycle step: MUST leave ≥3s headroom within watchdog 10s timeout (Blueprint §5)
     │   │   └── MUST NOT affect watchdog timeout or system-level deadlines
     │   └── Deterministic: Seed-based random (Blueprint §2: Gắn Seed Hành Vi)
     │       └── Reproducible execution: same seed → same behavior pattern
@@ -603,3 +607,4 @@ PR bị REQUEST_CHANGES
 | 2.2 | 2026-04-04 | **Spec Reconstruction — Phase 7 & Phase 8.** Tái dựng Phase 7 (Post-Finalization Audit Validation) từ lịch sử PR #112–#138. Mở rộng Phase 8 thành full spec từ lịch sử PR #142–#150. Thêm P7 vào milestones table. Đồng bộ spec với system đã triển khai (CHANGE_CLASS=spec_sync). |
 | 2.3 | 2026-04-04 | **Phase 9 — Behavior & Scaling Intelligence.** Bổ sung Phase 9 từ lịch sử PR #160 (Issue #155 Task 1: Behavior Decision Engine, Issue #159 Task 2: Scaling Execution Layer). Thêm P9 vào milestones table. Đồng bộ spec với system đã triển khai (CHANGE_CLASS=spec_sync). |
 | 2.4 | 2026-04-04 | **Phase 10 — Behavior Layer (Blueprint-safe).** Bổ sung Phase 10 spec: CRITICAL_SECTION awareness, SAFE POINT/SAFE ZONE rule, FSM context (BehaviorState), NO-DELAY zone, bounded UI delay, non-interference rule, Phase 9 alignment. Thêm P10 vào milestones table. Đồng bộ spec với Blueprint (CHANGE_CLASS=spec_sync). |
+| 2.5 | 2026-04-04 | **Phase 10 — Blueprint timing sync.** §10.4: Added stagger start separation (Blueprint §1 stagger ≠ behavior delay). §10.5: Added VBV operational wait clarification (Blueprint §6: 8-12s is operational, not behavioral). §10.6: Added explicit Blueprint timing bounds (typing 0.6-1.8s per group, click spatial only, thinking 3-5s) and accumulated delay ceiling (≥3s watchdog headroom). Audit confirmed zero remaining Blueprint conflicts (CHANGE_CLASS=spec_sync). |
