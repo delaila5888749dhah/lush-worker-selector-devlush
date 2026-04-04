@@ -37,6 +37,15 @@ class RuntimeResetMixin:
         rollout.reset()
         monitor.reset()
 
+    def _poll_until(self, predicate, timeout=CLEANUP_TIMEOUT, interval=0.05):
+        """Poll *predicate* until it returns True or *timeout* expires."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(interval)
+        return predicate()
+
 
 # ── Worker control ────────────────────────────────────────────────
 
@@ -597,15 +606,6 @@ class TestLifecycleStateMachine(RuntimeResetMixin, unittest.TestCase):
 class TestZombieWorkerCleanup(RuntimeResetMixin, unittest.TestCase):
     """Validate no zombie workers remain across stop/timeout/crash scenarios."""
 
-    def _poll_until(self, predicate, timeout=CLEANUP_TIMEOUT, interval=0.05):
-        """Poll *predicate* until it returns True or *timeout* expires."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if predicate():
-                return True
-            time.sleep(interval)
-        return predicate()
-
     def test_timeout_worker_eventually_cleaned_up(self):
         """Worker cleans up from _workers after its blocking task completes."""
         barrier = threading.Event()
@@ -718,6 +718,136 @@ class TestZombieWorkerCleanup(RuntimeResetMixin, unittest.TestCase):
             self._poll_until(lambda: get_active_workers() == []),
             "workers still in registry after concurrent start/stop",
         )
+
+
+class TestRegistryConcurrency(RuntimeResetMixin, unittest.TestCase):
+    """Worker registry consistency under concurrent operations."""
+
+    def test_concurrent_spawn_unique_ids(self):
+        """20 concurrent start_worker calls all produce unique IDs."""
+        runtime._state = "RUNNING"
+        ids = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(20)
+
+        def spawn():
+            barrier.wait()
+            wid = start_worker(lambda _: time.sleep(0.01))
+            with lock:
+                ids.append(wid)
+
+        threads = [threading.Thread(target=spawn) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        self.assertEqual(len(ids), 20)
+        self.assertEqual(len(set(ids)), 20, "duplicate worker IDs detected")
+        for wid in ids:
+            stop_worker(wid, timeout=2)
+        self.assertTrue(
+            self._poll_until(lambda: get_active_workers() == []),
+            "registry not empty after concurrent spawn cleanup",
+        )
+
+    def test_concurrent_spawn_registry_integrity(self):
+        """All concurrently spawned workers appear in the active registry."""
+        runtime._state = "RUNNING"
+        ids = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(10)
+        barriers = [threading.Event() for _ in range(10)]
+
+        def spawn(idx):
+            barrier.wait()
+            wid = start_worker(lambda _, b=barriers[idx]: b.wait(timeout=2))
+            with lock:
+                ids.append(wid)
+
+        threads = [threading.Thread(target=spawn, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        active = get_active_workers()
+        for wid in ids:
+            self.assertIn(wid, active, f"{wid} missing from active registry")
+        for b in barriers:
+            b.set()
+        for wid in ids:
+            stop_worker(wid, timeout=2)
+        self.assertTrue(
+            self._poll_until(lambda: get_active_workers() == []),
+            "registry not empty after concurrent spawn cleanup",
+        )
+
+    def test_concurrent_add_remove(self):
+        """Interleaved start/stop from multiple threads doesn't corrupt the registry."""
+        runtime._state = "RUNNING"
+        errors = []
+
+        def add_remove():
+            try:
+                wid = start_worker(lambda _: time.sleep(0.01))
+                stop_worker(wid, timeout=2)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=add_remove) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        self.assertEqual(errors, [], f"unexpected errors: {errors}")
+        self.assertTrue(
+            self._poll_until(lambda: get_active_workers() == []),
+            "registry not empty after concurrent add/remove",
+        )
+        runtime._state = "INIT"
+
+    def test_registry_reflects_runtime_after_completion(self):
+        """After workers exit via exception, they are properly deregistered."""
+        runtime._state = "RUNNING"
+        events = []
+        for _ in range(5):
+            ev = threading.Event()
+            events.append(ev)
+
+            def crash_fn(_, e=ev):
+                e.set()
+                raise RuntimeError("boom")
+
+            start_worker(crash_fn)
+        for ev in events:
+            ev.wait(timeout=2)
+        self.assertTrue(
+            self._poll_until(lambda: get_active_workers() == []),
+            "crashed workers remain in registry",
+        )
+        runtime._state = "INIT"
+
+    def test_stop_worker_on_not_yet_started_thread(self):
+        """stop_worker handles thread registered but not yet started without raising.
+
+        Direct state manipulation is required because the public start_worker()
+        API calls t.start() immediately, making the narrow registration-to-start
+        window impossible to hit deterministically through the public interface.
+        """
+        with runtime._lock:
+            runtime._worker_counter += 1
+            wid = f"worker-{runtime._worker_counter}"
+            t = threading.Thread(
+                target=runtime._worker_fn,
+                args=(wid, lambda _: None),
+                daemon=True,
+            )
+            runtime._workers[wid] = t
+        # Thread is registered but not started (ident is None); stop_worker must not raise
+        self.assertIsNone(t.ident)
+        result = stop_worker(wid, timeout=0.1)
+        # Thread was never alive so cleanup succeeds
+        self.assertTrue(result)
+        self.assertNotIn(wid, get_active_workers())
 
 
 if __name__ == "__main__":
