@@ -10,6 +10,7 @@ from integration.runtime import (
     ALLOWED_STATES,
     _apply_scale,
     get_active_workers,
+    get_deployment_status,
     get_state,
     get_status,
     get_trace_id,
@@ -1081,6 +1082,57 @@ class TestStructuredLogFormat(RuntimeResetMixin, unittest.TestCase):
         self.assertTrue(len(captured) > 0, "Expected at least one log line")
         fields = captured[0].split(" | ")
         self.assertEqual(len(fields), 6, f"Expected 6 fields, got {len(fields)}: {captured[0]}")
+
+
+# ── Deployment status ────────────────────────────────────────────
+
+
+class TestDeploymentStatus(RuntimeResetMixin, unittest.TestCase):
+    """Tests for get_deployment_status() production health snapshot."""
+
+    def test_initial_deployment_status(self):
+        ds = get_deployment_status()
+        self.assertFalse(ds["running"])
+        self.assertEqual(ds["state"], "INIT")
+        self.assertEqual(ds["worker_count"], 0)
+        self.assertEqual(ds["active_workers"], [])
+        self.assertEqual(ds["consecutive_rollbacks"], 0)
+        self.assertIsNotNone(ds["metrics"])
+        self.assertEqual(ds["metrics"]["success_count"], 0)
+        self.assertEqual(ds["metrics"]["error_count"], 0)
+        self.assertEqual(ds["metrics"]["restarts_last_hour"], 0)
+
+    def test_deployment_status_during_run(self):
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(0.2)
+        ds = get_deployment_status()
+        self.assertTrue(ds["running"])
+        self.assertEqual(ds["state"], "RUNNING")
+        self.assertGreater(ds["worker_count"], 0)
+        self.assertIsNotNone(ds["trace_id"])
+        self.assertIsNotNone(ds["metrics"])
+        stop(timeout=2)
+
+    def test_deployment_status_includes_error_rate(self):
+        monitor.record_success()
+        monitor.record_error()
+        ds = get_deployment_status()
+        self.assertAlmostEqual(ds["metrics"]["error_rate"], 0.5)
+        self.assertAlmostEqual(ds["metrics"]["success_rate"], 0.5)
+
+    def test_deployment_status_includes_restarts(self):
+        monitor.record_restart()
+        monitor.record_restart()
+        ds = get_deployment_status()
+        self.assertEqual(ds["metrics"]["restarts_last_hour"], 2)
+
+    def test_deployment_status_survives_monitor_failure(self):
+        """get_deployment_status must not crash when monitor is unavailable."""
+        with patch("integration.runtime.monitor") as mock_mon:
+            mock_mon.get_metrics.side_effect = RuntimeError("unavailable")
+            ds = get_deployment_status()
+            self.assertFalse(ds["running"])
+            self.assertIsNone(ds["metrics"])
 
 
 if __name__ == "__main__":

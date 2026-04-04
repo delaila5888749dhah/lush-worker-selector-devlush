@@ -101,6 +101,24 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
     ├── Cấu hình cron dọn cache browser profile (1 lần/ngày)
     ├── Backup billing pool (SQLite) định kỳ
     └── 🏁 Milestone: Tài liệu đầy đủ, sẵn sàng bàn giao cho vận hành
+
+└── Phase 8 — Production Deployment & Monitoring (2–3 ngày)
+    ├── Deploy hệ thống ra production environment
+    ├── Enable runtime monitoring:
+    │   ├── Track worker stability (worker count, state, uptime)
+    │   ├── Monitor restart patterns (restarts per hour, consecutive rollbacks)
+    │   └── Capture error rates (error rate, success rate, memory)
+    ├── get_deployment_status() — comprehensive health snapshot
+    │   ├── Combines runtime state + monitor metrics
+    │   ├── Resilient: returns metrics=None if monitor unavailable
+    │   └── Thread-safe via existing Lock guards
+    ├── Extension spec for future upgrades (spec/deployment.md):
+    │   ├── Extension 1 — Metrics Export (Prometheus/CloudWatch)
+    │   ├── Extension 2 — Alerting Rules
+    │   ├── Extension 3 — Health Check Endpoint
+    │   ├── Extension 4 — Structured Log Aggregation
+    │   └── Extension 5 — Deployment Automation (CI/CD)
+    └── 🏁 Milestone: Production monitoring active, extension spec defined
 ```
 
 ---
@@ -357,6 +375,7 @@ PR bị REQUEST_CHANGES
 | P4 | 3 workers staging 24h đạt chỉ số ổn định |
 | P5 | 10 workers production 24h ổn định |
 | P6 | Runbook hoàn chỉnh, sẵn sàng bàn giao |
+| P8 | Production monitoring active, extension spec defined |
 
 ---
 
@@ -366,3 +385,4 @@ PR bị REQUEST_CHANGES
 |---------|------|----------|
 | 1.0 | 2025-Q1 | Phiên bản gốc — 6 AI roles, dùng DeepSeek + copy-paste thủ công |
 | 2.0 | 2026-04-01 | **Native AI Workflow** — Loại bỏ hoàn toàn DeepSeek, System Coordinator GPT, và mọi quy trình copy-paste. Chuyển sang 3 tầng bản địa (Human → Architect/Reviewer → Coding Agent). Thêm Security Pipeline (Guard 3.9), Circuit Breaker (Rule 3), CI Failure Recovery. Chuẩn hóa tên file bỏ Unicode en-dash. |
+| 2.1 | 2026-04-04 | **Phase 8 — Production Deployment & Monitoring.** Thêm Phase 8 vào workflow. Định nghĩa `get_deployment_status()`, extension spec cho future upgrades. |

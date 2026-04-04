@@ -207,6 +207,26 @@ def get_status():
         tid = _trace_id
     with _lock:
         return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid}
+def get_deployment_status():
+    """Return a comprehensive production deployment health snapshot.
+
+    Combines runtime state with monitor metrics for production monitoring.
+    Tracks worker stability, restart patterns, and error rates.
+    """
+    status = get_status()
+    try:
+        metrics = monitor.get_metrics()
+    except Exception:
+        metrics = None
+    return {
+        "running": status["running"],
+        "state": status["state"],
+        "worker_count": status["worker_count"],
+        "active_workers": status["active_workers"],
+        "consecutive_rollbacks": status["consecutive_rollbacks"],
+        "trace_id": status["trace_id"],
+        "metrics": metrics,
+    }
 def get_state():
     """Return the current lifecycle state."""
     with _lock: return _state

@@ -50,6 +50,7 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
+| `spec/deployment.md` | 1.0 | 2026-04-04 |
 
 ## Changelog
 
