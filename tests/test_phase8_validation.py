@@ -1,11 +1,12 @@
 """Phase 8 — Production Deployment & Monitoring Validation.
 
-Validates the five Phase 8 observation steps:
+Validates the Phase 8 observation and verification steps:
   Step 1: Deployment pipeline triggered and working
   Step 2: System runs (service up, workers active)
   Step 3: Monitoring active (logging, traces, metrics)
   Step 4: Runtime observation (worker stability, restart patterns, error rates)
   Step 5: Baseline recording and measurement
+  Step 6: Deployment verification (service running, workers active, no errors)
 
 These tests are *observation-only* — they exercise existing production code
 paths without modifying any production module.
@@ -26,6 +27,7 @@ from integration.runtime import (
     reset,
     start,
     stop,
+    verify_deployment,
 )
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
@@ -302,6 +304,71 @@ class TestBaselineRecording(Phase8ResetMixin, unittest.TestCase):
         _ = monitor.get_metrics()
         _ = monitor.get_metrics()
         self.assertEqual(monitor.get_baseline_success_rate(), baseline_before)
+
+
+# ── Step 6: Deployment verification ─────────────────────────────────
+
+
+class TestDeploymentVerification(Phase8ResetMixin, unittest.TestCase):
+    """Step 6 — Verify production deployment status."""
+
+    def test_verify_deployment_contract_keys(self):
+        """verify_deployment must return passed, checks, and errors."""
+        result = verify_deployment()
+        self.assertEqual(set(result.keys()), {"passed", "checks", "errors"})
+        self.assertEqual(
+            set(result["checks"].keys()),
+            {"service_running", "workers_active", "no_startup_errors"},
+        )
+
+    def test_verify_passes_for_healthy_system(self):
+        """A healthy running system must pass all deployment checks."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        result = verify_deployment()
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["checks"]["service_running"])
+        self.assertTrue(result["checks"]["workers_active"])
+        self.assertTrue(result["checks"]["no_startup_errors"])
+        self.assertEqual(result["errors"], [])
+        stop(timeout=2)
+
+    def test_verify_fails_before_start(self):
+        """Before start(), verify_deployment must report failure."""
+        result = verify_deployment()
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
+
+    def test_verify_fails_after_stop(self):
+        """After stop(), verify_deployment must report failure."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        stop(timeout=2)
+        result = verify_deployment()
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
+
+    def test_verify_detects_error_rate_above_threshold(self):
+        """High error rate must cause verification failure."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        for _ in range(10):
+            monitor.record_error()
+        result = verify_deployment()
+        self.assertFalse(result["checks"]["no_startup_errors"])
+        stop(timeout=2)
+
+    def test_verify_detects_excessive_restarts(self):
+        """Too many restarts must cause verification failure."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        for _ in range(4):
+            monitor.record_restart()
+        result = verify_deployment()
+        self.assertFalse(result["checks"]["no_startup_errors"])
+        stop(timeout=2)
 
 
 # ── End-to-end lifecycle validation ─────────────────────────────────

@@ -20,6 +20,7 @@ from integration.runtime import (
     start_worker,
     stop,
     stop_worker,
+    verify_deployment,
 )
 
 WORKER_BLOCK_TIMEOUT = 1
@@ -1133,6 +1134,102 @@ class TestDeploymentStatus(RuntimeResetMixin, unittest.TestCase):
             ds = get_deployment_status()
             self.assertFalse(ds["running"])
             self.assertIsNone(ds["metrics"])
+
+
+class TestVerifyDeployment(RuntimeResetMixin, unittest.TestCase):
+    """Tests for verify_deployment() production health verification."""
+
+    def test_verify_fails_when_not_started(self):
+        """verify_deployment must fail when service is not running."""
+        result = verify_deployment()
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["workers_active"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
+        self.assertGreater(len(result["errors"]), 0)
+
+    def test_verify_passes_when_healthy(self):
+        """verify_deployment must pass when service is running and healthy."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        result = verify_deployment()
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["checks"]["service_running"])
+        self.assertTrue(result["checks"]["workers_active"])
+        self.assertTrue(result["checks"]["no_startup_errors"])
+        self.assertEqual(result["errors"], [])
+        stop(timeout=2)
+
+    def test_verify_returns_required_keys(self):
+        """Result must contain passed, checks, and errors keys."""
+        result = verify_deployment()
+        self.assertIn("passed", result)
+        self.assertIn("checks", result)
+        self.assertIn("errors", result)
+        self.assertIn("service_running", result["checks"])
+        self.assertIn("workers_active", result["checks"])
+        self.assertIn("no_startup_errors", result["checks"])
+
+    def test_verify_detects_high_error_rate(self):
+        """verify_deployment must detect error_rate above 5% threshold."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        for _ in range(10):
+            monitor.record_error()
+        result = verify_deployment()
+        self.assertFalse(result["checks"]["no_startup_errors"])
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("error rate" in e.lower() for e in result["errors"]))
+        stop(timeout=2)
+
+    def test_verify_detects_excessive_restarts(self):
+        """verify_deployment must detect restarts above 3/hr threshold."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        for _ in range(4):
+            monitor.record_restart()
+        result = verify_deployment()
+        self.assertFalse(result["checks"]["no_startup_errors"])
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("restarts" in e.lower() for e in result["errors"]))
+        stop(timeout=2)
+
+    def test_verify_detects_consecutive_rollbacks(self):
+        """verify_deployment must detect consecutive rollbacks."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        with runtime._lock:
+            runtime._consecutive_rollbacks = 2
+        result = verify_deployment()
+        self.assertFalse(result["checks"]["no_startup_errors"])
+        self.assertTrue(any("rollback" in e.lower() for e in result["errors"]))
+        stop(timeout=2)
+
+    def test_verify_handles_monitor_failure(self):
+        """verify_deployment must flag when monitor is unavailable while running."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        with patch("integration.runtime.monitor") as mock_mon:
+            mock_mon.get_metrics.side_effect = RuntimeError("unavailable")
+            result = verify_deployment()
+            self.assertFalse(result["checks"]["no_startup_errors"])
+            self.assertTrue(
+                any(
+                    "monitor metrics unavailable while service running" in e.lower()
+                    for e in result["errors"]
+                )
+            )
+        stop(timeout=2)
+
+    def test_verify_after_stop(self):
+        """verify_deployment must fail after stop (service not running)."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        stop(timeout=2)
+        result = verify_deployment()
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["checks"]["service_running"])
+        self.assertFalse(result["checks"]["no_startup_errors"])
 
 
 if __name__ == "__main__":

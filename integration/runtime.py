@@ -238,6 +238,56 @@ def get_deployment_status():
         "trace_id": status["trace_id"],
         "metrics": metrics,
     }
+_ERROR_RATE_THRESHOLD = getattr(monitor, "_ERROR_RATE_THRESHOLD", 0.05)
+_MAX_RESTARTS_PER_HOUR = getattr(monitor, "_MAX_RESTARTS_PER_HOUR", 3)
+def verify_deployment():
+    """Verify production deployment status.
+
+    Checks that the system is healthy according to the spec thresholds:
+      - Service running (state == RUNNING)
+      - Workers active (worker_count > 0)
+      - No startup errors (error_rate <= 5%, restarts <= 3/hr,
+        consecutive_rollbacks == 0)
+
+    Returns a dict with keys:
+        passed (bool): True if all checks passed.
+        checks (dict): Individual check results (bool per check).
+        errors (list[str]): Human-readable failure reasons (empty on success).
+    """
+    ds = get_deployment_status()
+    errors = []
+    service_running = ds["running"] and ds["state"] == "RUNNING"
+    workers_active = ds["worker_count"] > 0 and len(ds["active_workers"]) > 0
+    no_startup_errors = True
+    if not service_running:
+        no_startup_errors = False
+        errors.append(f"Service not running: state={ds['state']}")
+    if not workers_active:
+        no_startup_errors = False
+        errors.append(f"No active workers: worker_count={ds['worker_count']}")
+    if ds["consecutive_rollbacks"] > 0:
+        no_startup_errors = False
+        errors.append(f"Consecutive rollbacks: {ds['consecutive_rollbacks']}")
+    metrics = ds["metrics"]
+    if metrics is not None:
+        if metrics["error_rate"] > _ERROR_RATE_THRESHOLD:
+            no_startup_errors = False
+            errors.append(f"Error rate above threshold: {metrics['error_rate']:.2%} > {_ERROR_RATE_THRESHOLD:.0%}")
+        if metrics["restarts_last_hour"] > _MAX_RESTARTS_PER_HOUR:
+            no_startup_errors = False
+            errors.append(f"Restarts above threshold: {metrics['restarts_last_hour']} > {_MAX_RESTARTS_PER_HOUR}")
+    elif ds["running"]:
+        no_startup_errors = False
+        errors.append("Monitor metrics unavailable while service running")
+    return {
+        "passed": service_running and workers_active and no_startup_errors,
+        "checks": {
+            "service_running": service_running,
+            "workers_active": workers_active,
+            "no_startup_errors": no_startup_errors,
+        },
+        "errors": errors,
+    }
 def get_state():
     """Return the current lifecycle state."""
     with _lock: return _state
