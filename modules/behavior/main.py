@@ -2,12 +2,16 @@
 
 Thread-safe via threading.Lock.  No cross-module imports.
 """
-import logging, threading, time  # noqa: E401
+import logging
+import threading
+import time
 
 _logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 
-SCALE_UP, SCALE_DOWN, HOLD = "scale_up", "scale_down", "hold"
+SCALE_UP = "scale_up"
+SCALE_DOWN = "scale_down"
+HOLD = "hold"
 VALID_DECISIONS = {SCALE_UP, SCALE_DOWN, HOLD}
 
 ERROR_RATE_THRESHOLD = 0.05       # 5% — scale down above this
