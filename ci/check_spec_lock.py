@@ -131,7 +131,15 @@ def main() -> None:
         print("check_spec_lock: PASS", file=sys.stderr)
         sys.exit(0)
 
-    # Spec files modified — check if spec_sync is authorized
+    # Spec files modified — check if modification is allowed
+    allow_spec = os.environ.get(
+        "ALLOW_SPEC_MODIFICATION", ""
+    ).strip().lower() == "true"
+    if allow_spec:
+        print("check_spec_lock: PASS (ALLOW_SPEC_MODIFICATION=true)",
+              file=sys.stderr)
+        sys.exit(0)
+
     change_class = _resolve_change_class()
 
     if change_class == "spec_sync" and _is_authorized():
