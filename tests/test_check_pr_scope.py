@@ -177,15 +177,15 @@ class ResolveChangeClassTests(unittest.TestCase):
 
     @patch.dict("os.environ", {"CHANGE_CLASS": "spec_sync"}, clear=True)
     def test_explicit_env_takes_priority(self):
-        self.assertEqual(_resolve_change_class("fake...range"), "spec_sync")
+        self.assertEqual(_resolve_change_class(), "spec_sync")
 
     @patch.dict("os.environ", {"CHANGE_CLASS": ""}, clear=True)
     def test_empty_change_class_defaults_to_normal(self):
-        self.assertEqual(_resolve_change_class("fake...range"), "normal")
+        self.assertEqual(_resolve_change_class(), "normal")
 
     @patch.dict("os.environ", {}, clear=True)
     def test_missing_change_class_defaults_to_normal(self):
-        self.assertEqual(_resolve_change_class("fake...range"), "normal")
+        self.assertEqual(_resolve_change_class(), "normal")
 
 
 class AuthorizationTests(unittest.TestCase):

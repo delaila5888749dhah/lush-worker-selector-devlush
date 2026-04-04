@@ -198,7 +198,7 @@ def _parse_labels(raw: str) -> set[str]:
 
 # ── change classification ──────────────────────────────────────────
 
-def _resolve_change_class(diff_range: str) -> str:
+def _resolve_change_class() -> str:
     """Resolve CHANGE_CLASS from the explicit env var; defaults to 'normal'."""
     explicit = os.environ.get("CHANGE_CLASS", "").strip().lower()
     return explicit if explicit else "normal"
@@ -328,7 +328,7 @@ def _export_to_github_env(name: str, value: str) -> None:
 
 def main() -> int:
     diff_range = resolve_diff_range()
-    change_class = _resolve_change_class(diff_range)
+    change_class = _resolve_change_class()
 
     # Export resolved CHANGE_CLASS to GITHUB_ENV so downstream steps
     # (e.g. check_spec_lock) receive the same value.
