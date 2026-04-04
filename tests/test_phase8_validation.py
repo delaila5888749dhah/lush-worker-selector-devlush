@@ -251,6 +251,134 @@ class TestRuntimeObservation(Phase8ResetMixin, unittest.TestCase):
         self.assertEqual(reasons, [])
 
 
+# ── Step 4b: Behavior tracking ──────────────────────────────────────
+
+
+class TestBehaviorTracking(Phase8ResetMixin, unittest.TestCase):
+    """Step 4b — Observe crash resilience, restart thresholds, error stability."""
+
+    # -- Acceptance Criterion 1: No abnormal crashes -----------------------
+
+    def test_crash_does_not_stop_system(self):
+        """Worker crash must not bring down the runtime."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        # Inject a crashing worker into the already running system
+        from integration.runtime import start_worker
+        start_worker(lambda _: (_ for _ in ()).throw(RuntimeError("boom")))
+        time.sleep(0.3)
+        # System must still be RUNNING
+        self.assertEqual(get_state(), "RUNNING")
+        ds = get_deployment_status()
+        self.assertTrue(ds["running"])
+        stop(timeout=2)
+
+    def test_crash_reflected_in_error_metrics(self):
+        """Worker crashes must be visible through the monitoring metrics."""
+        monitor.record_error()
+        ds = get_deployment_status()
+        self.assertGreater(ds["metrics"]["error_count"], 0)
+        self.assertGreater(ds["metrics"]["error_rate"], 0.0)
+
+    def test_state_stays_in_allowed_states_during_lifecycle(self):
+        """State must be a member of ALLOWED_STATES at every observation point."""
+        self.assertIn(get_state(), ALLOWED_STATES)
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        self.assertIn(get_state(), ALLOWED_STATES)
+        stop(timeout=2)
+        self.assertIn(get_state(), ALLOWED_STATES)
+
+    # -- Acceptance Criterion 2: Restarts within allowed thresholds --------
+
+    def test_restart_count_tracks_accurately(self):
+        """Each record_restart call must increment the hourly counter by 1."""
+        self.assertEqual(monitor.get_restarts_last_hour(), 0)
+        monitor.record_restart()
+        self.assertEqual(monitor.get_restarts_last_hour(), 1)
+        monitor.record_restart()
+        monitor.record_restart()
+        self.assertEqual(monitor.get_restarts_last_hour(), 3)
+
+    def test_restart_over_threshold_detected(self):
+        """When restarts exceed 3/hr, check_rollback_needed must flag it."""
+        for _ in range(4):
+            monitor.record_restart()
+        reasons = monitor.check_rollback_needed()
+        self.assertTrue(
+            any("restart" in r for r in reasons),
+            "Expected restart threshold breach to be flagged",
+        )
+
+    def test_restart_threshold_boundary(self):
+        """Exactly 3 restarts/hr must NOT trigger a rollback (threshold is >3)."""
+        for _ in range(3):
+            monitor.record_restart()
+        reasons = monitor.check_rollback_needed()
+        restart_reasons = [r for r in reasons if "restart" in r]
+        self.assertEqual(restart_reasons, [])
+
+    # -- Acceptance Criterion 3: Error rate stable -------------------------
+
+    def test_error_rate_stable_across_reads(self):
+        """Error rate must be consistent across multiple get_deployment_status reads."""
+        for _ in range(95):
+            monitor.record_success()
+        for _ in range(5):
+            monitor.record_error()
+        rates = [get_deployment_status()["metrics"]["error_rate"] for _ in range(5)]
+        self.assertTrue(
+            all(r == rates[0] for r in rates),
+            f"Error rate should be stable: {rates}",
+        )
+
+    def test_error_rate_over_threshold_detected(self):
+        """Error rate >5% must be detected by check_rollback_needed."""
+        for _ in range(9):
+            monitor.record_success()
+        for _ in range(2):
+            monitor.record_error()
+        # error rate = 2/11 ≈ 18.2% > 5%
+        reasons = monitor.check_rollback_needed()
+        self.assertTrue(
+            any("error rate" in r for r in reasons),
+            "Expected error rate threshold breach to be flagged",
+        )
+
+    def test_healthy_error_rate_not_flagged(self):
+        """Error rate ≤5% must NOT trigger a rollback."""
+        for _ in range(96):
+            monitor.record_success()
+        for _ in range(4):
+            monitor.record_error()
+        # error rate = 4/100 = 4% ≤ 5%
+        reasons = monitor.check_rollback_needed()
+        error_reasons = [r for r in reasons if "error rate" in r]
+        self.assertEqual(error_reasons, [])
+
+    # -- Combined acceptance criteria --------------------------------------
+
+    def test_all_acceptance_criteria_pass_for_healthy_system(self):
+        """A healthy running system must pass all three acceptance criteria."""
+        start(lambda _: time.sleep(0.5), interval=0.05)
+        time.sleep(WARMUP_DELAY)
+        for _ in range(20):
+            monitor.record_success()
+        ds = get_deployment_status()
+        # AC1: no crash — system running, state is RUNNING
+        self.assertTrue(ds["running"])
+        self.assertEqual(ds["state"], "RUNNING")
+        # AC2: restarts within threshold
+        self.assertLessEqual(ds["metrics"]["restarts_last_hour"], 3)
+        # AC3: error rate stable
+        self.assertLessEqual(ds["metrics"]["error_rate"], 0.05)
+        # Formal deployment verification must also pass
+        result = verify_deployment()
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["errors"], [])
+        stop(timeout=2)
+
+
 # ── Step 5: Baseline recording ──────────────────────────────────────
 
 
