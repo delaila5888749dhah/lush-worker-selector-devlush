@@ -12,6 +12,7 @@ from integration.runtime import (
     get_active_workers,
     get_state,
     get_status,
+    get_trace_id,
     is_running,
     reset,
     start,
@@ -1003,6 +1004,89 @@ class TestFailureModeAudit(RuntimeResetMixin, unittest.TestCase):
         with runtime._lock:
             self.assertGreaterEqual(runtime._pending_restarts, 1)
         runtime._state = "INIT"
+
+
+# ── Observability Audit (Task 8) ──────────────────────────────────
+
+
+class TestTraceIdLifecycle(RuntimeResetMixin, unittest.TestCase):
+    """Trace-id is generated on start, persists through stop, cleared on reset."""
+
+    def test_trace_id_none_before_start(self):
+        self.assertIsNone(get_trace_id())
+
+    def test_trace_id_generated_on_start(self):
+        started = start(lambda _: time.sleep(0.5), interval=0.1)
+        self.assertTrue(started)
+        tid = get_trace_id()
+        self.assertIsNotNone(tid)
+        self.assertEqual(len(tid), 12)
+
+    def test_trace_id_persists_through_stop(self):
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        tid = get_trace_id()
+        stop(timeout=2)
+        self.assertEqual(get_trace_id(), tid)
+
+    def test_trace_id_cleared_on_reset(self):
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        self.assertIsNotNone(get_trace_id())
+        reset()
+        self.assertIsNone(get_trace_id())
+
+    def test_new_trace_id_on_restart(self):
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        first_tid = get_trace_id()
+        stop(timeout=2)
+        reset()
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        second_tid = get_trace_id()
+        self.assertNotEqual(first_tid, second_tid)
+
+    def test_trace_id_in_status(self):
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        status = get_status()
+        self.assertIn("trace_id", status)
+        self.assertEqual(status["trace_id"], get_trace_id())
+
+
+class TestStructuredLogFormat(RuntimeResetMixin, unittest.TestCase):
+    """Log format must have exactly 6 pipe-separated fields including trace_id."""
+
+    def test_log_contains_trace_id(self):
+        from integration import runtime
+
+        captured = []
+        original_info = runtime._logger.info
+
+        def capture_info(msg, *args, **kwargs):
+            captured.append(msg % args)
+            original_info(msg, *args, **kwargs)
+
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        with patch.object(runtime._logger, "info", side_effect=capture_info):
+            runtime._log_event("test-worker", "running", "test_action")
+
+        self.assertTrue(len(captured) > 0, "Expected at least one log line")
+        self.assertIn(get_trace_id(), captured[0])
+
+    def test_log_format_has_six_fields(self):
+        from integration import runtime
+
+        captured = []
+        original_info = runtime._logger.info
+
+        def capture_info(msg, *args, **kwargs):
+            captured.append(msg % args)
+            original_info(msg, *args, **kwargs)
+
+        start(lambda _: time.sleep(0.5), interval=0.1)
+        with patch.object(runtime._logger, "info", side_effect=capture_info):
+            runtime._log_event("test-worker", "running", "test_action")
+
+        self.assertTrue(len(captured) > 0, "Expected at least one log line")
+        fields = captured[0].split(" | ")
+        self.assertEqual(len(fields), 6, f"Expected 6 fields, got {len(fields)}: {captured[0]}")
 
 
 if __name__ == "__main__":
