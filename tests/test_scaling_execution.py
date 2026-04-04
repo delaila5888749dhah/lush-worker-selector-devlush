@@ -14,11 +14,10 @@ Validates that:
 import threading
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from integration import runtime
 from integration.runtime import (
-    get_active_workers,
     get_status,
     is_running,
     reset,
@@ -302,8 +301,6 @@ class TestBehaviorCalledCorrectly(ScalingResetMixin, unittest.TestCase):
     def test_evaluate_receives_metrics_and_indices(self):
         """behavior.evaluate() is called with monitor metrics and rollout indices."""
         captured = []
-
-        original_evaluate = behavior.evaluate
 
         def spy_evaluate(metrics, step_index, max_index):
             captured.append({

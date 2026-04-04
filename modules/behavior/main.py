@@ -15,23 +15,16 @@ _logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 
-# ── Decision actions ─────────────────────────────────────────────
-
 SCALE_UP = "scale_up"
 SCALE_DOWN = "scale_down"
 HOLD = "hold"
-
 VALID_DECISIONS = {SCALE_UP, SCALE_DOWN, HOLD}
-
-# ── Thresholds (aligned with spec/deployment.md rollout triggers) ──
 
 ERROR_RATE_THRESHOLD = 0.05       # 5% — scale down above this
 SUCCESS_RATE_MIN = 0.70           # 70% — do not scale up below this
 RESTART_RATE_THRESHOLD = 3        # >3 restarts/hour triggers scale down
 COOLDOWN_SECONDS = 30             # minimum seconds between scaling changes
 SUCCESS_RATE_DROP_THRESHOLD = 0.10  # 10% drop from baseline triggers scale down
-
-# ── Internal state ───────────────────────────────────────────────
 
 _last_decision_time = 0.0
 _decision_history = []

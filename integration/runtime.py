@@ -147,13 +147,11 @@ def _runtime_loop(task_fn, interval):
             if decision == behavior.SCALE_DOWN:
                 target = rollout.force_rollback(reason="; ".join(decision_reasons))
                 action = "rollback"
-                reasons = decision_reasons
             elif decision == behavior.SCALE_UP:
-                target, action, reasons = rollout.try_scale_up()
+                target, action, _ = rollout.try_scale_up()
             else:
                 target = rollout.get_current_workers()
                 action = "hold"
-                reasons = decision_reasons
             with _lock:
                 if action == "rollback":
                     _consecutive_rollbacks += 1

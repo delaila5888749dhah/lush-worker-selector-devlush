@@ -9,7 +9,6 @@ Validates that the behavior system:
 """
 
 import threading
-import time
 import unittest
 
 from modules.behavior.main import (
