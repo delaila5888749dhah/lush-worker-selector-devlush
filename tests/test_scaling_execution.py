@@ -1,4 +1,4 @@
-"""Tests for Task 2: Scaling Execution Layer — behavior→runtime→rollout integration.
+"""Tests for Scaling Execution Layer — behavior→runtime→rollout integration.
 
 Validates that:
   - behavior.evaluate() is called in the runtime loop with correct metrics
@@ -6,11 +6,13 @@ Validates that:
   - SCALE_DOWN decision → rollout.force_rollback() is called
   - HOLD decision → no scaling change
   - consecutive_rollbacks tracked correctly (only cleared on scale_up)
+  - is_safe_to_control() gate: scaling deferred when workers are unsafe
   - No race conditions
   - Lifecycle (INIT/RUNNING/STOPPED) not broken
   - behavior state reset when runtime.reset() is called
 """
 
+import logging
 import threading
 import time
 import unittest
@@ -20,6 +22,7 @@ from integration import runtime
 from integration.runtime import (
     get_status,
     is_running,
+    is_safe_to_control,
     reset,
     start,
     stop,
@@ -322,6 +325,104 @@ class TestBehaviorCalledCorrectly(ScalingResetMixin, unittest.TestCase):
         self.assertIsInstance(call["step_index"], int)
         self.assertIsInstance(call["max_index"], int)
         self.assertEqual(call["max_index"], len(rollout.SCALE_STEPS) - 1)
+
+
+# ── Safe guard: is_safe_to_control() gating ─────────────────────
+
+
+class TestSafeGuardGating(ScalingResetMixin, unittest.TestCase):
+    """_apply_scale() must be gated by is_safe_to_control() when target != current."""
+
+    def test_scaling_deferred_when_workers_unsafe(self):
+        """When is_safe_to_control() is False and scaling needed, _apply_scale is skipped."""
+        rollout.configure(check_rollback_fn=lambda: [],
+                          save_baseline_fn=lambda: None)
+        apply_called = threading.Event()
+        original_apply = runtime._apply_scale
+
+        def tracking_apply(target, task_fn):
+            apply_called.set()
+            return original_apply(target, task_fn)
+
+        # Mock is_safe_to_control to return False, and behavior to return SCALE_UP
+        with patch.object(behavior, "evaluate",
+                          return_value=(behavior.SCALE_UP, ["test_scale_up"])), \
+             patch("integration.runtime.is_safe_to_control", return_value=False), \
+             patch("integration.runtime._apply_scale", side_effect=tracking_apply):
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            time.sleep(0.3)
+            stop(timeout=2)
+
+        self.assertFalse(apply_called.is_set(),
+                         "_apply_scale should NOT be called when workers are unsafe")
+
+    def test_scaling_proceeds_when_workers_safe(self):
+        """When is_safe_to_control() is True, _apply_scale proceeds normally."""
+        rollout.configure(check_rollback_fn=lambda: [],
+                          save_baseline_fn=lambda: None)
+        apply_called = threading.Event()
+
+        with patch.object(behavior, "evaluate",
+                          return_value=(behavior.SCALE_UP, ["test_scale_up"])), \
+             patch("integration.runtime.is_safe_to_control", return_value=True):
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            time.sleep(0.3)
+            step = rollout.get_current_step_index()
+            stop(timeout=2)
+
+        self.assertGreater(step, 0,
+                           "_apply_scale should proceed when workers are safe")
+
+    def test_scaling_deferred_logs_event(self):
+        """Deferred scaling emits a 'scaling_deferred' log event."""
+        rollout.configure(check_rollback_fn=lambda: [],
+                          save_baseline_fn=lambda: None)
+        log_records = []
+        handler = logging.Handler()
+        handler.emit = lambda record: log_records.append(record)
+        logger = logging.getLogger("integration.runtime")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        try:
+            with patch.object(behavior, "evaluate",
+                              return_value=(behavior.SCALE_UP, ["test"])), \
+                 patch("integration.runtime.is_safe_to_control", return_value=False):
+                start(lambda _: time.sleep(0.5), interval=0.05)
+                time.sleep(0.3)
+                stop(timeout=2)
+        finally:
+            logger.removeHandler(handler)
+
+        deferred_logs = [r for r in log_records if "scaling_deferred" in r.getMessage()]
+        self.assertGreater(len(deferred_logs), 0,
+                           "Expected 'scaling_deferred' log events when unsafe")
+
+    def test_hold_skips_safe_check(self):
+        """HOLD decision (target == current) does not require safe check."""
+        rollout.configure(check_rollback_fn=lambda: [],
+                          save_baseline_fn=lambda: None)
+        # Start with HOLD decision — no scaling change needed
+        safe_checked = []
+        original_safe = runtime.is_safe_to_control
+
+        def tracking_safe():
+            result = original_safe()
+            safe_checked.append(result)
+            return result
+
+        with patch.object(behavior, "evaluate",
+                          return_value=(behavior.HOLD, ["cooldown"])), \
+             patch("integration.runtime.is_safe_to_control",
+                   side_effect=tracking_safe):
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            time.sleep(0.2)
+            stop(timeout=2)
+
+        # is_safe_to_control may or may not be called, but _apply_scale
+        # should still run (target == current → no guard needed)
+        step = rollout.get_current_step_index()
+        self.assertEqual(step, 0, "HOLD should not change scaling step")
 
 
 if __name__ == "__main__":

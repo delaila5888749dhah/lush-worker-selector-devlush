@@ -226,7 +226,12 @@ def _runtime_loop(task_fn, interval):
                         _log_event("runtime", "warning", "consecutive_rollbacks", {"count": _consecutive_rollbacks})
                 elif action == "scaled_up":
                     _consecutive_rollbacks = 0
-            _apply_scale(target, task_fn)
+            with _lock:
+                current_count = len(_workers)
+            if target != current_count and not is_safe_to_control():
+                _log_event("runtime", "scaling_deferred", "unsafe_state", {"target": target, "current": current_count})
+            else:
+                _apply_scale(target, task_fn)
             _log_event("runtime", action, "loop_tick", {"target": target, "metrics": metrics, "decision": decision})
         except Exception as exc:
             _log_event("runtime", "error", "loop_error", {"error": str(exc)})
