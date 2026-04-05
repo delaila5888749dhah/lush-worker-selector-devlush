@@ -198,10 +198,33 @@ def _parse_labels(raw: str) -> set[str]:
 
 # ── change classification ──────────────────────────────────────────
 
+_TITLE_PATTERNS: dict[str, str] = {
+    "[emergency]": "emergency_override",
+    "[spec-sync]": "spec_sync",
+    "[infra]": "infra_change",
+}
+
+
 def _resolve_change_class() -> str:
-    """Resolve CHANGE_CLASS from the explicit env var; defaults to 'normal'."""
+    """Resolve CHANGE_CLASS from explicit env var or PR title auto-detection.
+
+    Priority: explicit CHANGE_CLASS env var > PR title tag > 'normal' default.
+    Auto-detection per AI_CONTEXT.md §6:
+      [emergency] → emergency_override
+      [spec-sync] → spec_sync
+      [infra]     → infra_change
+    """
     explicit = os.environ.get("CHANGE_CLASS", "").strip().lower()
-    return explicit if explicit else "normal"
+    if explicit:
+        return explicit
+
+    # Auto-detect from PR title (AI_CONTEXT.md §6)
+    title = os.environ.get("PR_TITLE", "").lower()
+    for tag, cls in _TITLE_PATTERNS.items():
+        if tag in title:
+            return cls
+
+    return "normal"
 
 
 def _check_authorization(change_class: str) -> list[str]:
