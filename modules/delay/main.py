@@ -1,11 +1,12 @@
 """Behavior delay layer – seed-deterministic delay injection.
 
-Consolidates persona, state machine, delay engine, temporal model,
-biometrics, and wrapper into a single module (≤200 LOC).
+Persona, delay engine, temporal model, biometrics, and wrapper.
+BehaviorStateMachine lives in state.py (already on main).
 """
 import random
 import threading
 import time
+from modules.delay.state import BehaviorStateMachine, BEHAVIOR_STATES, _VALID_BEHAVIOR_TRANSITIONS  # noqa: F401
 
 # -- Hard constraints (Blueprint §10, SPEC §10.6) --
 MAX_TYPING_DELAY = 1.8; MIN_TYPING_DELAY = 0.6
@@ -17,12 +18,6 @@ _TYPO_RATE_MIN = 0.02; _TYPO_RATE_MAX = 0.05
 _NIGHT_PENALTY_MIN = 0.15; _NIGHT_PENALTY_MAX = 0.30
 _FATIGUE_THRESHOLD_MIN = 5; _FATIGUE_THRESHOLD_MAX = 15
 _KEYSTROKE_MAX = 0.3
-BEHAVIOR_STATES = {"IDLE", "FILLING_FORM", "PAYMENT", "VBV", "POST_ACTION"}
-_VALID_BEHAVIOR_TRANSITIONS = {
-    "IDLE": {"FILLING_FORM", "PAYMENT"}, "FILLING_FORM": {"PAYMENT", "IDLE"},
-    "PAYMENT": {"VBV", "POST_ACTION", "IDLE"}, "VBV": {"POST_ACTION", "IDLE"},
-    "POST_ACTION": {"IDLE"},
-}
 _PERSONA_TYPES = ("fast_typer", "moderate_typer", "slow_typer", "cautious", "impulsive")
 
 
@@ -50,26 +45,6 @@ class PersonaProfile:
                 "typo_rate": self.typo_rate, "hesitation_pattern": dict(self.hesitation_pattern),
                 "active_hours": self.active_hours, "fatigue_threshold": self.fatigue_threshold,
                 "night_penalty_factor": self.night_penalty_factor}
-
-
-class BehaviorStateMachine:
-    """Thread-safe FSM tracking the behavioral context of a worker."""
-    def __init__(self, initial_state: str = "IDLE") -> None:
-        if initial_state not in BEHAVIOR_STATES: raise ValueError(f"Invalid initial state: {initial_state}")
-        self._state = initial_state; self._lock = threading.Lock()
-    def transition(self, new_state: str) -> bool:
-        if new_state not in BEHAVIOR_STATES: return False
-        with self._lock:
-            if new_state not in _VALID_BEHAVIOR_TRANSITIONS.get(self._state, set()): return False
-            self._state = new_state; return True
-    def get_state(self) -> str:
-        with self._lock: return self._state
-    def is_critical_context(self) -> bool:
-        with self._lock: return self._state in {"VBV", "POST_ACTION"}
-    def is_safe_for_delay(self) -> bool:
-        with self._lock: return self._state in {"IDLE", "FILLING_FORM", "PAYMENT"}
-    def reset(self) -> None:
-        with self._lock: self._state = "IDLE"
 
 
 class DelayEngine:
