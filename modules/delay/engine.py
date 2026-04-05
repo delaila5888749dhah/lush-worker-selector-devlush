@@ -18,6 +18,7 @@ from modules.delay.state import BehaviorStateMachine
 MAX_HESITATION_DELAY: float = 5.0
 MAX_STEP_DELAY: float = 7.0
 WATCHDOG_HEADROOM: float = 3.0
+_MIN_THINKING_DELAY: float = 3.0
 
 
 class DelayEngine:
@@ -58,16 +59,16 @@ class DelayEngine:
         return 0.0
 
     def calculate_thinking_delay(self) -> float:
-        """Return thinking/hesitation delay (clamped at MAX_HESITATION_DELAY).
+        """Return thinking/hesitation delay (3.0–5.0 s, clamped).
 
         The raw value comes from PersonaProfile.get_hesitation_delay()
-        and is upper-bounded by MAX_HESITATION_DELAY before accumulation.
+        and is clamped to the safe 3.0–5.0 s range before accumulation.
         Returns 0.0 when delay is not permitted.
         """
         if not self.is_delay_permitted():
             return 0.0
         raw = self._persona.get_hesitation_delay()
-        clamped = min(raw, MAX_HESITATION_DELAY)
+        clamped = max(_MIN_THINKING_DELAY, min(raw, MAX_HESITATION_DELAY))
         return self._accumulate(clamped)
 
     # ── dispatcher ───────────────────────────────────────────────

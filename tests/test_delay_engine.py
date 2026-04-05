@@ -41,7 +41,7 @@ class TestThinkingDelay(_EngineSetup):
     def test_within_bounds(self):
         self.sm.transition("FILLING_FORM")
         d = self.engine.calculate_thinking_delay()
-        self.assertGreater(d, 0.0)
+        self.assertGreaterEqual(d, 3.0)
         self.assertLessEqual(d, MAX_HESITATION_DELAY)
 
     def test_zero_in_critical(self):
