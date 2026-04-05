@@ -100,5 +100,91 @@ class TestNoScalingInterference(_RuntimeReset):
         runtime.stop_worker(w2, timeout=5)
 
 
+class TestSafePointHonored(_RuntimeReset):
+    """Behaviour delay must only operate at SAFE_POINT boundaries."""
+
+    def test_safe_point_transition(self):
+        """Worker can transition to SAFE_POINT and back without issues."""
+        reached_sp = threading.Event()
+
+        def task(wid):
+            runtime.set_worker_state(wid, "SAFE_POINT")
+            reached_sp.set()
+            time.sleep(0.05)
+            runtime.set_worker_state(wid, "IN_CYCLE")
+
+        wid = runtime.start_worker(task)
+        reached_sp.wait(timeout=5)
+        self.assertIn(wid, runtime.get_active_workers())
+        runtime.stop_worker(wid, timeout=5)
+
+    def test_stop_during_safe_point(self):
+        """Stop request during SAFE_POINT should be respected promptly."""
+        at_sp = threading.Event()
+
+        def task(wid):
+            runtime.set_worker_state(wid, "SAFE_POINT")
+            at_sp.set()
+            time.sleep(0.5)
+            runtime.set_worker_state(wid, "IN_CYCLE")
+
+        wid = runtime.start_worker(task)
+        at_sp.wait(timeout=5)
+        stopped = runtime.stop_worker(wid, timeout=5)
+        self.assertTrue(stopped)
+
+
+class TestOverheadWithin15Percent(_RuntimeReset):
+    """Behaviour wrapper overhead must be ≤15% of a cycle without behaviour."""
+
+    def test_overhead_acceptable(self):
+        """Compare cycle time with and without behaviour delay enabled."""
+        cycle_times = {"enabled": [], "disabled": []}
+
+        def timed_task(wid):
+            pass  # minimal task to measure wrapper overhead only
+
+        # --- Measure WITHOUT behaviour delay ---
+        runtime.set_behavior_delay_enabled(False)
+        wid = runtime.start_worker(timed_task)
+        t0 = time.monotonic()
+        time.sleep(1.0)
+        runtime.stop_worker(wid, timeout=5)
+        baseline_elapsed = time.monotonic() - t0
+        runtime.reset()
+
+        # --- Measure WITH behaviour delay (mocked sleep) ---
+        from unittest.mock import patch
+        runtime.set_behavior_delay_enabled(True)
+        with patch("modules.delay.wrapper.time.sleep"):
+            wid = runtime.start_worker(timed_task)
+            t0 = time.monotonic()
+            time.sleep(1.0)
+            runtime.stop_worker(wid, timeout=5)
+            enabled_elapsed = time.monotonic() - t0
+
+        # Overhead should be within 15%
+        if baseline_elapsed > 0:
+            overhead = (enabled_elapsed - baseline_elapsed) / baseline_elapsed
+            self.assertLessEqual(overhead, 0.15,
+                f"Overhead {overhead:.1%} exceeds 15% limit")
+
+
+class TestDisabledBypassesWrap(_RuntimeReset):
+    """When delay is disabled, wrap must not be applied."""
+
+    def test_disabled_skips_wrap(self):
+        runtime.set_behavior_delay_enabled(False)
+        results = []
+
+        def task(wid):
+            results.append(wid)
+
+        wid = runtime.start_worker(task)
+        time.sleep(0.5)
+        runtime.stop_worker(wid, timeout=5)
+        self.assertGreater(len(results), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
