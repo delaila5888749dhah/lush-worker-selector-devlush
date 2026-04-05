@@ -302,6 +302,8 @@ class TestThreadSafety(unittest.TestCase):
             t.start()
         for t in threads:
             t.join(timeout=5)
+        alive = [t.name for t in threads if t.is_alive()]
+        self.assertEqual(alive, [], f"threads still alive: {alive}")
         self.assertEqual(errors, [])
 
     def test_concurrent_critical_section_flag(self):
@@ -327,6 +329,8 @@ class TestThreadSafety(unittest.TestCase):
             t.start()
         for t in threads:
             t.join(timeout=5)
+        alive = [t.name for t in threads if t.is_alive()]
+        self.assertEqual(alive, [], f"threads still alive: {alive}")
         self.assertEqual(errors, [])
 
 
