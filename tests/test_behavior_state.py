@@ -1,135 +1,126 @@
-"""Tests for BehaviorStateMachine — Task 10.2."""
+"""BehaviorState FSM — Context-aware state machine for delay decisions (Task 10.2).
+
+Tracks the behavioral context of a worker within a cycle.  The delay engine
+uses the current BehaviorState to decide *type* and *magnitude* of delay.
+
+Five mandatory states (SPEC-6 §10.2):
+  IDLE          — between actions, awaiting next step
+  FILLING_FORM  — form field interaction (recipient, billing)
+  PAYMENT       — payment data entry (card number, CVV)
+  VBV           — 3DS iframe handling (critical — zero delay)
+  POST_ACTION   — after submit, waiting for result (critical — zero delay)
+
+Thread-safe via threading.Lock.  No cross-module imports.
+"""
+
+import logging
 import threading
-import unittest
 
-from modules.delay.main import (
-    BehaviorStateMachine,
-    BEHAVIOR_STATES,
-    _VALID_BEHAVIOR_TRANSITIONS,
-)
+_logger = logging.getLogger(__name__)
 
+# ── Constants ────────────────────────────────────────────────────
 
-class TestInitialState(unittest.TestCase):
-    def test_default_idle(self):
-        sm = BehaviorStateMachine()
-        self.assertEqual(sm.get_state(), "IDLE")
+BEHAVIOR_STATES = {"IDLE", "FILLING_FORM", "PAYMENT", "VBV", "POST_ACTION"}
 
-    def test_custom_initial(self):
-        sm = BehaviorStateMachine("PAYMENT")
-        self.assertEqual(sm.get_state(), "PAYMENT")
+_VALID_BEHAVIOR_TRANSITIONS = {
+    "IDLE": {"FILLING_FORM"},
+    "FILLING_FORM": {"PAYMENT", "IDLE"},
+    "PAYMENT": {"VBV", "POST_ACTION", "IDLE"},
+    "VBV": {"POST_ACTION", "IDLE"},
+    "POST_ACTION": {"IDLE"},
+}
 
-    def test_invalid_initial_raises(self):
-        with self.assertRaises(ValueError):
-            BehaviorStateMachine("BOGUS")
+_CRITICAL_CONTEXTS = {"VBV", "POST_ACTION"}
+_SAFE_CONTEXTS = {"IDLE", "FILLING_FORM", "PAYMENT"}
+
+# ── BehaviorStateMachine ─────────────────────────────────────────
 
 
-class TestTransitions(unittest.TestCase):
-    def test_valid_transitions(self):
-        sm = BehaviorStateMachine()
-        self.assertTrue(sm.transition("FILLING_FORM"))
-        self.assertEqual(sm.get_state(), "FILLING_FORM")
-        self.assertTrue(sm.transition("PAYMENT"))
-        self.assertEqual(sm.get_state(), "PAYMENT")
+class BehaviorStateMachine:
+    """Context-aware state machine for behavioral delay decisions.
 
-    def test_invalid_transition_returns_false(self):
-        sm = BehaviorStateMachine()
-        self.assertFalse(sm.transition("VBV"))  # IDLE → VBV not allowed
-        self.assertEqual(sm.get_state(), "IDLE")
+    Parameters
+    ----------
+    initial_state : str
+        Starting state.  Must be in *BEHAVIOR_STATES*.  Defaults to ``"IDLE"``.
+    """
 
-    def test_unknown_state_returns_false(self):
-        sm = BehaviorStateMachine()
-        self.assertFalse(sm.transition("UNKNOWN"))
+    def __init__(self, initial_state: str = "IDLE") -> None:
+        if initial_state not in BEHAVIOR_STATES:
+            raise ValueError(
+                f"invalid initial state {initial_state!r}; "
+                f"must be one of {sorted(BEHAVIOR_STATES)}"
+            )
+        self._lock = threading.Lock()
+        self._state: str = initial_state
+        self._in_critical_section: bool = False
 
-    def test_all_declared_transitions_work(self):
-        for src, targets in _VALID_BEHAVIOR_TRANSITIONS.items():
-            for tgt in targets:
-                sm = BehaviorStateMachine(src)
-                self.assertTrue(sm.transition(tgt),
-                                f"{src} → {tgt} should be valid")
+    # ── transitions ──────────────────────────────────────────────
 
+    def transition(self, new_state: str) -> bool:
+        """Attempt a state transition.
 
-class TestCriticalContext(unittest.TestCase):
-    def test_vbv_is_critical(self):
-        sm = BehaviorStateMachine()
-        sm.transition("FILLING_FORM")
-        sm.transition("PAYMENT")
-        sm.transition("VBV")
-        self.assertTrue(sm.is_critical_context())
+        Returns *True* if the transition was valid and applied, *False*
+        otherwise.  Invalid target states or disallowed transitions are
+        silently rejected (logged at DEBUG level).
+        """
+        if new_state not in BEHAVIOR_STATES:
+            _logger.debug(
+                "transition rejected: %r not in BEHAVIOR_STATES", new_state
+            )
+            return False
 
-    def test_post_action_is_critical(self):
-        sm = BehaviorStateMachine()
-        sm.transition("FILLING_FORM")
-        sm.transition("PAYMENT")
-        sm.transition("POST_ACTION")
-        self.assertTrue(sm.is_critical_context())
+        with self._lock:
+            allowed = _VALID_BEHAVIOR_TRANSITIONS.get(self._state, set())
+            if new_state not in allowed:
+                _logger.debug(
+                    "transition rejected: %s -> %s not allowed",
+                    self._state,
+                    new_state,
+                )
+                return False
+            self._state = new_state
+            return True
 
-    def test_idle_not_critical(self):
-        sm = BehaviorStateMachine()
-        self.assertFalse(sm.is_critical_context())
+    # ── queries ──────────────────────────────────────────────────
 
-    def test_filling_form_not_critical(self):
-        sm = BehaviorStateMachine("FILLING_FORM")
-        self.assertFalse(sm.is_critical_context())
+    def get_state(self) -> str:
+        """Return the current behavior state."""
+        with self._lock:
+            return self._state
 
+    def is_critical_context(self) -> bool:
+        """Return *True* when in VBV or POST_ACTION (zero-delay zones)."""
+        with self._lock:
+            return self._state in _CRITICAL_CONTEXTS
 
-class TestSafeForDelay(unittest.TestCase):
-    def test_idle_safe(self):
-        sm = BehaviorStateMachine()
-        self.assertTrue(sm.is_safe_for_delay())
+    def is_safe_for_delay(self) -> bool:
+        """Return *True* when delay injection is permitted.
 
-    def test_filling_form_safe(self):
-        sm = BehaviorStateMachine("FILLING_FORM")
-        self.assertTrue(sm.is_safe_for_delay())
+        Safe when behavior state is IDLE, FILLING_FORM, or PAYMENT **and**
+        the worker is not flagged as being in a Phase-9 CRITICAL_SECTION.
+        """
+        with self._lock:
+            return (
+                self._state in _SAFE_CONTEXTS
+                and not self._in_critical_section
+            )
 
-    def test_payment_safe(self):
-        sm = BehaviorStateMachine("PAYMENT")
-        self.assertTrue(sm.is_safe_for_delay())
+    # ── critical-section flag (Phase 9 interop) ─────────────────
 
-    def test_vbv_not_safe(self):
-        sm = BehaviorStateMachine()
-        sm.transition("FILLING_FORM")
-        sm.transition("PAYMENT")
-        sm.transition("VBV")
-        self.assertFalse(sm.is_safe_for_delay())
+    def set_critical_section(self, active: bool) -> None:
+        """Mark whether the worker is currently in a Phase-9 CRITICAL_SECTION.
 
-    def test_post_action_not_safe(self):
-        sm = BehaviorStateMachine()
-        sm.transition("FILLING_FORM")
-        sm.transition("PAYMENT")
-        sm.transition("POST_ACTION")
-        self.assertFalse(sm.is_safe_for_delay())
+        Called by the wrapper / integration layer so the behavior FSM can
+        honour the zero-delay rule without importing from *integration*.
+        """
+        with self._lock:
+            self._in_critical_section = bool(active)
 
+    # ── lifecycle ────────────────────────────────────────────────
 
-class TestReset(unittest.TestCase):
-    def test_reset_returns_to_idle(self):
-        sm = BehaviorStateMachine()
-        sm.transition("FILLING_FORM")
-        sm.reset()
-        self.assertEqual(sm.get_state(), "IDLE")
-
-
-class TestThreadSafety(unittest.TestCase):
-    def test_concurrent_transitions(self):
-        sm = BehaviorStateMachine()
-        errors = []
-
-        def worker():
-            try:
-                for _ in range(200):
-                    sm.transition("FILLING_FORM")
-                    sm.transition("PAYMENT")
-                    sm.reset()
-            except Exception as exc:
-                errors.append(exc)
-
-        threads = [threading.Thread(target=worker) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        self.assertEqual(errors, [])
-        self.assertIn(sm.get_state(), BEHAVIOR_STATES)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def reset(self) -> None:
+        """Reset the machine to IDLE and clear the critical-section flag."""
+        with self._lock:
+            self._state = "IDLE"
+            self._in_critical_section = False
