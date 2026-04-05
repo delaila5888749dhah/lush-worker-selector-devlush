@@ -319,7 +319,7 @@ def stop(timeout=None):
     if stragglers:
         _logger.warning("Hard timeout: %d workers still running: %s", len(stragglers), stragglers)
         for wid in stragglers:
-            _log_event(wid, "stopping", "force_timeout")
+            _log_event(wid, "stopping", "hard_timeout")
         all_stopped = False
     with _lock:
         _state = "STOPPED"
