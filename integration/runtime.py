@@ -78,7 +78,8 @@ def _worker_fn(worker_id, task_fn):
                 _log_event(worker_id, "error", "task_failed", {"error": str(exc)})
                 break
             with _lock:
-                if worker_id in _worker_states and "IDLE" in _VALID_TRANSITIONS.get(_worker_states.get(worker_id, ""), set()):
+                current_state = _worker_states.get(worker_id)
+                if current_state is not None and "IDLE" in _VALID_TRANSITIONS.get(current_state, set()):
                     _transition_worker_state_locked(worker_id, "IDLE")
     except Exception as exc:
         _logger.error("Unexpected error in worker %s: %s", worker_id, exc, exc_info=True)
