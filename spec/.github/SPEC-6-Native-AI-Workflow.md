@@ -380,7 +380,7 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
 ### Guard 3.9 — Security Pipeline (4 cổng bắt buộc)
 Mọi PR phải vượt qua **tất cả 4 cổng** trước khi được phép Merge:
 
-| # | Cổng | Tiêu chí Pass | Hành động khi Fail |
+| # | Cổng | Tiêu chí Pass | Hành động khi Fail  |
 |---|------|---------------|---------------------|
 | 1 | **CodeQL Analysis** | Không có alert High/Critical | Copilot Autofix đề xuất sửa → Agent fix → push lại |
 | 2 | **Dependency Review** | Dependabot không phát hiện vulnerability High+ chưa xử lý | Tạo Dependabot PR riêng, merge trước khi tiếp tục |
@@ -468,7 +468,7 @@ Khi CI quá cứng nhắc gây nghẽn các thay đổi hợp lệ, sử dụng 
    ▼                                                             ││
 [Reviewer — GPT-5.4] ◄── Tự động qua PR Ruleset                  ││
    │                                                             ││
-   ├── APPROVED ──► [Human] ──► Merge ──► ✅ Done               ││
+   ├── APPROVED ──► [Human] ──► Merge ──► ✅ Done                ││
    │                                                             ││
    └── REQUEST_CHANGES ──► Auto-Fix Loop                         ││
           │                                                      ││
