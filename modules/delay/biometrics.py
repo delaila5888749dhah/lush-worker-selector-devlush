@@ -30,7 +30,7 @@ class BiometricProfile:
             raw = self._rnd.lognormvariate(-2.5, 0.4)
         return max(0.0, min(raw, _KEYSTROKE_MAX))
 
-    def generate_burst_pattern(self, total_chars: int) -> list:
+    def generate_burst_pattern(self, total_chars: int) -> list[float]:
         """Delay list for each character with burst rhythm."""
         delays: list[float] = []
         for i in range(total_chars):
@@ -42,7 +42,7 @@ class BiometricProfile:
                     delays.append(self._rnd.uniform(0.03, 0.08))
         return delays
 
-    def generate_4x4_pattern(self) -> list:
+    def generate_4x4_pattern(self) -> list[float]:
         """16 delay values for 16 card digits (4 fast → pause → repeat)."""
         delays: list[float] = []
         for group in range(4):
