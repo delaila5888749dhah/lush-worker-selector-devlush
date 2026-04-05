@@ -384,21 +384,23 @@ class TestWorkerFnTransitions(SafePointResetMixin, unittest.TestCase):
 
     def test_worker_returns_to_idle_after_task(self):
         """Worker returns to IDLE after completing task_fn cycle."""
-        completed = threading.Event()
-        cycle_done = threading.Event()
+        reached_idle = threading.Event()
 
         def task(wid):
-            if not completed.is_set():
-                completed.set()
-                # Allow a brief moment for the state transition back
-                time.sleep(0.05)
+            pass  # complete immediately
 
         wid = start_worker(task)
-        completed.wait(timeout=2)
-        # Give time for worker to transition back to IDLE
-        time.sleep(0.3)
-        # Worker may have started another cycle or be in IDLE
+        # Poll until IDLE or worker exits
+        for _ in range(50):
+            try:
+                if get_worker_state(wid) == "IDLE":
+                    reached_idle.set()
+                    break
+            except ValueError:
+                break
+            time.sleep(0.02)
         stop_worker(wid, timeout=CLEANUP_TIMEOUT)
+        self.assertTrue(reached_idle.is_set(), "Worker did not return to IDLE after task completion")
 
 
 # ── Cleanup paths ────────────────────────────────────────────────

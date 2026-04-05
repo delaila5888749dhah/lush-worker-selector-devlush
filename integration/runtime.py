@@ -79,8 +79,12 @@ def _worker_fn(worker_id, task_fn):
                 break
             with _lock:
                 current_state = _worker_states.get(worker_id)
-                if current_state is not None and "IDLE" in _VALID_TRANSITIONS.get(current_state, set()):
-                    _transition_worker_state_locked(worker_id, "IDLE")
+                if current_state is not None:
+                    if current_state in ("SAFE_POINT", "CRITICAL_SECTION"):
+                        _transition_worker_state_locked(worker_id, "IN_CYCLE")
+                        current_state = "IN_CYCLE"
+                    if current_state == "IN_CYCLE":
+                        _transition_worker_state_locked(worker_id, "IDLE")
     except Exception as exc:
         _logger.error("Unexpected error in worker %s: %s", worker_id, exc, exc_info=True)
     finally:
