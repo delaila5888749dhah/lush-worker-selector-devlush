@@ -218,14 +218,27 @@ def _runtime_loop(task_fn, interval):
             step_index = rollout.get_current_step_index()
             max_index = len(rollout.SCALE_STEPS) - 1
             decision, decision_reasons = behavior.evaluate(metrics, step_index, max_index)
-            if decision == behavior.SCALE_DOWN:
-                target = rollout.force_rollback(reason="; ".join(decision_reasons))
-                action = "rollback"
-            elif decision == behavior.SCALE_UP:
-                target, action, _ = rollout.try_scale_up()
-            else:
+            if decision == behavior.HOLD:
                 target = rollout.get_current_workers()
                 action = "hold"
+            else:
+                # SCALE_UP or SCALE_DOWN requires a worker count change.
+                # Check safety BEFORE mutating rollout state so that
+                # _current_step_index never drifts from the actual worker
+                # count when scaling is deferred.
+                with _lock:
+                    current_count = len(_workers)
+                    workers_safe = _is_safe_locked()
+                if not workers_safe:
+                    _log_event("runtime", "scaling_deferred", "unsafe_state",
+                               {"target": decision, "current": current_count})
+                    target = current_count
+                    action = "hold_deferred"
+                elif decision == behavior.SCALE_DOWN:
+                    target = rollout.force_rollback(reason="; ".join(decision_reasons))
+                    action = "rollback"
+                else:
+                    target, action, _ = rollout.try_scale_up()
             with _lock:
                 if action == "rollback":
                     _consecutive_rollbacks += 1
@@ -233,13 +246,7 @@ def _runtime_loop(task_fn, interval):
                         _log_event("runtime", "warning", "consecutive_rollbacks", {"count": _consecutive_rollbacks})
                 elif action == "scaled_up":
                     _consecutive_rollbacks = 0
-            with _lock:
-                current_count = len(_workers)
-                workers_safe = _is_safe_locked()
-            if target != current_count and not workers_safe:
-                _log_event("runtime", "scaling_deferred", "unsafe_state", {"target": target, "current": current_count})
-            else:
-                _apply_scale(target, task_fn)
+            _apply_scale(target, task_fn)
             _log_event("runtime", action, "loop_tick", {"target": target, "metrics": metrics, "decision": decision})
         except Exception as exc:
             _log_event("runtime", "error", "loop_error", {"error": str(exc)})

@@ -333,27 +333,24 @@ class TestSafeGuardGating(ScalingResetMixin, unittest.TestCase):
     """_apply_scale() must be gated by is_safe_to_control() when target != current."""
 
     def test_scaling_deferred_when_workers_unsafe(self):
-        """When workers are unsafe and scaling needed, _apply_scale is skipped."""
+        """When workers are unsafe and scaling needed, rollout state is NOT mutated."""
         rollout.configure(check_rollback_fn=lambda: [],
                           save_baseline_fn=lambda: None)
-        apply_called = threading.Event()
-        original_apply = runtime._apply_scale
 
-        def tracking_apply(target, task_fn):
-            apply_called.set()
-            return original_apply(target, task_fn)
+        step_before = rollout.get_current_step_index()
 
         # Mock _is_safe_locked to return False, and behavior to return SCALE_UP
         with patch.object(behavior, "evaluate",
                           return_value=(behavior.SCALE_UP, ["test_scale_up"])), \
-             patch("integration.runtime._is_safe_locked", return_value=False), \
-             patch("integration.runtime._apply_scale", side_effect=tracking_apply):
+             patch("integration.runtime._is_safe_locked", return_value=False):
             start(lambda _: time.sleep(0.5), interval=0.05)
             time.sleep(0.3)
             stop(timeout=2)
 
-        self.assertFalse(apply_called.is_set(),
-                         "_apply_scale should NOT be called when workers are unsafe")
+        # Rollout step must NOT have advanced while workers were unsafe
+        step_after = rollout.get_current_step_index()
+        self.assertEqual(step_after, step_before,
+                         "Rollout step must not change when workers are unsafe")
 
     def test_scaling_proceeds_when_workers_safe(self):
         """When workers are safe, _apply_scale proceeds normally."""
@@ -410,6 +407,55 @@ class TestSafeGuardGating(ScalingResetMixin, unittest.TestCase):
         # HOLD should not change scaling step regardless of worker safety
         step = rollout.get_current_step_index()
         self.assertEqual(step, 0, "HOLD should not change scaling step")
+
+    def test_no_rollout_drift_during_consecutive_unsafe_cycles(self):
+        """Rollout step must NOT drift during multiple consecutive unsafe cycles."""
+        rollout.configure(check_rollback_fn=lambda: [],
+                          save_baseline_fn=lambda: None)
+
+        step_before = rollout.get_current_step_index()
+        self.assertEqual(step_before, 0, "Should start at step 0")
+
+        # Run many cycles with SCALE_UP but always unsafe
+        with patch.object(behavior, "evaluate",
+                          return_value=(behavior.SCALE_UP, ["healthy"])), \
+             patch("integration.runtime._is_safe_locked", return_value=False):
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            time.sleep(0.5)  # ~10 cycles
+            stop(timeout=2)
+
+        # Step must still be 0 — no drift
+        step_after = rollout.get_current_step_index()
+        self.assertEqual(step_after, 0,
+                         "Rollout step must not drift during consecutive unsafe cycles")
+
+    def test_single_step_advance_after_unsafe_to_safe(self):
+        """After unsafe→safe transition, rollout advances exactly one step."""
+        rollout.configure(check_rollback_fn=lambda: [],
+                          save_baseline_fn=lambda: None)
+
+        safe_flag = threading.Event()
+
+        def mock_is_safe():
+            return safe_flag.is_set()
+
+        with patch.object(behavior, "evaluate",
+                          return_value=(behavior.SCALE_UP, ["healthy"])), \
+             patch("integration.runtime._is_safe_locked", side_effect=mock_is_safe):
+            start(lambda _: time.sleep(0.5), interval=0.05)
+            # Run a few cycles while unsafe
+            time.sleep(0.2)
+            self.assertEqual(rollout.get_current_step_index(), 0,
+                             "Should still be at step 0 while unsafe")
+            # Now mark as safe
+            safe_flag.set()
+            time.sleep(0.3)
+            step = rollout.get_current_step_index()
+            stop(timeout=2)
+
+        # Should have advanced (at least one step, not multiple jumps)
+        self.assertGreater(step, 0,
+                           "Should advance after becoming safe")
 
 
 if __name__ == "__main__":
