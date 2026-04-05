@@ -169,6 +169,17 @@ def get_all_worker_states():
     """Return a snapshot dict of all worker execution states."""
     with _lock:
         return dict(_worker_states)
+def _is_safe_locked():
+    """Check worker safety while _lock is already held.
+
+    Returns True only when every registered worker is IDLE or SAFE_POINT.
+    Missing state entries → unsafe.  No workers → safe (vacuous truth).
+    """
+    for wid in _workers:
+        ws = _worker_states.get(wid)
+        if ws is None or ws not in ("IDLE", "SAFE_POINT"):
+            return False
+    return True
 def is_safe_to_control():
     """Return True only when all tracked workers are IDLE or SAFE_POINT.
 
@@ -176,11 +187,7 @@ def is_safe_to_control():
     Returns True when there are no workers (vacuous truth for empty set).
     """
     with _lock:
-        for wid in _workers:
-            ws = _worker_states.get(wid)
-            if ws is None or ws not in ("IDLE", "SAFE_POINT"):
-                return False
-        return True
+        return _is_safe_locked()
 def _apply_scale(target_count, task_fn):
     global _pending_restarts
     with _lock: current_ids = list(_workers.keys())
@@ -211,14 +218,27 @@ def _runtime_loop(task_fn, interval):
             step_index = rollout.get_current_step_index()
             max_index = len(rollout.SCALE_STEPS) - 1
             decision, decision_reasons = behavior.evaluate(metrics, step_index, max_index)
-            if decision == behavior.SCALE_DOWN:
-                target = rollout.force_rollback(reason="; ".join(decision_reasons))
-                action = "rollback"
-            elif decision == behavior.SCALE_UP:
-                target, action, _ = rollout.try_scale_up()
-            else:
+            if decision == behavior.HOLD:
                 target = rollout.get_current_workers()
                 action = "hold"
+            else:
+                # SCALE_UP or SCALE_DOWN requires a worker count change.
+                # Check safety BEFORE mutating rollout state so that
+                # _current_step_index never drifts from the actual worker
+                # count when scaling is deferred.
+                with _lock:
+                    current_count = len(_workers)
+                    workers_safe = _is_safe_locked()
+                if not workers_safe:
+                    _log_event("runtime", "scaling_deferred", "unsafe_state",
+                               {"target": decision, "current": current_count})
+                    target = current_count
+                    action = "hold_deferred"
+                elif decision == behavior.SCALE_DOWN:
+                    target = rollout.force_rollback(reason="; ".join(decision_reasons))
+                    action = "rollback"
+                else:
+                    target, action, _ = rollout.try_scale_up()
             with _lock:
                 if action == "rollback":
                     _consecutive_rollbacks += 1
