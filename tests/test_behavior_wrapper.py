@@ -27,7 +27,7 @@ class TestWrapAddsDelay(unittest.TestCase):
     def test_measurable_delay(self):
         persona = PersonaProfile(42)
         wrapped = wrap(_dummy_task, persona)
-        with patch("modules.delay.main.time.sleep") as mock_sleep:
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
             wrapped("w-1")
             mock_sleep.assert_called_once()
             delay_arg = mock_sleep.call_args[0][0]
