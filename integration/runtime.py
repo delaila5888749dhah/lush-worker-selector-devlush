@@ -85,6 +85,9 @@ def _worker_fn(worker_id, task_fn):
                         current_state = "IN_CYCLE"
                     if current_state == "IN_CYCLE":
                         _transition_worker_state_locked(worker_id, "IDLE")
+                # Safe-point check: break early if stop was requested during cycle
+                if _should_stop_worker(worker_id):
+                    break
     except Exception as exc:
         _logger.error("Unexpected error in worker %s: %s", worker_id, exc, exc_info=True)
     finally:
@@ -110,22 +113,33 @@ def start_worker(task_fn):
         raise
     return wid
 def stop_worker(worker_id, timeout=None):
-    """Remove a worker from the active set and join its thread."""
+    """Remove a worker from the active set and join its thread.
+
+    Respects worker execution boundaries:
+    - IDLE / SAFE_POINT: stop immediately (current behaviour).
+    - IN_CYCLE: mark for stop; _worker_fn exits at the next safe point.
+    - CRITICAL_SECTION: mark for stop; _worker_fn completes the critical
+      operation then exits at the next safe point.  The thread join waits
+      for the worker to finish the CS naturally.
+    """
+    timeout = _WORKER_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + timeout
     with _lock:
         thread = _workers.get(worker_id)
         if thread is None:
             return False
+        worker_state = _worker_states.get(worker_id)
         _stop_requests.add(worker_id)
+    if worker_state == "CRITICAL_SECTION":
+        _log_event(worker_id, "stopping", "awaiting_critical_section")
     if thread is threading.current_thread():
         raise RuntimeError("cannot join current thread")
+    remaining = max(0, deadline - time.monotonic())
     if thread.ident is None:
-        # Thread registered but not yet started; is_alive() will be False below,
-        # so cleanup proceeds normally. _worker_fn's finally block handles the
-        # eventual start → immediate stop via _should_stop_worker.
         _logger.debug("join() on not-yet-started thread for %s; will self-cleanup via _worker_fn", worker_id)
     else:
         try:
-            thread.join(timeout=_WORKER_TIMEOUT if timeout is None else timeout)
+            thread.join(timeout=remaining)
         except RuntimeError as exc:
             _logger.warning("RuntimeError joining worker %s: %s", worker_id, exc, exc_info=True)
             return False
@@ -270,7 +284,12 @@ def start(task_fn, interval=None):
     _log_event("runtime", "started", "runtime_start")
     return True
 def stop(timeout=None):
-    """Stop the runtime loop and all active workers."""
+    """Stop the runtime loop and all active workers.
+
+    Sets state to STOPPING so workers check _should_stop_worker() at safe
+    points.  After the graceful period, a hard timeout forces cleanup of
+    any workers that did not reach a safe point in time.
+    """
     global _state, _loop_thread
     timeout = _WORKER_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + timeout
@@ -290,6 +309,18 @@ def stop(timeout=None):
     for wid in wids:
         if not stop_worker(wid, timeout=max(0, deadline - time.monotonic())):
             all_stopped = False
+    # Hard timeout: force-cleanup any workers still registered after graceful stop
+    with _lock:
+        stragglers = list(_workers.keys())
+    if stragglers:
+        _logger.warning("Hard timeout: force-cleaning %d remaining workers: %s", len(stragglers), stragglers)
+        for wid in stragglers:
+            with _lock:
+                _workers.pop(wid, None)
+                _worker_states.pop(wid, None)
+                _stop_requests.discard(wid)
+            _log_event(wid, "stopped", "force_stopped")
+        all_stopped = False
     with _lock:
         _state = "STOPPED"
     if not loop_stopped or not all_stopped:
