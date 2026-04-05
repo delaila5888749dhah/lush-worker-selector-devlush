@@ -1,5 +1,6 @@
-"""Behavior decision engine — rule-based scaling decisions.
+"""Behavior decision engine — rule-based scaling decisions (Task 9.2).
 
+Pure module: only stdlib imports (logging, threading, time).
 Thread-safe via threading.Lock.  No cross-module imports.
 """
 import logging
@@ -19,13 +20,15 @@ SUCCESS_RATE_MIN = 0.70           # 70% — do not scale up below this
 RESTART_RATE_THRESHOLD = 3        # >3 restarts/hour triggers scale down
 COOLDOWN_SECONDS = 30             # minimum seconds between scaling changes
 SUCCESS_RATE_DROP_THRESHOLD = 0.10  # 10% drop from baseline triggers scale down
+_HISTORY_LIMIT = 100              # max entries in decision ring buffer
 _last_decision_time = 0.0
 _decision_history = []
 
 
 def _in_cooldown(now=None):
     """Return True if a cooldown period is active."""
-    return ((now or time.time()) - _last_decision_time) < COOLDOWN_SECONDS
+    ts = time.time() if now is None else now
+    return (ts - _last_decision_time) < COOLDOWN_SECONDS
 
 
 def evaluate(metrics, current_step_index, max_step_index):
@@ -120,8 +123,8 @@ def evaluate(metrics, current_step_index, max_step_index):
             },
         })
         # Keep history bounded
-        if len(_decision_history) > 100:
-            _decision_history[:] = _decision_history[-100:]
+        if len(_decision_history) > _HISTORY_LIMIT:
+            _decision_history[:] = _decision_history[-_HISTORY_LIMIT:]
 
         _logger.info(
             "Behavior decision: %s — %s", action, "; ".join(reasons)
