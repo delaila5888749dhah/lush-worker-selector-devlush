@@ -7,7 +7,7 @@ import zlib
 from modules.behavior import main as behavior
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
-from modules.delay.main import wrap as _behavior_wrap
+from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
 _logger = logging.getLogger(__name__)
 ALLOWED_STATES = {"INIT", "RUNNING", "STOPPING", "STOPPED"}
@@ -57,15 +57,12 @@ def _transition_worker_state_locked(worker_id, new_state):
     if new_state not in _VALID_TRANSITIONS.get(current, set()):
         raise ValueError(f"Invalid worker state transition: {current} -> {new_state} for {worker_id}")
     _worker_states[worker_id] = new_state
-def _worker_fn(worker_id, task_fn):
+def _worker_fn(worker_id, task_fn, persona):
     global _pending_restarts
-    # Generate a deterministic persona from the worker id counter
     with _lock:
         delay_enabled = _behavior_delay_enabled
-    if delay_enabled:
-        _persona_seed = zlib.crc32(worker_id.encode()) & 0xFFFFFFFF
-        _persona = PersonaProfile(_persona_seed)
-        wrapped_task = _behavior_wrap(task_fn, _persona)
+    if delay_enabled and persona is not None:
+        wrapped_task = _behavior_wrap(task_fn, persona)
     else:
         wrapped_task = task_fn
     try:
@@ -118,7 +115,10 @@ def start_worker(task_fn):
     with _lock:
         _worker_counter += 1
         wid = f"worker-{_worker_counter}"
-        t = threading.Thread(target=_worker_fn, args=(wid, task_fn), daemon=True)
+        # Generate a deterministic persona seed from the worker id
+        persona_seed = zlib.crc32(wid.encode()) & 0xFFFFFFFF
+        persona = PersonaProfile(persona_seed)
+        t = threading.Thread(target=_worker_fn, args=(wid, task_fn, persona), daemon=True)
         _workers[wid] = t
         _worker_states[wid] = "IDLE"
     try:
