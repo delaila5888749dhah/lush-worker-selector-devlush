@@ -310,17 +310,16 @@ def stop(timeout=None):
     for wid in wids:
         if not stop_worker(wid, timeout=max(0, deadline - time.monotonic())):
             all_stopped = False
-    # Hard timeout: force-cleanup any workers still registered after graceful stop
+    # Hard timeout: log any workers still registered after graceful stop.
+    # Stragglers are NOT removed from _workers/_worker_states so that their
+    # still-running threads can call set_worker_state() without ValueError.
+    # _worker_fn's finally block cleans them up when threads eventually exit.
     with _lock:
         stragglers = list(_workers.keys())
     if stragglers:
-        _logger.warning("Hard timeout: force-cleaning %d remaining workers: %s", len(stragglers), stragglers)
+        _logger.warning("Hard timeout: %d workers still running: %s", len(stragglers), stragglers)
         for wid in stragglers:
-            with _lock:
-                _workers.pop(wid, None)
-                _worker_states.pop(wid, None)
-                _stop_requests.discard(wid)
-            _log_event(wid, "stopped", "force_stopped")
+            _log_event(wid, "stopping", "force_timeout")
         all_stopped = False
     with _lock:
         _state = "STOPPED"

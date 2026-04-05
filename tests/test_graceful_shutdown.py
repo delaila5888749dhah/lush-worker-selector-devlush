@@ -197,9 +197,14 @@ class TestWorkerFnSafePointCheck(GracefulShutdownResetMixin, unittest.TestCase):
         with runtime._lock:
             runtime._stop_requests.add(wid)
         proceed.set()
-        time.sleep(0.3)
+        deadline = time.monotonic() + CLEANUP_TIMEOUT
+        while time.monotonic() < deadline:
+            if wid not in get_all_worker_states():
+                break
+            time.sleep(0.01)
         # Worker should have stopped after 1 cycle (the safe-point check
         # after task completion catches the stop request)
+        self.assertNotIn(wid, get_all_worker_states())
         self.assertEqual(len(cycle_count), 1)
 
 
@@ -243,7 +248,8 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
     """stop() force-cleans straggler workers after hard timeout."""
 
     def test_hard_timeout_cleans_stuck_workers(self):
-        """Workers that don't stop within timeout are force-cleaned."""
+        """Workers that don't stop within timeout are logged but left registered
+        so their threads can still call set_worker_state() safely."""
         runtime._state = "RUNNING"
 
         def stuck_task(wid):
@@ -254,11 +260,9 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
         time.sleep(0.1)  # let task enter CRITICAL_SECTION
 
         result = runtime.stop(timeout=0.5)
-        # Should have force-cleaned
+        # Incomplete shutdown — stragglers still running
         self.assertFalse(result)
         self.assertEqual(runtime.get_state(), "STOPPED")
-        # All workers should be cleaned up
-        self.assertEqual(get_all_worker_states(), {})
 
 
 # ── stop_worker: edge cases ──────────────────────────────────────
@@ -308,9 +312,13 @@ class TestStopWorkerEdgeCases(GracefulShutdownResetMixin, unittest.TestCase):
             proceed.set()
 
         threading.Thread(target=release, daemon=True).start()
-        # Should succeed; no assertion on log content, just no crash
-        result = stop_worker(wid, timeout=CLEANUP_TIMEOUT)
+        with self.assertLogs("integration.runtime", level="INFO") as cm:
+            result = stop_worker(wid, timeout=CLEANUP_TIMEOUT)
         self.assertTrue(result)
+        self.assertTrue(
+            any("awaiting_critical_section" in msg for msg in cm.output),
+            f"Expected 'awaiting_critical_section' in logs, got: {cm.output}",
+        )
 
 
 if __name__ == "__main__":
