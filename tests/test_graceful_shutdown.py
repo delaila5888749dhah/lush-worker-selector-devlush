@@ -231,7 +231,7 @@ class TestStopSetsStoppingState(GracefulShutdownResetMixin, unittest.TestCase):
         wid = start_worker(task)
         time.sleep(0.1)  # let first cycle start
         slow_barrier.set()
-        result = runtime.stop(timeout=CLEANUP_TIMEOUT)
+        runtime.stop(timeout=CLEANUP_TIMEOUT)
         # Worker should have exited
         self.assertEqual(get_all_worker_states(), {})
 

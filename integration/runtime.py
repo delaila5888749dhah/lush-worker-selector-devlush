@@ -136,6 +136,7 @@ def stop_worker(worker_id, timeout=None):
         raise RuntimeError("cannot join current thread")
     remaining = max(0, deadline - time.monotonic())
     if thread.ident is None:
+        # Thread not yet started; _worker_fn will self-cleanup via _should_stop_worker.
         _logger.debug("join() on not-yet-started thread for %s; will self-cleanup via _worker_fn", worker_id)
     else:
         try:
