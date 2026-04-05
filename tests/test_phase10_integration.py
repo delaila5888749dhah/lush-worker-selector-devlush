@@ -49,6 +49,113 @@ class TestFullPipeline(unittest.TestCase):
         for d in noisy:
             self.assertGreaterEqual(d, 0.0)
 
+    def test_full_cycle_transitions(self):
+        """IDLE → FILLING_FORM → PAYMENT → VBV → POST_ACTION → IDLE."""
+        p = PersonaProfile(103)
+        sm = BehaviorStateMachine()
+        e = DelayEngine(p, sm)
+
+        self.assertTrue(e.is_delay_permitted())
+        sm.transition("FILLING_FORM")
+        d1 = e.calculate_typing_delay(0)
+        self.assertGreater(d1, 0.0)
+
+        sm.transition("PAYMENT")
+        d2 = e.calculate_typing_delay(1)
+        self.assertGreater(d2, 0.0)
+
+        sm.transition("VBV")
+        self.assertEqual(e.calculate_typing_delay(0), 0.0)
+
+        sm.transition("POST_ACTION")
+        self.assertEqual(e.calculate_delay("thinking"), 0.0)
+
+        sm.transition("IDLE")
+        self.assertTrue(e.is_delay_permitted())
+
+    def test_all_delay_types_in_single_cycle(self):
+        """Exercise typing, click, and thinking in one step."""
+        p = PersonaProfile(104)
+        sm = BehaviorStateMachine()
+        e = DelayEngine(p, sm)
+        sm.transition("FILLING_FORM")
+
+        d_type = e.calculate_delay("typing")
+        d_click = e.calculate_delay("click")
+        d_think = e.calculate_delay("thinking")
+
+        self.assertGreater(d_type, 0.0)
+        self.assertEqual(d_click, 0.0)
+        self.assertGreaterEqual(d_think, 0.0)
+        self.assertLessEqual(e.get_step_accumulated_delay(), MAX_STEP_DELAY)
+
+
+class TestCriticalSectionIntegration(unittest.TestCase):
+    """Critical section flag integrates correctly with engine."""
+
+    def test_critical_section_blocks_engine(self):
+        p = PersonaProfile(110)
+        sm = BehaviorStateMachine()
+        e = DelayEngine(p, sm)
+        sm.transition("FILLING_FORM")
+
+        self.assertTrue(e.is_delay_permitted())
+        sm.set_critical_section(True)
+        self.assertEqual(e.calculate_typing_delay(0), 0.0)
+        self.assertEqual(e.calculate_thinking_delay(), 0.0)
+
+        sm.set_critical_section(False)
+        self.assertGreater(e.calculate_typing_delay(0), 0.0)
+
+    def test_reset_clears_critical_flag(self):
+        p = PersonaProfile(111)
+        sm = BehaviorStateMachine()
+        e = DelayEngine(p, sm)
+        sm.transition("FILLING_FORM")
+        sm.set_critical_section(True)
+        self.assertFalse(e.is_delay_permitted())
+        sm.reset()
+        self.assertTrue(e.is_delay_permitted())
+
+
+class TestEngineResetBetweenCycles(unittest.TestCase):
+    """Accumulator resets correctly between cycles."""
+
+    def test_accumulator_resets(self):
+        p = PersonaProfile(120)
+        sm = BehaviorStateMachine()
+        e = DelayEngine(p, sm)
+        sm.transition("FILLING_FORM")
+
+        for gi in range(4):
+            e.calculate_typing_delay(gi)
+        first_accum = e.get_step_accumulated_delay()
+        self.assertGreater(first_accum, 0.0)
+
+        e.reset_step_accumulator()
+        self.assertEqual(e.get_step_accumulated_delay(), 0.0)
+
+        e.calculate_typing_delay(0)
+        self.assertGreater(e.get_step_accumulated_delay(), 0.0)
+        self.assertLess(e.get_step_accumulated_delay(), first_accum)
+
+
+class TestTemporalBiometricCombined(unittest.TestCase):
+    """Temporal + biometric applied together."""
+
+    def test_temporal_then_biometric_noise(self):
+        p = PersonaProfile(130)
+        sm = BehaviorStateMachine()
+        e = DelayEngine(p, sm)
+        tm = TemporalModel(p)
+        bio = BiometricProfile(p)
+        sm.transition("FILLING_FORM")
+
+        raw = e.calculate_typing_delay(0)
+        modified = tm.apply_temporal_modifier(raw, "typing")
+        noisy = bio.apply_noise(modified)
+        self.assertGreaterEqual(noisy, 0.0)
+
 
 class TestWrapperEndToEnd(unittest.TestCase):
     def test_wrapped_task_returns_correctly(self):
