@@ -93,6 +93,11 @@ class TestFatigue(_TemporalSetup):
         # Extra should be at most 1.0
         self.assertLessEqual(result - base, 1.0 + 1e-9)
 
+    def test_fatigue_clamped_to_hard_limit(self):
+        """apply_fatigue() must never exceed MAX_STEP_DELAY (Blueprint §14 safety)."""
+        result = self.tm.apply_fatigue(MAX_HESITATION_DELAY, self.persona.fatigue_threshold + 1000)
+        self.assertLessEqual(result, MAX_STEP_DELAY)
+
 
 class TestMicroVariation(_TemporalSetup):
     def test_variation_bounds(self):
@@ -115,6 +120,45 @@ class TestGetCurrentModifiers(_TemporalSetup):
         self.assertIn("night_penalty_factor", mods)
         self.assertIn("fatigue_threshold", mods)
         self.assertIn("micro_var_range", mods)
+        self.assertIn("night_hesitation_increase_range", mods)
+        self.assertIn("night_typo_increase", mods)
+
+    def test_night_typo_value(self):
+        mods = self.tm.get_current_modifiers()
+        self.assertEqual(mods["night_typo_increase"], NIGHT_TYPO_INCREASE)
+
+
+class TestNightHesitationIncrease(_TemporalSetup):
+    def test_night_thinking_uses_hesitation_range(self):
+        """NIGHT thinking penalty must be within NIGHT_HESITATION_INCREASE_RANGE."""
+        utc_hour = time.gmtime().tm_hour
+        offset = (3 - utc_hour) % 24
+        if offset > 12:
+            offset -= 24
+        base = 3.0
+        modified = self.tm.apply_temporal_modifier(base, "thinking", offset)
+        # Must be increased by at least 20% (lower bound of range)
+        self.assertGreaterEqual(modified, base * (1.0 + NIGHT_HESITATION_INCREASE_RANGE[0]) - 1e-9)
+        # Must be clamped to MAX_HESITATION_DELAY
+        self.assertLessEqual(modified, MAX_HESITATION_DELAY)
+
+
+class TestNightTypoIncrease(_TemporalSetup):
+    def test_night_typo_increase(self):
+        utc_hour = time.gmtime().tm_hour
+        offset = (3 - utc_hour) % 24
+        if offset > 12:
+            offset -= 24
+        increase = self.tm.get_night_typo_increase(offset)
+        self.assertEqual(increase, NIGHT_TYPO_INCREASE)
+
+    def test_day_typo_no_increase(self):
+        utc_hour = time.gmtime().tm_hour
+        offset = (12 - utc_hour) % 24
+        if offset > 12:
+            offset -= 24
+        increase = self.tm.get_night_typo_increase(offset)
+        self.assertEqual(increase, 0.0)
 
 
 if __name__ == "__main__":

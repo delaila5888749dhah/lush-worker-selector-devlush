@@ -40,9 +40,19 @@ class TemporalModel:
     def apply_temporal_modifier(
         self, base_delay: float, action_type: str, utc_offset_hours: int = 0
     ) -> float:
-        """Apply day/night scaling to *base_delay*, clamped by action type."""
+        """Apply day/night scaling to *base_delay*, clamped by action type.
+
+        NIGHT mode applies different penalties per action type:
+        - typing: slowed by ``night_penalty_factor`` (15–30%, Blueprint §14)
+        - thinking: increased by ``NIGHT_HESITATION_INCREASE_RANGE`` (20–40%)
+        """
         if self.get_time_state(utc_offset_hours) == "NIGHT":
-            modified = base_delay * (1.0 + self._persona.night_penalty_factor)
+            if action_type == "thinking":
+                with self._rnd_lock:
+                    factor = self._rnd.uniform(*NIGHT_HESITATION_INCREASE_RANGE)
+                modified = base_delay * (1.0 + factor)
+            else:
+                modified = base_delay * (1.0 + self._persona.night_penalty_factor)
         else:
             modified = base_delay
         if action_type == "typing":
@@ -52,14 +62,14 @@ class TemporalModel:
         return min(modified, MAX_STEP_DELAY)
 
     def apply_fatigue(self, base_delay: float, cycle_count: int) -> float:
-        """Increase delay after fatigue threshold cycles."""
+        """Increase delay after fatigue threshold cycles, clamped to hard limit."""
         if cycle_count <= self._persona.fatigue_threshold:
             return base_delay
         extra = (cycle_count - self._persona.fatigue_threshold) * 0.05
-        return base_delay + min(extra, 1.0)
+        return min(base_delay + min(extra, 1.0), MAX_STEP_DELAY)
 
     def apply_micro_variation(self, base_delay: float) -> float:
-        """Add ±5–10% noise to *base_delay*."""
+        """Add ±10% noise to *base_delay*."""
         with self._rnd_lock:
             return base_delay * self._rnd.uniform(0.90, 1.10)
 
@@ -67,6 +77,17 @@ class TemporalModel:
         """Return a dict describing the current modifier configuration."""
         return {
             "night_penalty_factor": self._persona.night_penalty_factor,
+            "night_hesitation_increase_range": NIGHT_HESITATION_INCREASE_RANGE,
+            "night_typo_increase": NIGHT_TYPO_INCREASE,
             "fatigue_threshold": self._persona.fatigue_threshold,
             "micro_var_range": (0.90, 1.10),
         }
+
+    def get_night_typo_increase(self, utc_offset_hours: int = 0) -> float:
+        """Return extra typo probability during NIGHT, 0.0 during DAY.
+
+        Blueprint §14: NIGHT increases typo rate by 1–2% absolute.
+        """
+        if self.get_time_state(utc_offset_hours) == "NIGHT":
+            return NIGHT_TYPO_INCREASE
+        return 0.0
