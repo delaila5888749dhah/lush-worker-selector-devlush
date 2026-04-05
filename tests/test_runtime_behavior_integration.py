@@ -27,7 +27,7 @@ class TestWrapperApplied(_RuntimeReset):
             results.append(wid)
 
         wid = runtime.start_worker(task)
-        time.sleep(3.0)  # allow at least one cycle + max behaviour delay
+        time.sleep(3.0)  # allow at least one cycle + max behavior delay
         runtime.stop_worker(wid, timeout=5)
         self.assertGreater(len(results), 0)
 

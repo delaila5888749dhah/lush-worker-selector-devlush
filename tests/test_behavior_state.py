@@ -313,9 +313,11 @@ class TestThreadSafety(unittest.TestCase):
                 barrier.wait(timeout=2)
                 for _ in range(100):
                     if use_vbv:
-                        sm.transition("FILLING_FORM")
-                        sm.transition("PAYMENT")
-                        sm.transition("VBV")
+                        ok = sm.transition("FILLING_FORM")
+                        if ok:
+                            ok = sm.transition("PAYMENT")
+                        if ok:
+                            sm.transition("VBV")
                     # is_safe_for_delay must not raise
                     sm.is_safe_for_delay()
                     sm.reset()
