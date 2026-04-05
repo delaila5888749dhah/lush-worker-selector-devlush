@@ -20,7 +20,7 @@ DAY_START: int = 6
 DAY_END: int = 21
 NIGHT_SPEED_PENALTY_RANGE: tuple = (0.15, 0.30)
 NIGHT_HESITATION_INCREASE_RANGE: tuple = (0.20, 0.40)
-NIGHT_TYPO_INCREASE: float = 0.02
+NIGHT_TYPO_INCREASE_RANGE: tuple = (0.01, 0.02)
 
 
 class TemporalModel:
@@ -78,7 +78,7 @@ class TemporalModel:
         return {
             "night_penalty_factor": self._persona.night_penalty_factor,
             "night_hesitation_increase_range": NIGHT_HESITATION_INCREASE_RANGE,
-            "night_typo_increase": NIGHT_TYPO_INCREASE,
+            "night_typo_increase_range": NIGHT_TYPO_INCREASE_RANGE,
             "fatigue_threshold": self._persona.fatigue_threshold,
             "micro_var_range": (0.90, 1.10),
         }
@@ -86,8 +86,9 @@ class TemporalModel:
     def get_night_typo_increase(self, utc_offset_hours: int = 0) -> float:
         """Return extra typo probability during NIGHT, 0.0 during DAY.
 
-        Blueprint §10: NIGHT increases typo rate by 1–2% absolute.
+        Blueprint §10: NIGHT increases typo rate by 1–2% absolute (random in range).
         """
         if self.get_time_state(utc_offset_hours) == "NIGHT":
-            return NIGHT_TYPO_INCREASE
+            with self._rnd_lock:
+                return self._rnd.uniform(*NIGHT_TYPO_INCREASE_RANGE)
         return 0.0

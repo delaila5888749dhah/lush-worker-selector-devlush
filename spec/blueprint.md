@@ -446,7 +446,7 @@ Bổ sung mô phỏng chu kỳ sinh học theo thời gian — tăng cường an
   NIGHT mode:
   - Tốc độ gõ: chậm hơn DAY 15–30% (scale factor từ rnd — §8.6)
   - Hesitation: tăng 20–40% so với DAY (fatigue simulation)
-  - Typo rate: tăng 1–2% tuyệt đối so với DAY baseline
+  - Typo rate: tăng 1–2% tuyệt đối so với DAY baseline (random trong dải [1%, 2%])
   - Inter-action delay: không đều hơn, variance cao hơn (mô phỏng buồn ngủ)
 
   Tất cả giá trị vẫn BỊ CLAMP bởi hard constraints §8.6:

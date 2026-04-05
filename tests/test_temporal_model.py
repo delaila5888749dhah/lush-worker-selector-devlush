@@ -5,7 +5,7 @@ import unittest
 from modules.delay.main import (
     PersonaProfile, MAX_TYPING_DELAY, MAX_HESITATION_DELAY, MAX_STEP_DELAY,
     TemporalModel, DAY_START, DAY_END,
-    NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE,
+    NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE,
 )
 
 
@@ -121,11 +121,11 @@ class TestGetCurrentModifiers(_TemporalSetup):
         self.assertIn("fatigue_threshold", mods)
         self.assertIn("micro_var_range", mods)
         self.assertIn("night_hesitation_increase_range", mods)
-        self.assertIn("night_typo_increase", mods)
+        self.assertIn("night_typo_increase_range", mods)
 
     def test_night_typo_value(self):
         mods = self.tm.get_current_modifiers()
-        self.assertEqual(mods["night_typo_increase"], NIGHT_TYPO_INCREASE)
+        self.assertEqual(mods["night_typo_increase_range"], NIGHT_TYPO_INCREASE_RANGE)
 
 
 class TestNightHesitationIncrease(_TemporalSetup):
@@ -150,7 +150,8 @@ class TestNightTypoIncrease(_TemporalSetup):
         if offset > 12:
             offset -= 24
         increase = self.tm.get_night_typo_increase(offset)
-        self.assertEqual(increase, NIGHT_TYPO_INCREASE)
+        self.assertGreaterEqual(increase, NIGHT_TYPO_INCREASE_RANGE[0] - 1e-9)
+        self.assertLessEqual(increase, NIGHT_TYPO_INCREASE_RANGE[1] + 1e-9)
 
     def test_day_typo_no_increase(self):
         utc_hour = time.gmtime().tm_hour

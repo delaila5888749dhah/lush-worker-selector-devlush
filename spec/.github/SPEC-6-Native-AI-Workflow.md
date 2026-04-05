@@ -311,7 +311,7 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
     │   │   ├── click — spatial offset only (x±15, y±5), no significant time delay (Blueprint §4: Bounding Box Click)
     │   │   └── thinking — 3–5s hover/scroll near action target (Blueprint §5: Hesitation, "lảng vảng quanh khu vực nút khoảng 3 - 5 giây")
     │   ├── Delay bound:
-    │   │   ├── typing: max 1.8s per 4-digit group × 4 groups = max 7.2s total for 16-digit card
+    │   │   ├── typing: max 1.8s per 4-digit group; total capped at 7.0s per step (accumulator clamps beyond group 4)
     │   │   ├── thinking: max 5s per hesitation point
     │   │   ├── Accumulated delay per cycle step: MUST leave ≥3s headroom within watchdog 10s timeout (Blueprint §5)
     │   │   └── MUST NOT affect watchdog timeout or system-level deadlines
@@ -609,3 +609,4 @@ PR bị REQUEST_CHANGES
 | 2.4 | 2026-04-04 | **Phase 10 — Behavior Layer (Blueprint-safe).** Bổ sung Phase 10 spec: CRITICAL_SECTION awareness, SAFE POINT/SAFE ZONE rule, FSM context (BehaviorState), NO-DELAY zone, bounded UI delay, non-interference rule, Phase 9 alignment. Thêm P10 vào milestones table. Đồng bộ spec với Blueprint (CHANGE_CLASS=spec_sync). |
 | 2.5 | 2026-04-04 | **Phase 10 — Blueprint timing sync.** §10.4: Added stagger start separation (Blueprint §1 stagger ≠ behavior delay). §10.5: Added VBV operational wait clarification (Blueprint §6: 8-12s is operational, not behavioral). §10.6: Added explicit Blueprint timing bounds (typing 0.6-1.8s per group, click spatial only, thinking 3-5s) and accumulated delay ceiling (≥3s watchdog headroom). Audit confirmed zero remaining Blueprint conflicts (CHANGE_CLASS=spec_sync). |
 | 2.6 | 2026-04-05 | **Structural Alignment — Blueprint ↔ SPEC-6 Phase 10.** Restructured Blueprint §8–§15 into §8 (overview) + §8.1–§8.8 (1-to-1 mapping with Spec §10.1–§10.8) + §9 (Anti-Detect) + §10 (Day/Night) + §11 (Sync Matrix). Added Blueprint cross-references (↔ Blueprint §8.x) to all Phase 10 sub-sections. Updated Synchronization Matrix with new aligned numbering. Updated code/test section references. Zero content changes — structural reorganization only (CHANGE_CLASS=spec_sync). |
+| 2.7 | 2026-04-05 | **Logic gap fixes (audit pre-check).** §10.6: Fixed arithmetic contradiction — replaced "max 1.8s × 4 groups = max 7.2s" with correct statement that total is capped at 7.0s by step accumulator. Blueprint §10 / temporal.py: Changed `NIGHT_TYPO_INCREASE` (fixed 0.02) → `NIGHT_TYPO_INCREASE_RANGE=(0.01, 0.02)` so typo increase is random in the spec-defined 1–2% range. Both changes align code behavior with spec text (CHANGE_CLASS=spec_sync). |

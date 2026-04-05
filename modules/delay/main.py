@@ -17,6 +17,6 @@ from modules.delay.engine import DelayEngine  # noqa: F401
 from modules.delay.engine import MAX_HESITATION_DELAY, MAX_STEP_DELAY, WATCHDOG_HEADROOM  # noqa: F401
 from modules.delay.temporal import TemporalModel  # noqa: F401
 from modules.delay.temporal import DAY_START, DAY_END  # noqa: F401
-from modules.delay.temporal import NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE  # noqa: F401
+from modules.delay.temporal import NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE  # noqa: F401
 from modules.delay.biometrics import BiometricProfile, _KEYSTROKE_MAX  # noqa: F401
 from modules.delay.wrapper import wrap  # noqa: F401  — Task 10.5
