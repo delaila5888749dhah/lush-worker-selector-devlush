@@ -17,35 +17,11 @@ from modules.delay.persona import _PERSONA_TYPES  # noqa: F401
 from modules.delay.state import BehaviorStateMachine, BEHAVIOR_STATES, _VALID_BEHAVIOR_TRANSITIONS  # noqa: F401
 from modules.delay.engine import DelayEngine  # noqa: F401
 from modules.delay.engine import MAX_HESITATION_DELAY, MAX_STEP_DELAY, WATCHDOG_HEADROOM  # noqa: F401
+from modules.delay.temporal import TemporalModel  # noqa: F401
+from modules.delay.temporal import DAY_START, DAY_END  # noqa: F401
+from modules.delay.temporal import NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE  # noqa: F401
 
-# -- Additional constants (Blueprint §10, SPEC §10.6) --
-DAY_START = 6; DAY_END = 21
-NIGHT_SPEED_PENALTY_RANGE = (0.15, 0.30)
-NIGHT_HESITATION_INCREASE_RANGE = (0.20, 0.40); NIGHT_TYPO_INCREASE = 0.02
 _KEYSTROKE_MAX = 0.3
-
-
-class TemporalModel:
-    """Apply time-of-day, fatigue, and micro-variation modifiers."""
-    def __init__(self, persona: PersonaProfile) -> None:
-        self._persona = persona; self._rnd = random.Random(persona._seed + 1); self._rnd_lock = threading.Lock()
-    @staticmethod
-    def get_time_state(utc_offset_hours: int) -> str:
-        local_hour = (time.gmtime().tm_hour + utc_offset_hours) % 24
-        return "DAY" if DAY_START <= local_hour <= DAY_END else "NIGHT"
-    def apply_temporal_modifier(self, base_delay: float, action_type: str, utc_offset_hours: int = 0) -> float:
-        modified = base_delay * (1.0 + self._persona.night_penalty_factor) if self.get_time_state(utc_offset_hours) == "NIGHT" else base_delay
-        if action_type == "typing": return min(modified, MAX_TYPING_DELAY)
-        if action_type == "thinking": return min(modified, MAX_HESITATION_DELAY)
-        return min(modified, MAX_STEP_DELAY)
-    def apply_fatigue(self, base_delay: float, cycle_count: int) -> float:
-        if cycle_count <= self._persona.fatigue_threshold: return base_delay
-        return base_delay + min((cycle_count - self._persona.fatigue_threshold) * 0.05, 1.0)
-    def apply_micro_variation(self, base_delay: float) -> float:
-        with self._rnd_lock: return base_delay * self._rnd.uniform(0.90, 1.10)
-    def get_current_modifiers(self) -> dict:
-        return {"night_penalty_factor": self._persona.night_penalty_factor,
-                "fatigue_threshold": self._persona.fatigue_threshold, "micro_var_range": (0.90, 1.10)}
 
 
 class BiometricProfile:
