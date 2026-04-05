@@ -156,6 +156,37 @@ class TestStopWorkerCriticalSection(GracefulShutdownResetMixin, unittest.TestCas
         hold_forever.set()
         time.sleep(0.2)
 
+    def test_cs_timeout_worker_remains_registered_until_natural_exit(self):
+        """Timed-out CS worker stays in registry; cleanup deferred to finally."""
+        task_started = threading.Event()
+        proceed = threading.Event()
+
+        def task(wid):
+            set_worker_state(wid, "CRITICAL_SECTION")
+            task_started.set()
+            proceed.wait(timeout=5)
+            set_worker_state(wid, "IN_CYCLE")
+
+        wid = start_worker(task)
+        task_started.wait(timeout=2)
+        self.assertEqual(get_worker_state(wid), "CRITICAL_SECTION")
+
+        # Timeout — worker is still in CS
+        result = stop_worker(wid, timeout=0.1)
+        self.assertFalse(result)
+        # Worker must still be registered (not force-removed)
+        self.assertIn(wid, get_all_worker_states())
+
+        # Let worker finish naturally
+        proceed.set()
+        deadline = time.monotonic() + CLEANUP_TIMEOUT
+        while time.monotonic() < deadline:
+            if wid not in get_all_worker_states():
+                break
+            time.sleep(0.01)
+        # Worker cleaned up by _worker_fn finally block
+        self.assertNotIn(wid, get_all_worker_states())
+
     def test_worker_exits_cs_naturally_then_stops(self):
         """Worker leaves CRITICAL_SECTION on its own, stop_worker succeeds."""
         cs_entered = threading.Event()

@@ -90,11 +90,17 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
         wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
         try:
             self.assertFalse(stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT))
-            # Zombie cleaned from registry even though thread is alive
-            self.assertNotIn(wid, get_active_workers())
+            # Worker stays registered until thread naturally exits
+            self.assertIn(wid, get_active_workers())
         finally:
             barrier.set()
-            time.sleep(0.2)
+            # Poll until worker cleans itself up via _worker_fn finally block
+            deadline = time.monotonic() + CLEANUP_TIMEOUT
+            while time.monotonic() < deadline:
+                if wid not in get_active_workers():
+                    break
+                time.sleep(0.01)
+            self.assertNotIn(wid, get_active_workers())
 
 
 # ── Scale up / down ──────────────────────────────────────────────
@@ -201,10 +207,14 @@ class TestStartStop(RuntimeResetMixin, unittest.TestCase):
             time.sleep(WARMUP_DELAY)
             self.assertFalse(stop(timeout=INSUFFICIENT_TIMEOUT))
             self.assertFalse(is_running())
-            # Zombie workers cleaned from registry
-            self.assertEqual(get_active_workers(), [])
+            # Straggler workers stay registered until threads naturally exit
             worker_block.set()
-            time.sleep(1.1)
+            deadline = time.monotonic() + CLEANUP_TIMEOUT
+            while time.monotonic() < deadline:
+                if get_active_workers() == []:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(get_active_workers(), [])
 
 
 # ── Runtime loop integration ─────────────────────────────────────
@@ -618,11 +628,13 @@ class TestZombieWorkerCleanup(RuntimeResetMixin, unittest.TestCase):
         # Force a timeout on stop
         stop_result = stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT)
         self.assertFalse(stop_result)
-        self.assertNotIn(wid, get_active_workers())
+        # Worker stays registered until thread naturally exits
+        self.assertIn(wid, get_active_workers())
         # Let the blocking task finish naturally and verify the thread exits
         barrier.set()
         worker_thread.join(timeout=CLEANUP_TIMEOUT)
         self.assertFalse(worker_thread.is_alive())
+        self.assertNotIn(wid, get_active_workers())
 
     def test_stop_requests_cleaned_after_timeout_worker_exits(self):
         """No stale _stop_requests entries after timed-out worker exits."""

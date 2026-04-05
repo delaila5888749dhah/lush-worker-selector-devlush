@@ -150,10 +150,10 @@ def stop_worker(worker_id, timeout=None):
             return False
     if thread.is_alive():
         _logger.warning("Worker %s did not stop within timeout", worker_id)
-        with _lock:
-            _workers.pop(worker_id, None)
-            _worker_states.pop(worker_id, None)
-            _stop_requests.discard(worker_id)
+        # Do NOT remove from registry — the thread is still running and may
+        # call set_worker_state().  Keep stop_request so worker exits at its
+        # next safe point.  _worker_fn's finally block handles cleanup when
+        # the thread eventually exits.
         return False
     with _lock:
         _stop_requests.discard(worker_id); _workers.pop(worker_id, None)
