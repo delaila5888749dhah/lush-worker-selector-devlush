@@ -173,35 +173,14 @@ class CheckTests(unittest.TestCase):
 
 
 class ResolveChangeClassTests(unittest.TestCase):
-    """Test _resolve_change_class — explicit env var, PR title auto-detect, or normal."""
+    """Test _resolve_change_class — explicit env var or defaults to normal."""
 
     @patch.dict("os.environ", {"CHANGE_CLASS": "spec_sync"}, clear=True)
     def test_explicit_env_takes_priority(self):
         self.assertEqual(_resolve_change_class(), "spec_sync")
 
-    @patch.dict("os.environ", {"CHANGE_CLASS": "spec_sync", "PR_TITLE": "[infra] update"}, clear=True)
-    def test_explicit_env_overrides_title(self):
-        """Explicit CHANGE_CLASS takes priority over PR title tag."""
-        self.assertEqual(_resolve_change_class(), "spec_sync")
-
-    @patch.dict("os.environ", {"CHANGE_CLASS": "", "PR_TITLE": "[spec-sync] restructure"}, clear=True)
-    def test_title_spec_sync_detected(self):
-        self.assertEqual(_resolve_change_class(), "spec_sync")
-
-    @patch.dict("os.environ", {"CHANGE_CLASS": "", "PR_TITLE": "[emergency] hotfix"}, clear=True)
-    def test_title_emergency_detected(self):
-        self.assertEqual(_resolve_change_class(), "emergency_override")
-
-    @patch.dict("os.environ", {"CHANGE_CLASS": "", "PR_TITLE": "[infra] update CI"}, clear=True)
-    def test_title_infra_detected(self):
-        self.assertEqual(_resolve_change_class(), "infra_change")
-
-    @patch.dict("os.environ", {"CHANGE_CLASS": "", "PR_TITLE": "simple change"}, clear=True)
-    def test_title_no_tag_defaults_to_normal(self):
-        self.assertEqual(_resolve_change_class(), "normal")
-
     @patch.dict("os.environ", {"CHANGE_CLASS": ""}, clear=True)
-    def test_empty_change_class_no_title_defaults_to_normal(self):
+    def test_empty_change_class_defaults_to_normal(self):
         self.assertEqual(_resolve_change_class(), "normal")
 
     @patch.dict("os.environ", {}, clear=True)
