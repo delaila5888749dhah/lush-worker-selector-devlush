@@ -7,7 +7,6 @@ DelayEngine lives in engine.py (Task 10.3).
 """
 import random
 import threading
-import time
 from modules.delay.persona import PersonaProfile  # noqa: F401
 from modules.delay.persona import MAX_TYPING_DELAY, MIN_TYPING_DELAY  # noqa: F401
 from modules.delay.persona import _TYPO_RATE_MIN, _TYPO_RATE_MAX  # noqa: F401
