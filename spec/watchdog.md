@@ -14,11 +14,11 @@ ngăn rò rỉ bộ nhớ và zombie process. Phạm vi hiện tại của modul
 
 ```
 Function: enable_network_monitor
-Input: None
+Input: worker_id (str)
 Output: None
 Constraints:
   - Thread-safe qua threading.Lock
-  - Reset trạng thái monitoring trước đó (clear event, clear total value)
+  - Create or reset a per-worker watchdog session
   - Phải được gọi trước wait_for_total
 Forbidden:
   - Không import từ module khác (cdp, billing, fsm)
@@ -28,39 +28,58 @@ Forbidden:
 
 ```
 Function: wait_for_total
-Input: timeout (int | float, đơn vị giây)
+Input:
+  - worker_id (str)
+  - timeout (int | float, đơn vị giây)
 Output: total value (giá trị tổng tiền từ network response)
 Constraints:
   - Thread-safe qua threading.Lock
   - Block cho đến khi nhận được total hoặc hết timeout
   - Nếu timeout hết mà chưa nhận được total → ném SessionFlaggedError
-  - enable_network_monitor() phải được gọi trước; nếu chưa → ném RuntimeError
-  - Sau khi trả kết quả hoặc ném lỗi, tự động disable monitor
+  - enable_network_monitor(worker_id) phải được gọi trước; nếu chưa → ném RuntimeError
+  - Sau khi trả kết quả hoặc ném lỗi, tự động xóa session cho worker_id
 Forbidden:
   - Không tự gọi CDP/Network API (module isolation)
   - Không reload trang
   - Không import từ module khác
 ```
 
+### notify_total
+
+```
+Function: notify_total
+Input:
+  - worker_id (str)
+  - value
+Output: None
+Constraints:
+  - Safe to call from ANY thread (browser CDP event thread, worker thread, etc.)
+  - No-op if no session exists for worker_id (idempotent)
+  - Thread-safe qua threading.Lock
+Forbidden:
+  - Không import từ module khác
+```
+
 ## Internal Helpers (không thuộc public API)
 
-- `_notify_total(value)`: Signal rằng total amount đã nhận được. Dùng cho integration layer bên ngoài module.
-- `_reset_monitor()`: Reset toàn bộ state (monitor_enabled, total_value, event). Dùng cho test isolation.
+- `_reset_session(worker_id)`: Remove session entry cho worker_id. Dùng nội bộ bởi wait_for_total.
+- `reset()`: Reset toàn bộ registry. Dùng cho test isolation.
 
 ## Threading Model
 
-- Module-level state (`_monitor_enabled`, `_total_value`) được bảo vệ bởi `threading.Lock`
-- `wait_for_total` sử dụng `threading.Event` để chờ signal từ `_notify_total`
+- Per-worker state (`_watchdog_registry[worker_id]`) keyed by worker_id string
+- Toàn bộ registry được bảo vệ bởi `threading.Lock` (`_registry_lock`)
+- `wait_for_total` sử dụng per-session `threading.Event` để chờ signal từ `notify_total`
 - `Event.wait(timeout)` thực hiện **ngoài lock** để tránh deadlock
-- `_notify_total` set event **sau khi** cập nhật `_total_value` trong lock
+- `notify_total` set event **sau khi** cập nhật `total_value` — safe from any thread
 
 ## Luồng sử dụng (Blueprint §5)
 
 ```
-1. Gọi enable_network_monitor()         → Reset state, bật monitoring
-2. Integration layer lắng nghe CDP       → Network.responseReceived
-3. Khi response trả về total amount      → Gọi _notify_total(value)
-4. Gọi wait_for_total(timeout=10)        → Block chờ signal
+1. Gọi enable_network_monitor(worker_id)   → Create session, bật monitoring
+2. Integration layer lắng nghe CDP         → Network.responseReceived
+3. Khi response trả về total amount        → Gọi notify_total(worker_id, value)
+4. Gọi wait_for_total(worker_id, timeout)  → Block chờ signal
    ├── Nhận được signal → return total value
    └── Hết timeout     → raise SessionFlaggedError
 ```

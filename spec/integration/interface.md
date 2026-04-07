@@ -10,13 +10,27 @@ spec-version: 2.0
 ## Module: watchdog
 
 Function: enable_network_monitor
-Input: None
+Input:
+  - worker_id (str)
 Output: None
 
 Function: wait_for_total
 Input:
+  - worker_id (str)
   - timeout
 Output: total value
+Error:
+  - Raise RuntimeError if enable_network_monitor() was not called for worker_id
+  - Raise SessionFlaggedError if timeout expires
+
+Function: notify_total
+Input:
+  - worker_id (str)
+  - value
+Output: None
+Notes:
+  - Safe to call from any thread (browser CDP event thread, worker thread, etc.)
+  - No-op if no session exists for worker_id
 
 ## Module: billing
 
