@@ -44,9 +44,9 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 3.0 | 2026-04-07 |
-| `spec/integration/interface.md` | 3.1 | 2026-04-07 |
-| `spec/interface.md` (aggregated) | 3.1 | 2026-04-07 |
+| `spec/core/interface.md` | 4.0 | 2026-04-07 |
+| `spec/integration/interface.md` | 4.0 | 2026-04-07 |
+| `spec/interface.md` (aggregated) | 4.0 | 2026-04-07 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -55,10 +55,10 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 ## Changelog
 
-### v3.1 (2026-04-07) — Additive
-- Added `register_driver(worker_id, driver)` and `unregister_driver(worker_id)` to CDP module (driver registry)
+### v4.0 (2026-04-07) — BREAKING
 - Added `CDPTimeoutError` and `CDPNavigationError` exception types to `modules.common.exceptions`
 - `WorkerTask` is now `frozen=True` (immutable dataclass)
+- Added `register_driver(worker_id, driver)` and `unregister_driver(worker_id)` to CDP module (driver registry)
 - Created `spec/cdp-timeout-contract.md` — CDP timeout and error-handling rules
 
 ### v2.0 (2026-04-02) — BREAKING

@@ -1,11 +1,11 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP)
 
-spec-version: 3.1
+spec-version: 4.0
 
-> **v3.1 Additive Changes:**
-> - Added register_driver(worker_id, driver) and unregister_driver(worker_id) to CDP module
-> - Added CDPTimeoutError and CDPNavigationError exception types
+> **v4.0 Breaking Changes:**
+> - Added CDPTimeoutError and CDPNavigationError exception types to modules.common.exceptions
 > - WorkerTask is now frozen (immutable)
+> - Added register_driver(worker_id, driver) and unregister_driver(worker_id) to CDP module
 >
 > **v3.0 Breaking Changes:**
 > - enable_network_monitor and wait_for_total now require worker_id parameter

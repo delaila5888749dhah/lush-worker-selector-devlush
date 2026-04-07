@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 3.1
+spec-version: 4.0
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -9,10 +9,10 @@ spec-version: 3.1
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
 >
-> **v3.1 Additive Changes:**
-> - Added register_driver and unregister_driver to CDP module
-> - Added CDPTimeoutError and CDPNavigationError exception types
+> **v4.0 Breaking Changes:**
+> - Added CDPTimeoutError and CDPNavigationError exception types to modules.common.exceptions
 > - WorkerTask is now frozen (immutable)
+> - Added register_driver and unregister_driver to CDP module
 >
 > **v2.0 Breaking Changes:**
 > - Exception types moved from spec.schema to modules.common.exceptions
