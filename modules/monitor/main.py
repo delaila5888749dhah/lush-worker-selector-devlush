@@ -120,6 +120,7 @@ def get_baseline_success_rate():
 
 def get_metrics():
     """Return a snapshot of all current metrics as a dict."""
+    mem = get_memory_usage_bytes()
     with _lock:
         success_count = _success_count
         error_count = _error_count
@@ -135,7 +136,7 @@ def get_metrics():
         "error_count": error_count,
         "success_rate": success_rate,
         "error_rate": error_rate,
-        "memory_usage_bytes": get_memory_usage_bytes(),
+        "memory_usage_bytes": mem,
         "restarts_last_hour": restarts_hour,
         "baseline_success_rate": baseline,
     }

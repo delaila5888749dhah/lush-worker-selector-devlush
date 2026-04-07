@@ -1,5 +1,7 @@
 """Runtime orchestrator for worker scaling and monitoring."""
+import atexit
 import logging
+import signal
 import threading
 import time
 import uuid
@@ -31,6 +33,7 @@ _DEFAULT_LOOP_INTERVAL = 10
 _MIN_LOOP_INTERVAL = 0.1
 _WORKER_TIMEOUT = 30
 _MAX_CONSECUTIVE_ROLLBACKS = 3
+_CIRCUIT_BREAKER_PAUSE = 300
 _consecutive_rollbacks = 0
 _pending_restarts = 0
 _stop_requests = set()
@@ -45,9 +48,7 @@ def _safe_sleep(interval):
     try: time.sleep(interval)
     except (TypeError, ValueError): time.sleep(_MIN_LOOP_INTERVAL)
 def _ensure_rollout_configured():
-    with rollout._lock:
-        check_fn = rollout._check_rollback_fn; save_fn = rollout._save_baseline_fn
-    if check_fn is None and save_fn is None:
+    if not rollout.is_configured():
         rollout.configure(monitor.check_rollback_needed, monitor.save_baseline)
 def _transition_worker_state_locked(worker_id, new_state):
     """Transition worker state while holding _lock. Raises ValueError on invalid transition."""
@@ -275,14 +276,32 @@ def _runtime_loop(task_fn, interval):
                 if action == "rollback":
                     _consecutive_rollbacks += 1
                     if _consecutive_rollbacks >= _MAX_CONSECUTIVE_ROLLBACKS:
-                        _log_event("runtime", "warning", "consecutive_rollbacks", {"count": _consecutive_rollbacks})
+                        _log_event("runtime", "critical", "circuit_breaker_triggered", {"count": _consecutive_rollbacks})
+                        _logger.error("Circuit breaker: %d consecutive rollbacks. Halting scale-up for %ds.", _consecutive_rollbacks, _CIRCUIT_BREAKER_PAUSE)
+                        cb_pause = _CIRCUIT_BREAKER_PAUSE; _consecutive_rollbacks = 0
+                    else:
+                        cb_pause = 0
                 elif action == "scaled_up":
-                    _consecutive_rollbacks = 0
+                    _consecutive_rollbacks = 0; cb_pause = 0
+                else:
+                    cb_pause = 0
             _apply_scale(target, task_fn)
             _log_event("runtime", action, "loop_tick", {"target": target, "metrics": metrics, "decision": decision})
+            if cb_pause > 0:
+                _safe_sleep(cb_pause)
         except Exception as exc:
             _log_event("runtime", "error", "loop_error", {"error": str(exc)})
         _safe_sleep(interval)
+def _handle_shutdown(signum, frame):
+    """Signal handler for SIGTERM/SIGINT — initiate graceful shutdown."""
+    _logger.info("Received signal %d, initiating graceful shutdown...", signum)
+    stop(timeout=_WORKER_TIMEOUT)
+def register_signal_handlers():
+    """Register SIGTERM/SIGINT handlers and atexit hook for graceful shutdown."""
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _handle_shutdown)
+        signal.signal(signal.SIGINT, _handle_shutdown)
+    atexit.register(stop, timeout=_WORKER_TIMEOUT)
 def start(task_fn, interval=None):
     """Start the runtime loop. Returns True if started, False if already running."""
     global _state, _loop_thread, _trace_id
@@ -297,6 +316,7 @@ def start(task_fn, interval=None):
             return False
         _loop_thread = threading.Thread(target=_runtime_loop, args=(task_fn, interval), daemon=True)
         _state = "RUNNING"; _loop_thread.start()
+    register_signal_handlers()
     with _trace_lock:
         _trace_id = uuid.uuid4().hex[:12]
     _log_event("runtime", "started", "runtime_start")

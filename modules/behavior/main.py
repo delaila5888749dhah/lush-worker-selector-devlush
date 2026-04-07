@@ -126,9 +126,10 @@ def evaluate(metrics, current_step_index, max_step_index):
         if len(_decision_history) > _HISTORY_LIMIT:
             _decision_history[:] = _decision_history[-_HISTORY_LIMIT:]
 
-        _logger.info(
-            "Behavior decision: %s — %s", action, "; ".join(reasons)
-        )
+        level = logging.WARNING if action == SCALE_DOWN else logging.INFO
+        if action == HOLD and "cooldown_active" in reasons:
+            level = logging.DEBUG
+        _logger.log(level, "Behavior decision: %s — %s", action, "; ".join(reasons))
         return action, reasons
 
 

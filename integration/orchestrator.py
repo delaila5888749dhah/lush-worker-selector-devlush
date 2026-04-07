@@ -22,12 +22,10 @@ _lock = threading.Lock()
 _logger = logging.getLogger(__name__)
 
 
-def initialize_cycle():
+def initialize_cycle(worker_id: str = "default"):
     """Reset FSM registry and register all valid states for a new cycle."""
     rollout.configure(monitor.check_rollback_needed, monitor.save_baseline)
-    fsm.reset_states()
-    for state_name in _FSM_STATES:
-        fsm.add_new_state(state_name)
+    fsm.initialize_for_worker(worker_id)
 
 
 def run_payment_step(task, zip_code=None, worker_id: str = "default"):
@@ -59,16 +57,17 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     cdp.fill_billing(profile)
     cdp.fill_card(task.primary_card)
     total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
-    state = fsm.get_current_state()
+    state = fsm.get_current_state_for_worker(worker_id)
     return state, total
 
 
-def handle_outcome(state, order_queue):
+def handle_outcome(state, order_queue, worker_id: str = "default"):
     """Determine the next action based on the current FSM state.
 
     Args:
         state: Current State object (or None if FSM was never transitioned).
         order_queue: Remaining cards available for swap.
+        worker_id: Unique identifier for this worker (used for log context).
 
     Returns:
         One of: "complete", "retry", "retry_new_card", "await_3ds".
@@ -86,8 +85,9 @@ def handle_outcome(state, order_queue):
             cdp.clear_card_fields()
         except Exception:
             _logger.warning(
-                "cdp.clear_card_fields() failed during vbv_3ds handling; "
-                "proceeding to await_3ds",
+                "cdp.clear_card_fields() failed for worker=%s during vbv_3ds "
+                "handling; proceeding to await_3ds",
+                worker_id,
                 exc_info=True,
             )
         return "await_3ds"
@@ -115,7 +115,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         NotImplementedError: if CDP functions are not yet implemented.
     """
     with _lock:
-        initialize_cycle()
+        initialize_cycle(worker_id)
     state, total = run_payment_step(task, zip_code, worker_id=worker_id)
-    action = handle_outcome(state, task.order_queue)
+    action = handle_outcome(state, task.order_queue, worker_id=worker_id)
     return action, state, total
