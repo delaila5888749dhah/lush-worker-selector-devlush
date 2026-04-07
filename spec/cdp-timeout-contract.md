@@ -33,20 +33,20 @@ non-existent worker_id is a no-op.
 ### Page Load Timeout
 
 - CDP page navigation MUST complete within a configurable timeout.
-- On timeout, raise `CDPTimeoutError`.
+- On timeout, raise `SelectorTimeoutError`.
 - The orchestrator catches this and decides whether to retry or abort.
 
 ### Element Interaction Timeout
 
 - CDP element interaction (fill, click, wait) has a per-operation timeout.
-- On timeout, raise `CDPTimeoutError`.
+- On timeout, raise `SelectorTimeoutError`.
 
 ## Error Types
 
 | Exception | When Raised |
 |-----------|-------------|
-| `CDPTimeoutError` | CDP operation (page load, element wait) exceeds timeout |
-| `CDPNavigationError` | Page navigation fails (wrong URL, redirect loop, crash) |
+| `SelectorTimeoutError` | CDP selector does not appear within timeout |
+| `PageStateError` | `detect_page_state()` cannot determine a known FSM state |
 | `SessionFlaggedError` | Watchdog timeout — no network response within deadline |
 | `NotImplementedError` | CDP function is still a stub (GAP-CDP-01) |
 

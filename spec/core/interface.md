@@ -3,7 +3,7 @@
 spec-version: 4.0
 
 > **v4.0 Breaking Changes:**
-> - Added CDPTimeoutError and CDPNavigationError exception types to modules.common.exceptions
+> - Added SelectorTimeoutError and PageStateError exception types to modules.common.exceptions
 > - WorkerTask is now frozen (immutable)
 >
 > **v2.0 Breaking Changes:**

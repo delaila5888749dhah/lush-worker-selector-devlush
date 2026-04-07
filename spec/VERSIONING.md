@@ -56,7 +56,7 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 ## Changelog
 
 ### v4.0 (2026-04-07) — BREAKING
-- Added `CDPTimeoutError` and `CDPNavigationError` exception types to `modules.common.exceptions`
+- Added `SelectorTimeoutError` and `PageStateError` exception types to `modules.common.exceptions`
 - `WorkerTask` is now `frozen=True` (immutable dataclass)
 - Added `register_driver(worker_id, driver)` and `unregister_driver(worker_id)` to CDP module (driver registry)
 - Created `spec/cdp-timeout-contract.md` — CDP timeout and error-handling rules
