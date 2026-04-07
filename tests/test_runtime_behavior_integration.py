@@ -95,7 +95,7 @@ class TestNoScalingInterference(_RuntimeReset):
 
         w1 = runtime.start_worker(task)
         w2 = runtime.start_worker(task)
-        time.sleep(1.5)
+        time.sleep(3.0)  # allow at least one cycle + max behavior delay
         self.assertGreater(len(results), 0)
         runtime.stop_worker(w1, timeout=5)
         runtime.stop_worker(w2, timeout=5)
