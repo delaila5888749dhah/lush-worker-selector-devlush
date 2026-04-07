@@ -24,16 +24,28 @@ def unregister_driver(worker_id: str) -> None:
 
 
 def detect_page_state():
-    raise NotImplementedError
+    raise NotImplementedError(
+        "CDP detect_page_state not implemented. "
+        "Deploy blocked until this function is implemented."
+    )
 
 
 def fill_card(card_info):
-    raise NotImplementedError
+    raise NotImplementedError(
+        "CDP fill_card not implemented. "
+        "Deploy blocked until this function is implemented."
+    )
 
 
 def fill_billing(billing_profile):
-    raise NotImplementedError
+    raise NotImplementedError(
+        "CDP fill_billing not implemented. "
+        "Deploy blocked until this function is implemented."
+    )
 
 
 def clear_card_fields():
-    raise NotImplementedError
+    raise NotImplementedError(
+        "CDP clear_card_fields not implemented. "
+        "Deploy blocked until this function is implemented."
+    )

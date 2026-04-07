@@ -60,8 +60,9 @@ def notify_total(worker_id: str, value) -> None:
     """
     with _registry_lock:
         session = _watchdog_registry.get(worker_id)
+        if session is not None:
+            session.total_value = value
     if session is not None:
-        session.total_value = value
         session.event.set()
 
 

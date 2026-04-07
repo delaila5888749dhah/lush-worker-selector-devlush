@@ -36,6 +36,12 @@ def configure(check_rollback_fn=None, save_baseline_fn=None):
         _save_baseline_fn = save_baseline_fn
 
 
+def is_configured() -> bool:
+    """Return True if monitor callbacks have been injected."""
+    with _lock:
+        return _check_rollback_fn is not None and _save_baseline_fn is not None
+
+
 def get_current_workers():
     """Return the current target worker count."""
     with _lock:

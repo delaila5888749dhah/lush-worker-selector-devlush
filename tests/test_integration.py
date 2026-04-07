@@ -3,7 +3,13 @@ from unittest.mock import MagicMock, patch
 
 from modules.common.exceptions import CycleExhaustedError, SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
-from modules.fsm.main import get_current_state, reset_states
+from modules.fsm.main import (
+    cleanup_worker,
+    get_current_state_for_worker,
+    initialize_for_worker,
+    reset_states,
+    transition_for_worker,
+)
 from modules.watchdog.main import reset as _reset_watchdog
 from integration.orchestrator import (
     handle_outcome,
@@ -24,32 +30,34 @@ def _make_task(order_queue=None):
         recipient_email="test@example.com",
         amount=100,
         primary_card=card,
-        order_queue=order_queue or [],
+        order_queue=tuple(order_queue) if order_queue else (),
     )
 
 
 class InitializeCycleTests(unittest.TestCase):
     def setUp(self):
         reset_states()
+        cleanup_worker("default")
+
+    def tearDown(self):
+        cleanup_worker("default")
 
     def test_registers_all_states(self):
         initialize_cycle()
-        from modules.fsm.main import transition_to
         for name in ("ui_lock", "success", "vbv_3ds", "declined"):
-            state = transition_to(name)
+            state = transition_for_worker("default", name)
             self.assertEqual(state.name, name)
 
     def test_is_idempotent(self):
         initialize_cycle()
         initialize_cycle()
-        self.assertIsNone(get_current_state())
+        self.assertIsNone(get_current_state_for_worker("default"))
 
     def test_resets_current_state(self):
         initialize_cycle()
-        from modules.fsm.main import transition_to
-        transition_to("success")
+        transition_for_worker("default", "success")
         initialize_cycle()
-        self.assertIsNone(get_current_state())
+        self.assertIsNone(get_current_state_for_worker("default"))
 
     def test_configures_rollout_with_monitor_callbacks(self):
         with (
@@ -101,6 +109,10 @@ class RunPaymentStepTests(unittest.TestCase):
     def setUp(self):
         _reset_watchdog()
         reset_states()
+        cleanup_worker("default")
+
+    def tearDown(self):
+        cleanup_worker("default")
 
     def test_raises_not_implemented_from_cdp(self):
         with patch("integration.orchestrator.billing") as mock_billing:
@@ -133,7 +145,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 25.0
-            mock_fsm.get_current_state.return_value = None
+            mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task)
         mock_cdp.fill_card.assert_called_once_with(task.primary_card)
 
@@ -157,7 +169,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_fsm.get_current_state.return_value = State("success")
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
             state, total = run_payment_step(_make_task())
         self.assertEqual(total, 49.99)
         self.assertEqual(state.name, "success")
@@ -167,6 +179,10 @@ class RunCycleTests(unittest.TestCase):
     def setUp(self):
         _reset_watchdog()
         reset_states()
+        cleanup_worker("default")
+
+    def tearDown(self):
+        cleanup_worker("default")
 
     def test_run_cycle_complete_on_success(self):
         with (
@@ -177,7 +193,7 @@ class RunCycleTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 99.0
-            mock_fsm.get_current_state.return_value = State("success")
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
             action, state, total = run_cycle(_make_task())
         self.assertEqual(action, "complete")
         self.assertEqual(total, 99.0)
@@ -191,7 +207,7 @@ class RunCycleTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 50.0
-            mock_fsm.get_current_state.return_value = None
+            mock_fsm.get_current_state_for_worker.return_value = None
             action, state, total = run_cycle(_make_task())
         self.assertEqual(action, "retry")
         self.assertIsNone(state)
@@ -217,9 +233,9 @@ class RunCycleTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 1.0
-            mock_fsm.get_current_state.return_value = None
+            mock_fsm.get_current_state_for_worker.return_value = None
             run_cycle(_make_task())
-        mock_fsm.reset_states.assert_called_once()
+        mock_fsm.initialize_for_worker.assert_called_once_with("default")
 
 
 class WorkerTaskFrozenTests(unittest.TestCase):
@@ -235,7 +251,7 @@ class WorkerTaskFrozenTests(unittest.TestCase):
         self.assertEqual(task.recipient_email, "test@example.com")
         self.assertEqual(task.amount, 100)
         self.assertEqual(task.primary_card.card_number, "4111111111111111")
-        self.assertEqual(task.order_queue, [])
+        self.assertEqual(task.order_queue, ())
 
 
 class WorkerIdPropagationTests(unittest.TestCase):
@@ -250,7 +266,7 @@ class WorkerIdPropagationTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 10.0
-            mock_fsm.get_current_state.return_value = None
+            mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(_make_task(), worker_id="worker-42")
         mock_watchdog.enable_network_monitor.assert_called_once_with("worker-42")
         mock_watchdog.wait_for_total.assert_called_once_with(

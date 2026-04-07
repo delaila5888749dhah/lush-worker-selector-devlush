@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class CardInfo:
     cvv: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class BillingProfile:
     first_name: str
     last_name: str
@@ -32,4 +32,4 @@ class WorkerTask:
     recipient_email: str
     amount: int
     primary_card: CardInfo
-    order_queue: List[CardInfo]
+    order_queue: Tuple[CardInfo, ...]

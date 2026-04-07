@@ -1,3 +1,5 @@
+import concurrent.futures
+import logging
 import os
 import random
 import threading
@@ -9,6 +11,7 @@ from modules.common.types import BillingProfile
 _lock = threading.Lock()
 _profiles = []
 _cursor = 0
+_logger = logging.getLogger(__name__)
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
 _PHONE_FIRST_DIGITS = "23456789"
@@ -63,8 +66,8 @@ def _parse_profile_line(line):
     )
 
 
-def _read_profiles_from_disk():
-    """Read and parse profiles from disk. Must be called without holding _lock."""
+def _read_profiles_from_disk_sync():
+    """Read and parse profiles from disk (synchronous). Must be called without holding _lock."""
     pool_dir = _pool_dir()
     profiles = []
     if pool_dir.is_dir():
@@ -79,6 +82,23 @@ def _read_profiles_from_disk():
                     profiles.append(profile)
     random.shuffle(profiles)
     return profiles
+
+
+def _read_profiles_from_disk(timeout_seconds: float = 5.0):
+    """Read profiles from disk with a timeout guard.
+
+    Falls back to an empty list if the disk read takes longer than
+    *timeout_seconds* (e.g. on slow NFS mounts).
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_read_profiles_from_disk_sync)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            _logger.error(
+                "Billing pool load timed out after %.1fs", timeout_seconds,
+            )
+            return []
 
 
 def _generate_phone():
