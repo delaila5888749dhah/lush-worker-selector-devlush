@@ -48,6 +48,19 @@ class TestWrapPropagatesExceptions(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             wrapped("w-1")
 
+    def test_cleanup_runs_on_exception(self):
+        """BUG-001: engine.reset_step_accumulator() and sm.reset() must run even on exception."""
+        persona = PersonaProfile(42)
+        with (
+            patch("modules.delay.wrapper.DelayEngine.reset_step_accumulator") as mock_reset_acc,
+            patch("modules.delay.wrapper.BehaviorStateMachine.reset") as mock_sm_reset,
+        ):
+            wrapped = wrap(_failing_task, persona)
+            with self.assertRaises(RuntimeError):
+                wrapped("w-1")
+        mock_reset_acc.assert_called_once()
+        mock_sm_reset.assert_called_once()
+
 
 class TestCriticalSectionBypass(unittest.TestCase):
     """Verify zero delay when BehaviorStateMachine is in a critical context."""

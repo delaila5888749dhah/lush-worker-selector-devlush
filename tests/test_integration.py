@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from modules.common.exceptions import CycleExhaustedError, SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import get_current_state, reset_states
-from modules.watchdog.main import _reset_monitor
+from modules.watchdog.main import reset as _reset_watchdog
 from integration.orchestrator import (
     handle_outcome,
     initialize_cycle,
@@ -86,13 +86,20 @@ class HandleOutcomeTests(unittest.TestCase):
         self.assertEqual(result, "await_3ds")
         mock_cdp.clear_card_fields.assert_called_once()
 
+    def test_vbv_3ds_cdp_failure_still_returns_await_3ds(self):
+        """BUG-003: CDP error in clear_card_fields must be swallowed; await_3ds returned."""
+        with patch("integration.orchestrator.cdp") as mock_cdp:
+            mock_cdp.clear_card_fields.side_effect = RuntimeError("browser crashed")
+            result = handle_outcome(State("vbv_3ds"), [])
+        self.assertEqual(result, "await_3ds")
+
     def test_unknown_state_returns_retry(self):
         self.assertEqual(handle_outcome(State("unknown_state"), []), "retry")
 
 
 class RunPaymentStepTests(unittest.TestCase):
     def setUp(self):
-        _reset_monitor()
+        _reset_watchdog()
         reset_states()
 
     def test_raises_not_implemented_from_cdp(self):
@@ -158,7 +165,7 @@ class RunPaymentStepTests(unittest.TestCase):
 
 class RunCycleTests(unittest.TestCase):
     def setUp(self):
-        _reset_monitor()
+        _reset_watchdog()
         reset_states()
 
     def test_run_cycle_complete_on_success(self):

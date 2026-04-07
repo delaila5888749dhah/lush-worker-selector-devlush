@@ -5,6 +5,7 @@ No cross-module imports exist within the individual modules themselves;
 this file is the single integration point that wires them together.
 """
 
+import logging
 import threading
 
 from modules.billing import main as billing
@@ -18,6 +19,7 @@ _FSM_STATES = ("ui_lock", "success", "vbv_3ds", "declined")
 _WATCHDOG_TIMEOUT = 30
 
 _lock = threading.Lock()
+_logger = logging.getLogger(__name__)
 
 
 def initialize_cycle():
@@ -28,12 +30,12 @@ def initialize_cycle():
         fsm.add_new_state(state_name)
 
 
-def run_payment_step(task, zip_code=None):
+def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     """Execute one payment attempt.
 
     Steps:
       1. Select a billing profile from the pool.
-      2. Enable the network watchdog.
+      2. Enable the network watchdog for this worker.
       3. Fill billing and card data via CDP.
       4. Wait for the checkout total to be confirmed by the watchdog.
       5. Return (state, total).
@@ -41,6 +43,7 @@ def run_payment_step(task, zip_code=None):
     Args:
         task: WorkerTask containing card and order information.
         zip_code: Optional zip code for billing profile matching.
+        worker_id: Unique identifier for this worker (used to key the watchdog session).
 
     Returns:
         A (state, total) tuple where state is a State object or None,
@@ -52,10 +55,10 @@ def run_payment_step(task, zip_code=None):
         NotImplementedError: if CDP functions are not yet implemented.
     """
     profile = billing.select_profile(zip_code)
-    watchdog.enable_network_monitor()
+    watchdog.enable_network_monitor(worker_id)
     cdp.fill_billing(profile)
     cdp.fill_card(task.primary_card)
-    total = watchdog.wait_for_total(timeout=_WATCHDOG_TIMEOUT)
+    total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
     state = fsm.get_current_state()
     return state, total
 
@@ -79,12 +82,19 @@ def handle_outcome(state, order_queue):
     if state.name == "ui_lock":
         return "retry"
     if state.name == "vbv_3ds":
-        cdp.clear_card_fields()
+        try:
+            cdp.clear_card_fields()
+        except Exception:
+            _logger.warning(
+                "cdp.clear_card_fields() failed during vbv_3ds handling; "
+                "proceeding to await_3ds",
+                exc_info=True,
+            )
         return "await_3ds"
     return "retry"
 
 
-def run_cycle(task, zip_code=None):
+def run_cycle(task, zip_code=None, worker_id: str = "default"):
     """Run a full payment cycle for a WorkerTask.
 
     Initializes the FSM, executes one payment attempt, and returns the
@@ -93,6 +103,7 @@ def run_cycle(task, zip_code=None):
     Args:
         task: WorkerTask containing the recipient, amount, and card data.
         zip_code: Optional zip code for billing profile selection.
+        worker_id: Unique identifier for this worker.
 
     Returns:
         A (action, state, total) tuple where action is one of:
@@ -105,6 +116,6 @@ def run_cycle(task, zip_code=None):
     """
     with _lock:
         initialize_cycle()
-    state, total = run_payment_step(task, zip_code)
+    state, total = run_payment_step(task, zip_code, worker_id=worker_id)
     action = handle_outcome(state, task.order_queue)
     return action, state, total

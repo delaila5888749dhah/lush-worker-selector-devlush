@@ -32,9 +32,11 @@ def wrap(task_fn, persona: PersonaProfile):
             delay = max(0.0, min(delay, MAX_TYPING_DELAY))
             if delay > 0:
                 time.sleep(delay)
-        result = task_fn(*args, **kwargs)
-        engine.reset_step_accumulator()
-        sm.reset()
+        try:
+            result = task_fn(*args, **kwargs)
+        finally:
+            engine.reset_step_accumulator()
+            sm.reset()
         return result
 
     return _wrapped
