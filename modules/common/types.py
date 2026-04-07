@@ -27,7 +27,7 @@ class BillingProfile:
     email: Optional[str]
 
 
-@dataclass
+@dataclass(frozen=True)
 class WorkerTask:
     recipient_email: str
     amount: int

@@ -222,5 +222,41 @@ class RunCycleTests(unittest.TestCase):
         mock_fsm.reset_states.assert_called_once()
 
 
+class WorkerTaskFrozenTests(unittest.TestCase):
+    """WorkerTask must be immutable (frozen=True) to prevent accidental mutation."""
+
+    def test_worker_task_is_frozen(self):
+        task = _make_task()
+        with self.assertRaises(AttributeError):
+            task.amount = 200
+
+    def test_worker_task_created_with_correct_values(self):
+        task = _make_task()
+        self.assertEqual(task.recipient_email, "test@example.com")
+        self.assertEqual(task.amount, 100)
+        self.assertEqual(task.primary_card.card_number, "4111111111111111")
+        self.assertEqual(task.order_queue, [])
+
+
+class WorkerIdPropagationTests(unittest.TestCase):
+    """Verify worker_id is correctly threaded through the orchestrator calls."""
+
+    def test_worker_id_forwarded_to_watchdog(self):
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp"),
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 10.0
+            mock_fsm.get_current_state.return_value = None
+            run_payment_step(_make_task(), worker_id="worker-42")
+        mock_watchdog.enable_network_monitor.assert_called_once_with("worker-42")
+        mock_watchdog.wait_for_total.assert_called_once_with(
+            "worker-42", timeout=30,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

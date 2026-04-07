@@ -1,7 +1,12 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP)
 
-spec-version: 3.0
+spec-version: 4.0
 
+> **v4.0 Breaking Changes:**
+> - Added SelectorTimeoutError and PageStateError exception types to modules.common.exceptions
+> - WorkerTask is now frozen (immutable)
+> - Added register_driver(worker_id, driver) and unregister_driver(worker_id) to CDP module
+>
 > **v3.0 Breaking Changes:**
 > - enable_network_monitor and wait_for_total now require worker_id parameter
 > - Added notify_total function
@@ -44,6 +49,17 @@ Input:
 Output: BillingProfile
 
 ## Module: cdp
+
+Function: register_driver
+Input:
+  - worker_id
+  - driver
+Output: None
+
+Function: unregister_driver
+Input:
+  - worker_id
+Output: None
 
 Function: detect_page_state
 Input: None

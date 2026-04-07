@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 3.0
+spec-version: 4.0
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,11 @@ spec-version: 3.0
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v4.0 Breaking Changes:**
+> - Added SelectorTimeoutError and PageStateError exception types to modules.common.exceptions
+> - WorkerTask is now frozen (immutable)
+> - Added register_driver and unregister_driver to CDP module
 >
 > **v2.0 Breaking Changes:**
 > - Exception types moved from spec.schema to modules.common.exceptions
@@ -77,6 +82,17 @@ Input:
 Output: BillingProfile
 
 ## Module: cdp
+
+Function: register_driver
+Input:
+  - worker_id
+  - driver
+Output: None
+
+Function: unregister_driver
+Input:
+  - worker_id
+Output: None
 
 Function: detect_page_state
 Input: None

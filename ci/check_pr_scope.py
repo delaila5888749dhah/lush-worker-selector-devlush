@@ -26,6 +26,8 @@ Change Classes & Bypass Table (AI_CONTEXT.md §6):
 
 Authorization (required for ALL non-normal):
   PR label 'approved-override' (exact match) OR CHANGE_CLASS_APPROVED=true
+  spec_sync also accepts ALLOW_SPEC_MODIFICATION=true
+  (consistent with check_spec_lock and meta_audit)
 """
 
 import json
@@ -240,6 +242,8 @@ def _check_authorization(change_class: str) -> list[str]:
     Per AI_CONTEXT.md §6 — Authorization:
       All non-normal require: label 'approved-override' OR
       CHANGE_CLASS_APPROVED=true.
+      spec_sync is also authorized by ALLOW_SPEC_MODIFICATION=true
+      (consistent with check_spec_lock and meta_audit).
       emergency_override additionally needs APPROVED review.
     """
     if change_class == "normal":
@@ -251,8 +255,14 @@ def _check_authorization(change_class: str) -> list[str]:
     )
     has_label = "approved-override" in labels
     has_admin = admin_approved == "true"
+    has_allow_spec = (
+        change_class == "spec_sync"
+        and os.environ.get(
+            "ALLOW_SPEC_MODIFICATION", ""
+        ).strip().lower() == "true"
+    )
 
-    if not has_label and not has_admin:
+    if not has_label and not has_admin and not has_allow_spec:
         return [
             f"CHANGE_CLASS={change_class} requires explicit authorization: "
             f"PR label 'approved-override' or CHANGE_CLASS_APPROVED=true"
