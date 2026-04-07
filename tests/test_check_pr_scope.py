@@ -229,7 +229,7 @@ class AuthorizationTests(unittest.TestCase):
     def test_normal_needs_no_authorization(self):
         self.assertEqual(_check_authorization("normal"), [])
 
-    @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": ""}, clear=True)
+    @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": "", "ALLOW_SPEC_MODIFICATION": ""}, clear=True)
     def test_spec_sync_without_approval_fails(self):
         """spec_sync requires authorization per AI_CONTEXT.md §6."""
         errors = _check_authorization("spec_sync")
@@ -239,6 +239,18 @@ class AuthorizationTests(unittest.TestCase):
     @patch.dict("os.environ", {"PR_LABELS": "approved-override", "PR_REVIEW_STATE": ""}, clear=True)
     def test_spec_sync_with_label_passes(self):
         self.assertEqual(_check_authorization("spec_sync"), [])
+
+    @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "ALLOW_SPEC_MODIFICATION": "true"}, clear=True)
+    def test_spec_sync_with_allow_spec_modification_passes(self):
+        """ALLOW_SPEC_MODIFICATION=true authorizes spec_sync (consistent with check_spec_lock/meta_audit)."""
+        self.assertEqual(_check_authorization("spec_sync"), [])
+
+    @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "ALLOW_SPEC_MODIFICATION": "true"}, clear=True)
+    def test_allow_spec_modification_does_not_authorize_other_classes(self):
+        """ALLOW_SPEC_MODIFICATION only applies to spec_sync, not other change classes."""
+        errors = _check_authorization("infra_change")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("requires explicit authorization", errors[0])
 
     @patch.dict("os.environ", {"PR_LABELS": "", "CHANGE_CLASS_APPROVED": "", "PR_REVIEW_STATE": ""}, clear=True)
     def test_override_without_approval_fails(self):
@@ -394,6 +406,24 @@ class ChangeClassIntegrationTests(unittest.TestCase):
             (200, 100, "spec/fsm.md"),
             (10, 5, "modules/fsm/main.py"),
             (10, 5, "modules/watchdog/main.py"),
+        ]
+        self.assertEqual(main(), 0)
+
+    @patch("ci.check_pr_scope._get_changed_files", return_value=["spec/fsm.md", "modules/fsm/main.py"])
+    @patch("ci.check_pr_scope.get_numstat")
+    @patch("ci.check_pr_scope.resolve_diff_range", return_value="fake...range")
+    @patch.dict("os.environ", {
+        "CHANGE_CLASS": "spec_sync",
+        "PR_TITLE": "[spec-sync] update interfaces",
+        "PR_LABELS": "",
+        "CHANGE_CLASS_APPROVED": "",
+        "ALLOW_SPEC_MODIFICATION": "true",
+    }, clear=False)
+    def test_spec_sync_with_allow_spec_modification_passes(self, mock_resolve, mock_numstat, mock_files):
+        """ALLOW_SPEC_MODIFICATION=true authorizes spec_sync in integration."""
+        mock_numstat.return_value = [
+            (200, 100, "spec/fsm.md"),
+            (10, 5, "modules/fsm/main.py"),
         ]
         self.assertEqual(main(), 0)
 

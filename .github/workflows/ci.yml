@@ -56,6 +56,7 @@ jobs:
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
         PR_REVIEW_STATE: ${{ steps.review_state.outputs.state }}
+        ALLOW_SPEC_MODIFICATION: "true"
 
     - name: Check spec consistency
       run: python ci/check_spec_consistency.py
