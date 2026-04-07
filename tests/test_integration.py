@@ -6,7 +6,6 @@ from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import (
     cleanup_worker,
     get_current_state_for_worker,
-    initialize_for_worker,
     reset_states,
     transition_for_worker,
 )
