@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from modules.common.exceptions import SessionFlaggedError
 
 _registry_lock = threading.Lock()
-_watchdog_registry: dict = {}
+_watchdog_registry: dict[str, "_WatchdogSession"] = {}
 
 
 @dataclass
