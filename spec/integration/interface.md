@@ -1,7 +1,11 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP)
 
-spec-version: 2.0
+spec-version: 3.0
 
+> **v3.0 Breaking Changes:**
+> - enable_network_monitor and wait_for_total now require worker_id parameter
+> - Added notify_total function
+>
 > **v2.0 Breaking Changes:**
 > - Exception types (SessionFlaggedError) moved to modules.common.exceptions
 > - Data types moved to modules.common.types

@@ -44,15 +44,19 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 2.0 | 2026-04-02 |
-| `spec/integration/interface.md` | 2.0 | 2026-04-02 |
-| `spec/interface.md` (aggregated) | 2.0 | 2026-04-02 |
+| `spec/core/interface.md` | 3.0 | 2026-04-07 |
+| `spec/integration/interface.md` | 3.0 | 2026-04-07 |
+| `spec/interface.md` (aggregated) | 3.0 | 2026-04-07 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
 | `spec/deployment.md` | 1.0 | 2026-04-04 |
 
 ## Changelog
+
+### v3.0 (2026-04-07) — BREAKING
+- `enable_network_monitor` and `wait_for_total` now require `worker_id` parameter (worker-keyed registry)
+- Added `notify_total(worker_id, value)` function to watchdog module
 
 ### v2.0 (2026-04-02) — BREAKING
 - **Exception types** (`InvalidStateError`, `InvalidTransitionError`, `SessionFlaggedError`, `CycleExhaustedError`) moved from `spec.schema` to `modules.common.exceptions`

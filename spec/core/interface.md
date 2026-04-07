@@ -1,6 +1,6 @@
 # Interface Contract — Core (FSM)
 
-spec-version: 2.0
+spec-version: 3.0
 
 > **v2.0 Breaking Changes:**
 > - Exception types (InvalidStateError, InvalidTransitionError) moved to modules.common.exceptions
