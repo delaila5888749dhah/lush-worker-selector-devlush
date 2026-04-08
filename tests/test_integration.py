@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from modules.common.exceptions import CycleExhaustedError, SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import (
+    _registry as _fsm_registry,
     cleanup_worker,
     get_current_state_for_worker,
     reset_states,
@@ -561,6 +562,53 @@ class TraceIdPropagationTests(unittest.TestCase):
         with patch("integration.runtime.get_trace_id", return_value="abc123def456"):
             result = _get_trace_id()
         self.assertEqual(result, "abc123def456")
+
+
+class FsmRegistryLeakTests(unittest.TestCase):
+    """Verify FSM registry is cleaned up after run_cycle (HIGH-02 / FSM-002)."""
+
+    def setUp(self):
+        _reset_watchdog()
+        reset_states()
+        for wid in list(_fsm_registry.keys()):
+            cleanup_worker(wid)
+
+    def tearDown(self):
+        for wid in list(_fsm_registry.keys()):
+            cleanup_worker(wid)
+
+    def test_fsm_registry_cleaned_up_after_run_cycle(self):
+        """FSM registry must not grow after run_cycle finishes."""
+        worker_ids = ["worker-101", "worker-102", "worker-103"]
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp"),
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 1.0
+            mock_fsm.get_current_state_for_worker.return_value = None
+            for wid in worker_ids:
+                run_cycle(_make_task(), worker_id=wid)
+            # fsm is fully mocked here — assert cleanup_worker was called per worker
+            self.assertEqual(mock_fsm.cleanup_worker.call_count, len(worker_ids))
+            for wid in worker_ids:
+                mock_fsm.cleanup_worker.assert_any_call(wid)
+
+    def test_fsm_registry_cleaned_up_on_exception(self):
+        """FSM cleanup must occur even when run_cycle raises an exception."""
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp"),
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
+            with self.assertRaises(SessionFlaggedError):
+                run_cycle(_make_task(), worker_id="worker-201")
+            mock_fsm.cleanup_worker.assert_called_once_with("worker-201")
 
 
 if __name__ == "__main__":
