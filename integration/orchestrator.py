@@ -85,8 +85,14 @@ def _save_idempotency_store() -> None:
     try:
         now_wall = time.time()
         now_mono = time.monotonic()
-        # Convert monotonic → wall-clock timestamps for cross-restart portability
-        completed_wall = {k: now_wall - (now_mono - ts) for k, ts in _completed_task_ids.items()}
+        cutoff_mono = now_mono - _IDEMPOTENCY_TTL
+        # Convert monotonic → wall-clock timestamps for cross-restart portability,
+        # and filter out already-expired entries to keep the file compact.
+        completed_wall = {
+            k: now_wall - (now_mono - ts)
+            for k, ts in _completed_task_ids.items()
+            if ts >= cutoff_mono
+        }
         data = {
             "completed": completed_wall,
             "submitted": list(_submitted_task_ids),
