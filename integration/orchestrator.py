@@ -49,6 +49,16 @@ def _load_idempotency_store() -> None:
     Converts stored wall-clock timestamps to equivalent monotonic values so that
     TTL eviction works correctly after a restart.
     """
+    def _restore_entries(raw: dict, target: dict, now_wall: float, now_mono: float) -> None:
+        """Convert wall-clock → monotonic timestamps, skipping expired/malformed entries."""
+        for k, wall_ts in raw.items():
+            try:
+                age = max(0.0, now_wall - float(wall_ts))
+                if age < _IDEMPOTENCY_TTL:
+                    target[k] = now_mono - age
+            except (ValueError, TypeError):
+                pass  # Malformed timestamp — skip this entry, don't block other valid ones
+
     try:
         if _IDEMPOTENCY_STORE_PATH.exists():
             data = json.loads(_IDEMPOTENCY_STORE_PATH.read_text(encoding="utf-8"))
@@ -57,26 +67,14 @@ def _load_idempotency_store() -> None:
             now_wall = time.time()
             now_mono = time.monotonic()
             if isinstance(completed, dict):
-                for k, wall_ts in completed.items():
-                    try:
-                        age = max(0.0, now_wall - float(wall_ts))
-                        if age < _IDEMPOTENCY_TTL:
-                            _completed_task_ids[k] = now_mono - age
-                    except (ValueError, TypeError):
-                        pass  # Malformed timestamp — skip this entry, don't block other valid ones
+                _restore_entries(completed, _completed_task_ids, now_wall, now_mono)
             if isinstance(submitted, list):
                 # Legacy format: list of task_ids without timestamps.
                 # Treat them as recently submitted (now) for TTL purposes.
                 for s in submitted:
                     _submitted_task_ids[str(s)] = now_mono
             elif isinstance(submitted, dict):
-                for k, wall_ts in submitted.items():
-                    try:
-                        age = max(0.0, now_wall - float(wall_ts))
-                        if age < _IDEMPOTENCY_TTL:
-                            _submitted_task_ids[k] = now_mono - age
-                    except (ValueError, TypeError):
-                        pass  # Malformed timestamp — skip this entry, don't block other valid ones
+                _restore_entries(submitted, _submitted_task_ids, now_wall, now_mono)
     except Exception:
         _logger.warning(
             "Failed to load idempotency store from %s; starting fresh.",
