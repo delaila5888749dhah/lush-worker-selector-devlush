@@ -252,12 +252,13 @@ def handle_outcome(state, order_queue, worker_id: str = "default"):
     if state.name == "vbv_3ds":
         try:
             cdp.clear_card_fields(worker_id=worker_id)
-        except Exception:
+        except Exception as exc:
             _logger.warning(
-                "cdp.clear_card_fields() failed for worker=%s during vbv_3ds "
-                "handling; proceeding to await_3ds",
+                "[trace=%s] cdp.clear_card_fields() failed for worker=%s during vbv_3ds "
+                "handling; proceeding to await_3ds: %s",
+                _get_trace_id(),
                 worker_id,
-                exc_info=True,
+                _sanitize_error(exc),
             )
         return "await_3ds"
     return "retry"

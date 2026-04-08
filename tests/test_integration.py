@@ -481,10 +481,6 @@ class PersistentIdempotencyStoreTests(unittest.TestCase):
         self.assertAlmostEqual(_completed_task_ids[task_id], now_mono, delta=2.0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class CDPDriverCleanupTests(unittest.TestCase):
     """Verify CDP driver is unregistered after run_cycle completes."""
 
@@ -565,3 +561,7 @@ class TraceIdPropagationTests(unittest.TestCase):
         with patch("integration.runtime.get_trace_id", return_value="abc123def456"):
             result = _get_trace_id()
         self.assertEqual(result, "abc123def456")
+
+
+if __name__ == "__main__":
+    unittest.main()
