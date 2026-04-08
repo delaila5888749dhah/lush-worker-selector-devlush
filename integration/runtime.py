@@ -43,6 +43,7 @@ _stop_event = threading.Event()
 _SENSITIVE_PATTERN = re.compile(r'\b(?:\d[ -]?){13,16}\b')
 _restart_backoff: dict[str, float] = {}
 _MAX_RESTART_BACKOFF = 60
+_restart_delay: float = 0
 _loop_error_count = 0
 _MAX_LOOP_ERRORS = 10
 def _should_stop_worker(worker_id):
@@ -91,6 +92,8 @@ def _worker_fn(worker_id, task_fn, persona):
                     monitor.record_success()
                 except Exception:
                     _logger.warning("monitor.record_success() failed for %s", worker_id, exc_info=True)
+                with _lock:
+                    _restart_delay = 0
             except Exception as exc:
                 try:
                     monitor.record_error()
@@ -124,23 +127,18 @@ def _worker_fn(worker_id, task_fn, persona):
         _log_event(worker_id, "stopped", "stop")
 def start_worker(task_fn):
     """Start a new worker thread running *task_fn*. Returns the worker id."""
-    global _worker_counter
+    global _worker_counter, _restart_delay
+    # Compute backoff delay outside lock to avoid blocking other threads
+    with _lock:
+        delay = _restart_delay if _pending_restarts > 0 else 0
+    if delay > 0:
+        _safe_sleep(delay)
     with _lock:
         _worker_counter += 1
         wid = f"worker-{_worker_counter}"
-        # Exponential backoff: compute delay while holding lock
-        next_allowed = _restart_backoff.get(wid, 0)
-        now = time.monotonic()
-        backoff_delay = max(0, next_allowed - now) if next_allowed > 0 else 0
-    # Sleep outside lock to avoid blocking other threads
-    if backoff_delay > 0:
-        _log_event(wid, "backoff", "restart_deferred", {"delay": round(backoff_delay, 1)})
-        _safe_sleep(backoff_delay)
-    with _lock:
-        # Record next backoff for this wid: doubles each time, capped
-        prev = _restart_backoff.get(wid, 0)
-        backoff = min(_MAX_RESTART_BACKOFF, max(1, (prev - time.monotonic()) * 2)) if prev > 0 else 1
-        _restart_backoff[wid] = time.monotonic() + backoff
+        # Exponential backoff: increase delay for next restart, capped
+        if _pending_restarts > 0:
+            _restart_delay = min(_MAX_RESTART_BACKOFF, max(1, _restart_delay * 2) if _restart_delay > 0 else 1)
         # Generate a deterministic persona seed from the worker id
         persona_seed = zlib.crc32(wid.encode()) & 0xFFFFFFFF
         persona = PersonaProfile(persona_seed)
@@ -500,13 +498,13 @@ def get_trace_id():
     with _trace_lock: return _trace_id
 def reset():
     """Reset all runtime state. Intended for testing."""
-    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count
+    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay
     stop(timeout=2)
     with _lock:
         _state = "INIT"; _loop_thread = None; _workers = {}; _worker_states = {}; _worker_counter = 0
         _consecutive_rollbacks = 0; _pending_restarts = 0; _stop_requests.clear()
         _behavior_delay_enabled = False
-        _restart_backoff.clear(); _loop_error_count = 0
+        _restart_backoff.clear(); _loop_error_count = 0; _restart_delay = 0
     with _trace_lock:
         _trace_id = None
     _stop_event.clear()
