@@ -1,5 +1,6 @@
 """Runtime orchestrator for worker scaling and monitoring."""
 import atexit
+from datetime import datetime, timezone
 import logging
 import re
 import signal
@@ -50,7 +51,7 @@ def _should_stop_worker(worker_id):
 def _log_event(worker_id, state, action, metrics=None):
     with _trace_lock:
         tid = _trace_id or _NO_TRACE
-    _logger.info("%s | %s | %s | %s | %s | %s", time.strftime("%Y-%m-%dT%H:%M:%S"), worker_id, tid, state, action, metrics or "")
+    _logger.info("%s | %s | %s | %s | %s | %s", datetime.now(timezone.utc).isoformat(timespec="seconds"), worker_id, tid, state, action, metrics or "")
 def _sanitize_error(exc: Exception) -> str:
     """Redact card-like digit sequences from exception messages before logging."""
     return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))

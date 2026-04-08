@@ -15,6 +15,11 @@ from integration.orchestrator import (
     _completed_task_ids,
     _idempotency_lock,
     _in_flight_task_ids,
+    _submitted_task_ids,
+    _IDEMPOTENCY_STORE_PATH,
+    _IDEMPOTENCY_TTL,
+    _load_idempotency_store,
+    _save_idempotency_store,
     handle_outcome,
     initialize_cycle,
     run_cycle,
@@ -319,6 +324,7 @@ class IdempotencyTests(unittest.TestCase):
         with _idempotency_lock:
             _completed_task_ids.clear()
             _in_flight_task_ids.clear()
+            _submitted_task_ids.clear()
         _reset_watchdog()
         reset_states()
         cleanup_worker("default")
@@ -327,6 +333,7 @@ class IdempotencyTests(unittest.TestCase):
         with _idempotency_lock:
             _completed_task_ids.clear()
             _in_flight_task_ids.clear()
+            _submitted_task_ids.clear()
         cleanup_worker("default")
 
     def test_duplicate_task_id_skipped(self):
@@ -381,6 +388,97 @@ class IdempotencyTests(unittest.TestCase):
             run_cycle(task)
         with _idempotency_lock:
             self.assertIn(task.task_id, _completed_task_ids)
+
+
+class PersistentIdempotencyStoreTests(unittest.TestCase):
+    """Tests for the file-based persistent idempotency store."""
+
+    def setUp(self):
+        with _idempotency_lock:
+            _completed_task_ids.clear()
+            _in_flight_task_ids.clear()
+            _submitted_task_ids.clear()
+        _reset_watchdog()
+        reset_states()
+        cleanup_worker("default")
+        # Back up original store path content if it exists
+        self._store_backup = None
+        if _IDEMPOTENCY_STORE_PATH.exists():
+            self._store_backup = _IDEMPOTENCY_STORE_PATH.read_text(encoding="utf-8")
+
+    def tearDown(self):
+        with _idempotency_lock:
+            _completed_task_ids.clear()
+            _in_flight_task_ids.clear()
+            _submitted_task_ids.clear()
+        cleanup_worker("default")
+        # Restore original store content
+        if self._store_backup is not None:
+            _IDEMPOTENCY_STORE_PATH.write_text(self._store_backup, encoding="utf-8")
+        elif _IDEMPOTENCY_STORE_PATH.exists():
+            _IDEMPOTENCY_STORE_PATH.unlink()
+
+    def test_save_load_roundtrip_completed(self):
+        """Completed task IDs survive a save → clear → load cycle."""
+        task = _make_task()
+        with _idempotency_lock:
+            _completed_task_ids[task.task_id] = time.monotonic()
+            _save_idempotency_store()
+        # Simulate restart: clear in-memory state
+        with _idempotency_lock:
+            _completed_task_ids.clear()
+        self.assertNotIn(task.task_id, _completed_task_ids)
+        # Load from disk
+        _load_idempotency_store()
+        self.assertIn(task.task_id, _completed_task_ids)
+
+    def test_save_load_roundtrip_submitted(self):
+        """Submitted task IDs survive a save → clear → load cycle."""
+        task = _make_task()
+        with _idempotency_lock:
+            _submitted_task_ids[task.task_id] = time.monotonic()
+            _save_idempotency_store()
+        # Simulate restart: clear in-memory state
+        with _idempotency_lock:
+            _submitted_task_ids.clear()
+        self.assertNotIn(task.task_id, _submitted_task_ids)
+        # Load from disk
+        _load_idempotency_store()
+        self.assertIn(task.task_id, _submitted_task_ids)
+
+    def test_submitted_task_id_blocks_reexecution(self):
+        """A task_id in _submitted_task_ids prevents run_cycle from re-executing."""
+        task = _make_task()
+        with _idempotency_lock:
+            _submitted_task_ids[task.task_id] = time.monotonic()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp"),
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 50.0
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
+            action, state, total = run_cycle(task)
+        self.assertEqual(action, "complete")
+        self.assertIsNone(state)
+        self.assertIsNone(total)
+        mock_billing.select_profile.assert_not_called()
+
+    def test_clock_skew_future_timestamp_clamped(self):
+        """Future wall-clock timestamps (clock skew) are clamped to age=0."""
+        import json
+        task_id = "clock-skew-test-id"
+        future_ts = time.time() + 9999  # Far in the future
+        data = {"completed": {task_id: future_ts}, "submitted": {}}
+        _IDEMPOTENCY_STORE_PATH.write_text(json.dumps(data), encoding="utf-8")
+        _load_idempotency_store()
+        # Entry should be loaded (age clamped to 0, which is < TTL)
+        self.assertIn(task_id, _completed_task_ids)
+        # Its monotonic timestamp should be approximately now (age=0 → mono = now_mono - 0)
+        now_mono = time.monotonic()
+        self.assertAlmostEqual(_completed_task_ids[task_id], now_mono, delta=2.0)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,9 @@ associate a browser driver with each worker_id. Business logic
 implementation delegates to the registered driver for page interaction.
 """
 
+# TODO(CDP): Implement PID tracking + force kill when CDP Business Logic is implemented (GAP-CDP-01)
+# TODO(CDP): Extend _sanitize_error() redaction to CDP layer when implemented
+
 import threading
 
 _registry_lock = threading.Lock()

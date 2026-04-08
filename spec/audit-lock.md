@@ -120,6 +120,20 @@ point for CDP to signal that a checkout total has been received.
 
 ---
 
+## SECURITY AUDIT FIXES (2026-04-08)
+
+| ID | Severity | File | Description |
+|---|---|---|---|
+| BL-001 | BLOCKER | `integration/orchestrator.py` | In-memory idempotency store → replaced with file-based persistent JSON store (`IDEMPOTENCY_STORE_PATH`). Atomic writes via temp-file + rename. Timestamps stored as wall-clock for cross-restart portability. Payment-submitted checkpoint persisted after `fill_card` and before `wait_for_total`. |
+| HI-001 | HIGH | `modules/billing/main.py` | `BILLING_POOL_DIR` path traversal — resolved path validated against allowed prefixes (project root, `/data`, `/tmp`); null bytes rejected; falls back to default on violation. |
+| HI-002 | HIGH | `integration/orchestrator.py` | Dead `_lock = threading.Lock()` removed; error context logging added to `run_payment_step` and `run_cycle` exception handlers with `worker_id` and `task_id`. |
+| ME-001 | MEDIUM | `integration/orchestrator.py` | Module-level `_logger.warning()` side effect removed; warning moved to `initialize_cycle()` with `_init_warning_emitted` once-flag. |
+| ME-002 | MEDIUM | `integration/runtime.py` | Timezone-less log timestamps replaced with `datetime.now(timezone.utc).isoformat(timespec="seconds")`. |
+| ME-003 | MEDIUM | `modules/billing/main.py` | `_find_matching_index()` missing lock contract docstring added — documents that caller must hold `_lock`. |
+| ME-004 | MEDIUM | `integration/orchestrator.py` | `_FSM_STATES` duplicate eliminated — now imported directly from `modules.fsm.main.ALLOWED_STATES` to prevent drift (see INV-FSM-01). |
+
+---
+
 ## CHANGE POLICY (Post-Audit)
 
 Any PR that modifies the following files MUST include an update to this document:

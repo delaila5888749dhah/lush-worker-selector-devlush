@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 import threading
@@ -10,6 +11,7 @@ from modules.common.types import BillingProfile
 _lock = threading.Lock()
 _profiles = []
 _cursor = 0
+_logger = logging.getLogger(__name__)
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
 _PHONE_FIRST_DIGITS = "23456789"
@@ -19,7 +21,23 @@ _PHONE_OTHER_DIGITS = "0123456789"
 def _pool_dir():
     override = os.getenv("BILLING_POOL_DIR", "").strip()
     if override:
-        return Path(override)
+        if "\x00" in override:
+            _logger.warning("BILLING_POOL_DIR contains null bytes; using default billing_pool.")
+            return Path(__file__).resolve().parents[2] / "billing_pool"
+        resolved = Path(override).resolve()
+        project_root = Path(__file__).resolve().parents[2]
+        allowed_prefixes = (project_root, Path("/data"), Path("/tmp"))
+        if not any(
+            resolved == prefix or str(resolved).startswith(str(prefix) + os.sep)
+            for prefix in allowed_prefixes
+        ):
+            _logger.warning(
+                "BILLING_POOL_DIR '%s' is outside allowed prefixes %s; using default billing_pool.",
+                resolved,
+                [str(p) for p in allowed_prefixes],
+            )
+            return Path(__file__).resolve().parents[2] / "billing_pool"
+        return resolved
     return Path(__file__).resolve().parents[2] / "billing_pool"
 
 
@@ -96,6 +114,13 @@ def _generate_email(first_name=None, last_name=None):
 
 
 def _find_matching_index(zip_code):
+    """Find the index of the first profile matching *zip_code*, starting from _cursor.
+
+    .. warning::
+        This function reads module-level ``_profiles`` and ``_cursor`` without
+        acquiring ``_lock``.  It **MUST** only be called while the caller
+        already holds ``_lock``.
+    """
     if not zip_code:
         return None
     count = len(_profiles)
