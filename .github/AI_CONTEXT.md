@@ -93,9 +93,10 @@ Tất cả legacy flags (`ALLOW_MULTI_MODULE`) đã bị loại bỏ hoàn toàn
 | `emergency_override` | ✅ | ✅ | Hotfix production, security patch khẩn cấp |
 
 **Authorization (Bắt buộc cho mọi non-normal CHANGE_CLASS):**
-- Phải có ít nhất 1 trong 2 tín hiệu:
+- Phải có ít nhất 1 trong các tín hiệu:
   1. PR label `approved-override` (machine-verifiable qua `PR_LABELS` env var)
   2. `CHANGE_CLASS_APPROVED=true` (repo variable do Admin set)
+  3. `ALLOW_SPEC_MODIFICATION=true` (chỉ áp dụng cho `spec_sync`; nhất quán với `check_spec_lock` và `meta_audit`)
 - `emergency_override` **bổ sung yêu cầu**: phải có ít nhất 1 APPROVED review
 - Nếu thiếu bất kỳ tín hiệu nào → CI **FAIL**
 

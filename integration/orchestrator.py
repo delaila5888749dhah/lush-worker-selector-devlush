@@ -8,6 +8,7 @@ this file is the single integration point that wires them together.
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -24,6 +25,28 @@ from modules.watchdog import main as watchdog
 _WATCHDOG_TIMEOUT = 30
 
 _logger = logging.getLogger(__name__)
+
+# Redact card-like digit sequences (13–16 consecutive digits) from error messages
+# to prevent PII leakage when CDP exceptions contain card numbers.
+_SENSITIVE_PATTERN = re.compile(r'(?<!\w)(?:\d[ -]?){13,16}(?!\w)')
+
+
+def _sanitize_error(exc: Exception) -> str:
+    """Redact card-like digit sequences from exception messages before logging."""
+    return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
+
+
+def _get_trace_id() -> str:
+    """Retrieve the current trace_id from the runtime, or 'no-trace' if unavailable.
+
+    This provides log correlation between orchestrator events and the
+    runtime's structured log events without a hard import-time dependency.
+    """
+    try:
+        from integration.runtime import get_trace_id
+        return get_trace_id() or "no-trace"
+    except Exception:
+        return "no-trace"
 
 # TTL-based idempotency cache with in-flight tracking.
 # NOTE: For production at scale (>10 workers), migrate to Redis SET NX with TTL.
@@ -192,12 +215,13 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
                 _submitted_task_ids[_task_id] = time.monotonic()
                 _save_idempotency_store()
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
-    except Exception:
+    except Exception as exc:
         _logger.error(
-            "Payment step failed for worker=%s, task_id=%s",
+            "[trace=%s] Payment step failed for worker=%s, task_id=%s: %s",
+            _get_trace_id(),
             worker_id,
             getattr(task, "task_id", None),
-            exc_info=True,
+            _sanitize_error(exc),
         )
         # Clean up the orphaned watchdog session to prevent memory leaks.
         watchdog.reset_session(worker_id)
@@ -264,7 +288,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         with _idempotency_lock:
             _evict_expired_task_ids()
             if task_id in _completed_task_ids or task_id in _in_flight_task_ids or task_id in _submitted_task_ids:
-                _logger.warning("Duplicate task_id=%s detected; skipping.", task_id)
+                _logger.warning("[trace=%s] Duplicate task_id=%s detected; skipping.", _get_trace_id(), task_id)
                 return "complete", None, None
             # Mark as in-flight immediately to block concurrent duplicates
             _in_flight_task_ids.add(task_id)
@@ -278,15 +302,18 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
                 _submitted_task_ids.pop(task_id, None)
                 _save_idempotency_store()
         return action, state, total
-    except Exception:
+    except Exception as exc:
         _logger.error(
-            "Cycle failed for worker=%s, task_id=%s",
+            "[trace=%s] Cycle failed for worker=%s, task_id=%s: %s",
+            _get_trace_id(),
             worker_id,
             task_id,
-            exc_info=True,
+            _sanitize_error(exc),
         )
         raise
     finally:
         if task_id is not None:
             with _idempotency_lock:
                 _in_flight_task_ids.discard(task_id)
+        # Clean up CDP driver to prevent registry memory leak (GAP-CDP-01).
+        cdp.unregister_driver(worker_id)

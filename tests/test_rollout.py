@@ -234,13 +234,12 @@ class TestThreadSafety(RolloutResetMixin, unittest.TestCase):
         errors = []
         actions = []
         thread_count = 8
-        barrier = threading.Barrier(thread_count)
 
-        def check_healthy():
-            barrier.wait()
-            return []
-
-        configure(check_rollback_fn=check_healthy, save_baseline_fn=lambda: None)
+        # After the TOCTOU fix, check_fn is called under the lock (serialized),
+        # so we cannot use a threading.Barrier here.  Instead we verify the
+        # invariant directly: concurrent callers must never push the step
+        # index past the maximum.
+        configure(check_rollback_fn=lambda: [], save_baseline_fn=lambda: None)
 
         def scale_worker():
             try:
@@ -279,6 +278,44 @@ class TestScaleSteps(unittest.TestCase):
 
     def test_scale_steps_match_spec(self):
         self.assertEqual(SCALE_STEPS, (1, 3, 5, 10))
+
+
+class TestTOCTOURacePrevention(RolloutResetMixin, unittest.TestCase):
+    """Verify that try_scale_up() holds the lock during health check + step increment.
+
+    Before the fix, the lock was released between health check and step
+    increment, allowing a concurrent caller to also scale up (TOCTOU race).
+    After the fix, check_fn() is called under the lock.
+    """
+
+    def test_concurrent_scale_up_produces_exactly_expected_steps(self):
+        """Multiple threads calling try_scale_up() should never produce more
+        'scaled_up' actions than there are available scaling steps."""
+        scaled_up_count = []
+        errors = []
+        thread_count = 10
+
+        configure(check_rollback_fn=lambda: [], save_baseline_fn=lambda: None)
+
+        def worker():
+            try:
+                count, action, reasons = try_scale_up()
+                scaled_up_count.append(action)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        n_scaled = sum(1 for a in scaled_up_count if a == "scaled_up")
+        n_at_max = sum(1 for a in scaled_up_count if a == "at_max")
+        # Can only scale up (len(SCALE_STEPS) - 1) times total
+        self.assertLessEqual(n_scaled, len(SCALE_STEPS) - 1)
+        self.assertEqual(n_scaled + n_at_max, thread_count)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,11 @@ def try_scale_up():
     Before scaling up, the injected *check_rollback_fn* is called.  If it
     returns any reasons, a rollback is performed instead.
 
+    The entire check-then-act sequence is performed under ``_lock`` to
+    prevent TOCTOU races where two concurrent callers could both pass the
+    health check and both scale up (or one scales up while the other
+    rolls back).
+
     Returns:
         ``(worker_count, action, reasons)`` where *action* is one of
         ``"scaled_up"``, ``"rollback"``, or ``"at_max"``, and *reasons*
@@ -81,10 +86,11 @@ def try_scale_up():
         check_fn = _check_rollback_fn
         save_fn = _save_baseline_fn
 
-    # Call callbacks outside the lock to avoid holding it during I/O
-    reasons = check_fn() if check_fn is not None else []
+        # Call health check under lock to prevent TOCTOU race.
+        # The check_fn (monitor.check_rollback_needed) is lightweight —
+        # it only reads in-memory counters, no I/O.
+        reasons = check_fn() if check_fn is not None else []
 
-    with _lock:
         if reasons:
             old_index = _current_step_index
             if _current_step_index > 0:
@@ -104,14 +110,11 @@ def try_scale_up():
             )
             return SCALE_STEPS[_current_step_index], "rollback", reasons
 
-        if _current_step_index >= len(SCALE_STEPS) - 1:
-            return SCALE_STEPS[_current_step_index], "at_max", []
-
         _current_step_index += 1
         new_count = SCALE_STEPS[_current_step_index]
         new_step = _current_step_index
 
-    # Save baseline outside the lock
+    # Save baseline outside the lock (I/O-safe)
     if save_fn is not None:
         save_fn()
 

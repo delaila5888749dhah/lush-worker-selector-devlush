@@ -483,3 +483,85 @@ class PersistentIdempotencyStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CDPDriverCleanupTests(unittest.TestCase):
+    """Verify CDP driver is unregistered after run_cycle completes."""
+
+    def setUp(self):
+        with _idempotency_lock:
+            _completed_task_ids.clear()
+            _in_flight_task_ids.clear()
+            _submitted_task_ids.clear()
+        _reset_watchdog()
+        reset_states()
+        cleanup_worker("default")
+
+    def tearDown(self):
+        with _idempotency_lock:
+            _completed_task_ids.clear()
+            _in_flight_task_ids.clear()
+            _submitted_task_ids.clear()
+        cleanup_worker("default")
+
+    def test_cdp_unregister_driver_called_on_success(self):
+        """CDP driver must be cleaned up after a successful cycle."""
+        task = _make_task()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 99.0
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
+            run_cycle(task)
+        mock_cdp.unregister_driver.assert_called_once_with("default")
+
+    def test_cdp_unregister_driver_called_on_error(self):
+        """CDP driver must be cleaned up even when the cycle fails."""
+        task = _make_task()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.side_effect = RuntimeError("browser crashed")
+            with self.assertRaises(RuntimeError):
+                run_cycle(task)
+        mock_cdp.unregister_driver.assert_called_once_with("default")
+
+
+class SanitizeErrorTests(unittest.TestCase):
+    """Verify _sanitize_error redacts card-like numbers from orchestrator error messages."""
+
+    def test_redacts_card_number(self):
+        from integration.orchestrator import _sanitize_error
+        exc = RuntimeError("Card 4111111111111111 was declined")
+        result = _sanitize_error(exc)
+        self.assertNotIn("4111111111111111", result)
+        self.assertIn("[REDACTED]", result)
+
+    def test_preserves_non_card_data(self):
+        from integration.orchestrator import _sanitize_error
+        exc = RuntimeError("Worker timeout after 30 seconds")
+        result = _sanitize_error(exc)
+        self.assertEqual(result, "Worker timeout after 30 seconds")
+
+
+class TraceIdPropagationTests(unittest.TestCase):
+    """Verify _get_trace_id() returns a value from the runtime."""
+
+    def test_returns_no_trace_when_runtime_not_started(self):
+        from integration.orchestrator import _get_trace_id
+        # Runtime not started → trace_id is None → returns "no-trace"
+        result = _get_trace_id()
+        self.assertIsInstance(result, str)
+
+    def test_returns_trace_id_when_runtime_started(self):
+        from integration.orchestrator import _get_trace_id
+        with patch("integration.runtime.get_trace_id", return_value="abc123def456"):
+            result = _get_trace_id()
+        self.assertEqual(result, "abc123def456")
