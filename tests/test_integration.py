@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 from modules.common.exceptions import CycleExhaustedError, SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import (
-    _registry as _fsm_registry,
     cleanup_worker,
     get_current_state_for_worker,
     reset_states,
@@ -570,12 +569,10 @@ class FsmRegistryLeakTests(unittest.TestCase):
     def setUp(self):
         _reset_watchdog()
         reset_states()
-        for wid in list(_fsm_registry.keys()):
-            cleanup_worker(wid)
+        cleanup_worker("default")
 
     def tearDown(self):
-        for wid in list(_fsm_registry.keys()):
-            cleanup_worker(wid)
+        cleanup_worker("default")
 
     def test_fsm_registry_cleaned_up_after_run_cycle(self):
         """FSM registry must not grow after run_cycle finishes."""
