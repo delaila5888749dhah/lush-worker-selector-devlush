@@ -1,7 +1,5 @@
 import unittest
 
-import pytest
-
 from modules.common.types import CardInfo, WorkerTask
 
 
@@ -19,7 +17,7 @@ class TestWorkerTaskIdNoneRejected(unittest.TestCase):
 
     def test_task_id_none_raises_value_error(self):
         card = _make_card()
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             WorkerTask(
                 recipient_email="test@example.com",
                 amount=100,
