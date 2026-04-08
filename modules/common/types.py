@@ -35,3 +35,7 @@ class WorkerTask:
     primary_card: CardInfo
     order_queue: Tuple[CardInfo, ...]
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    def __post_init__(self):
+        if self.task_id is None:
+            raise ValueError("task_id must not be None")
