@@ -30,7 +30,7 @@ _logger = logging.getLogger(__name__)
 _IDEMPOTENCY_TTL = 3600  # 1 hour
 _completed_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp
 _in_flight_task_ids: set[str] = set()
-_submitted_task_ids: set[str] = set()  # task_ids with payment submitted but result unconfirmed
+_submitted_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp; payment sent but result unconfirmed
 _idempotency_lock = threading.Lock()
 
 # Persistent idempotency store — survives process restarts to prevent double-charges.
@@ -59,13 +59,24 @@ def _load_idempotency_store() -> None:
             if isinstance(completed, dict):
                 for k, wall_ts in completed.items():
                     try:
-                        age = now_wall - float(wall_ts)
+                        age = max(0.0, now_wall - float(wall_ts))
                         if age < _IDEMPOTENCY_TTL:
                             _completed_task_ids[k] = now_mono - age
                     except (ValueError, TypeError):
                         pass  # Malformed timestamp — skip this entry, don't block other valid ones
             if isinstance(submitted, list):
-                _submitted_task_ids.update(str(s) for s in submitted)
+                # Legacy format: list of task_ids without timestamps.
+                # Treat them as recently submitted (now) for TTL purposes.
+                for s in submitted:
+                    _submitted_task_ids[str(s)] = now_mono
+            elif isinstance(submitted, dict):
+                for k, wall_ts in submitted.items():
+                    try:
+                        age = max(0.0, now_wall - float(wall_ts))
+                        if age < _IDEMPOTENCY_TTL:
+                            _submitted_task_ids[k] = now_mono - age
+                    except (ValueError, TypeError):
+                        pass  # Malformed timestamp — skip this entry, don't block other valid ones
     except Exception:
         _logger.warning(
             "Failed to load idempotency store from %s; starting fresh.",
@@ -95,7 +106,11 @@ def _save_idempotency_store() -> None:
         }
         data = {
             "completed": completed_wall,
-            "submitted": list(_submitted_task_ids),
+            "submitted": {
+                k: now_wall - (now_mono - ts)
+                for k, ts in _submitted_task_ids.items()
+                if ts >= cutoff_mono
+            },
         }
         parent = _IDEMPOTENCY_STORE_PATH.parent
         parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +138,9 @@ def _evict_expired_task_ids() -> None:
     expired = [k for k, ts in _completed_task_ids.items() if ts < cutoff]
     for k in expired:
         del _completed_task_ids[k]
+    expired_sub = [k for k, ts in _submitted_task_ids.items() if ts < cutoff]
+    for k in expired_sub:
+        del _submitted_task_ids[k]
 
 
 def initialize_cycle(worker_id: str = "default"):
@@ -173,7 +191,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         _task_id = getattr(task, "task_id", None)
         if _task_id is not None:
             with _idempotency_lock:
-                _submitted_task_ids.add(_task_id)
+                _submitted_task_ids[_task_id] = time.monotonic()
                 _save_idempotency_store()
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
     except Exception:
@@ -247,7 +265,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
     if task_id is not None:
         with _idempotency_lock:
             _evict_expired_task_ids()
-            if task_id in _completed_task_ids or task_id in _in_flight_task_ids:
+            if task_id in _completed_task_ids or task_id in _in_flight_task_ids or task_id in _submitted_task_ids:
                 _logger.warning("Duplicate task_id=%s detected; skipping.", task_id)
                 return "complete", None, None
             # Mark as in-flight immediately to block concurrent duplicates
@@ -259,7 +277,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         if task_id is not None:
             with _idempotency_lock:
                 _completed_task_ids[task_id] = time.monotonic()
-                _submitted_task_ids.discard(task_id)
+                _submitted_task_ids.pop(task_id, None)
                 _save_idempotency_store()
         return action, state, total
     except Exception:
