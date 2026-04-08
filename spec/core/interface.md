@@ -1,7 +1,11 @@
 # Interface Contract — Core (FSM)
 
-spec-version: 4.0
+spec-version: 5.0
 
+> **v5.0 Breaking Changes:**
+> - CDP functions (detect_page_state, fill_card, fill_billing, clear_card_fields) now require worker_id parameter
+> - Added reset_session(worker_id) public API to watchdog module
+>
 > **v4.0 Breaking Changes:**
 > - Added SelectorTimeoutError and PageStateError exception types to modules.common.exceptions
 > - WorkerTask is now frozen (immutable)

@@ -13,6 +13,7 @@ from modules.watchdog.main import reset as _reset_watchdog
 from integration.orchestrator import (
     _completed_task_ids,
     _idempotency_lock,
+    _in_flight_task_ids,
     handle_outcome,
     initialize_cycle,
     run_cycle,
@@ -148,7 +149,7 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 25.0
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task)
-        mock_cdp.fill_card.assert_called_once_with(task.primary_card)
+        mock_cdp.fill_card.assert_called_once_with(task.primary_card, worker_id="default")
 
     def test_raises_session_flagged_on_watchdog_timeout(self):
         with (
@@ -328,7 +329,7 @@ class IdempotencyTests(unittest.TestCase):
     def test_duplicate_task_id_skipped(self):
         task = _make_task()
         with _idempotency_lock:
-            _completed_task_ids.add(task.task_id)
+            _completed_task_ids[task.task_id] = 0.0
         with (
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp"),

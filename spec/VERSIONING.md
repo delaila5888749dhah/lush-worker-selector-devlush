@@ -44,9 +44,9 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 4.0 | 2026-04-07 |
-| `spec/integration/interface.md` | 4.0 | 2026-04-07 |
-| `spec/interface.md` (aggregated) | 4.0 | 2026-04-07 |
+| `spec/core/interface.md` | 5.0 | 2026-04-08 |
+| `spec/integration/interface.md` | 5.0 | 2026-04-08 |
+| `spec/interface.md` (aggregated) | 5.0 | 2026-04-08 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -54,6 +54,10 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/cdp-timeout-contract.md` | 1.0 | 2026-04-07 |
 
 ## Changelog
+
+### v5.0 (2026-04-08) — BREAKING
+- CDP functions (`detect_page_state`, `fill_card`, `fill_billing`, `clear_card_fields`) now require `worker_id` parameter for multi-worker deployment safety
+- Added `reset_session(worker_id)` public API to watchdog module
 
 ### v4.0 (2026-04-07) — BREAKING
 - Added `SelectorTimeoutError` and `PageStateError` exception types to `modules.common.exceptions`

@@ -19,6 +19,7 @@ _save_baseline_fn = None
 
 # History of rollback events
 _rollback_history = []
+_ROLLBACK_HISTORY_LIMIT = 200
 
 
 def configure(check_rollback_fn=None, save_baseline_fn=None):
@@ -93,6 +94,8 @@ def try_scale_up():
                 "to_step": _current_step_index,
                 "reasons": list(reasons),
             })
+            if len(_rollback_history) > _ROLLBACK_HISTORY_LIMIT:
+                _rollback_history[:] = _rollback_history[-_ROLLBACK_HISTORY_LIMIT:]
             _logger.warning(
                 "Rollback %d → %d workers: %s",
                 SCALE_STEPS[old_index],
@@ -154,6 +157,8 @@ def force_rollback(reason="manual"):
             "to_step": _current_step_index,
             "reasons": [reason],
         })
+        if len(_rollback_history) > _ROLLBACK_HISTORY_LIMIT:
+            _rollback_history[:] = _rollback_history[-_ROLLBACK_HISTORY_LIMIT:]
         _logger.warning(
             "Forced rollback %d → %d workers: %s",
             SCALE_STEPS[old_index],

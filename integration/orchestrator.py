@@ -7,6 +7,7 @@ this file is the single integration point that wires them together.
 
 import logging
 import threading
+import time
 
 from modules.billing import main as billing
 from modules.cdp import main as cdp
@@ -21,8 +22,26 @@ _WATCHDOG_TIMEOUT = 30
 _lock = threading.Lock()
 _logger = logging.getLogger(__name__)
 
-_completed_task_ids: set = set()
+# CRITICAL-1 / HIGH-1: TTL-based idempotency cache with in-flight tracking
+_IDEMPOTENCY_TTL = 3600  # 1 hour
+_completed_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp
+_in_flight_task_ids: set[str] = set()
 _idempotency_lock = threading.Lock()
+
+# MEDIUM-2: Warn that idempotency store is in-memory only
+_logger.warning(
+    "Idempotency store is in-memory only. "
+    "Completed task IDs from previous sessions will NOT be remembered. "
+    "Ensure upstream deduplication is in place before retrying failed tasks."
+)
+
+
+def _evict_expired_task_ids() -> None:
+    """Remove task_ids that have exceeded the TTL. Must be called while holding _idempotency_lock."""
+    cutoff = time.monotonic() - _IDEMPOTENCY_TTL
+    expired = [k for k, ts in _completed_task_ids.items() if ts < cutoff]
+    for k in expired:
+        del _completed_task_ids[k]
 
 
 def initialize_cycle(worker_id: str = "default"):
@@ -58,14 +77,12 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     profile = billing.select_profile(zip_code)
     watchdog.enable_network_monitor(worker_id)
     try:
-        cdp.fill_billing(profile)
-        cdp.fill_card(task.primary_card)
+        cdp.fill_billing(profile, worker_id=worker_id)
+        cdp.fill_card(task.primary_card, worker_id=worker_id)
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
     except Exception:
         # Clean up the orphaned watchdog session to prevent memory leaks.
-        # _reset_session is an internal helper; this integration layer is the
-        # designated coordinator between modules and may use it directly.
-        watchdog._reset_session(worker_id)
+        watchdog.reset_session(worker_id)
         raise
     state = fsm.get_current_state_for_worker(worker_id)
     return state, total
@@ -92,7 +109,7 @@ def handle_outcome(state, order_queue, worker_id: str = "default"):
         return "retry"
     if state.name == "vbv_3ds":
         try:
-            cdp.clear_card_fields()
+            cdp.clear_card_fields(worker_id=worker_id)
         except Exception:
             _logger.warning(
                 "cdp.clear_card_fields() failed for worker=%s during vbv_3ds "
@@ -127,13 +144,21 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
     task_id = getattr(task, "task_id", None)
     if task_id is not None:
         with _idempotency_lock:
-            if task_id in _completed_task_ids:
+            _evict_expired_task_ids()
+            if task_id in _completed_task_ids or task_id in _in_flight_task_ids:
                 _logger.warning("Duplicate task_id=%s detected; skipping.", task_id)
                 return "complete", None, None
-    initialize_cycle(worker_id)
-    state, total = run_payment_step(task, zip_code, worker_id=worker_id)
-    action = handle_outcome(state, task.order_queue, worker_id=worker_id)
-    if task_id is not None:
-        with _idempotency_lock:
-            _completed_task_ids.add(task_id)
-    return action, state, total
+            # Mark as in-flight immediately to block concurrent duplicates
+            _in_flight_task_ids.add(task_id)
+    try:
+        initialize_cycle(worker_id)
+        state, total = run_payment_step(task, zip_code, worker_id=worker_id)
+        action = handle_outcome(state, task.order_queue, worker_id=worker_id)
+        if task_id is not None:
+            with _idempotency_lock:
+                _completed_task_ids[task_id] = time.monotonic()
+        return action, state, total
+    finally:
+        if task_id is not None:
+            with _idempotency_lock:
+                _in_flight_task_ids.discard(task_id)

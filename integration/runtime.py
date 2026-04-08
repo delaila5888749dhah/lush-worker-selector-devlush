@@ -23,8 +23,8 @@ _VALID_TRANSITIONS = {
 }
 _lock = threading.Lock()
 _state = "INIT"
-_workers: dict = {}
-_worker_states: dict = {}
+_workers: dict[str, threading.Thread] = {}
+_worker_states: dict[str, str] = {}
 _worker_counter = 0
 _loop_thread = None
 _trace_id = None
@@ -40,8 +40,7 @@ _pending_restarts = 0
 _stop_requests = set()
 _behavior_delay_enabled = True
 _stop_event = threading.Event()
-_SENSITIVE_PATTERN = re.compile(r'\b(?:\d[ -]?){13,16}\b')
-_restart_backoff: dict[str, float] = {}
+_SENSITIVE_PATTERN = re.compile(r'(?<!\w)(?:\d[ -]?){13,16}(?!\w)')
 _MAX_RESTART_BACKOFF = 60
 _restart_delay: float = 0
 _loop_error_count = 0
@@ -76,7 +75,7 @@ def _worker_fn(worker_id, task_fn, persona):
     with _lock:
         delay_enabled = _behavior_delay_enabled
     if delay_enabled and persona is not None:
-        wrapped_task = _behavior_wrap(task_fn, persona)
+        wrapped_task = _behavior_wrap(task_fn, persona, stop_event=_stop_event)
     else:
         wrapped_task = task_fn
     try:
@@ -270,7 +269,7 @@ def _runtime_loop(task_fn, interval):
             try:
                 metrics = monitor.get_metrics()
             except Exception as exc:
-                _log_event("runtime", "warning", "monitor_unavailable", {"error": str(exc)}); _safe_sleep(interval); continue
+                _log_event("runtime", "warning", "monitor_unavailable", {"error": _sanitize_error(exc)}); _safe_sleep(interval); continue
             step_index = rollout.get_current_step_index()
             max_index = len(rollout.SCALE_STEPS) - 1
             decision, decision_reasons = behavior.evaluate(metrics, step_index, max_index)
@@ -315,7 +314,7 @@ def _runtime_loop(task_fn, interval):
                 _safe_sleep(cb_pause)
         except Exception as exc:
             _loop_error_count += 1
-            _log_event("runtime", "error", "loop_error", {"error": str(exc), "count": _loop_error_count})
+            _log_event("runtime", "error", "loop_error", {"error": _sanitize_error(exc), "count": _loop_error_count})
             if _loop_error_count >= _MAX_LOOP_ERRORS:
                 _logger.critical("Runtime loop exceeded %d consecutive errors; halting.", _MAX_LOOP_ERRORS)
                 break
@@ -504,7 +503,7 @@ def reset():
         _state = "INIT"; _loop_thread = None; _workers = {}; _worker_states = {}; _worker_counter = 0
         _consecutive_rollbacks = 0; _pending_restarts = 0; _stop_requests.clear()
         _behavior_delay_enabled = False
-        _restart_backoff.clear(); _loop_error_count = 0; _restart_delay = 0
+        _loop_error_count = 0; _restart_delay = 0
     with _trace_lock:
         _trace_id = None
     _stop_event.clear()

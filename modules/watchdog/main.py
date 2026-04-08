@@ -71,6 +71,11 @@ def _reset_session(worker_id: str) -> None:
         _watchdog_registry.pop(worker_id, None)
 
 
+def reset_session(worker_id: str) -> None:
+    """Reset the watchdog session for worker_id (public API for orchestrator)."""
+    _reset_session(worker_id)
+
+
 def reset() -> None:
     """Reset all watchdog state. Intended for testing only."""
     with _registry_lock:

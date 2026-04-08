@@ -1,7 +1,11 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP)
 
-spec-version: 4.0
+spec-version: 5.0
 
+> **v5.0 Breaking Changes:**
+> - CDP functions (detect_page_state, fill_card, fill_billing, clear_card_fields) now require worker_id parameter
+> - Added reset_session(worker_id) public API to watchdog module
+>
 > **v4.0 Breaking Changes:**
 > - Added SelectorTimeoutError and PageStateError exception types to modules.common.exceptions
 > - WorkerTask is now frozen (immutable)
@@ -41,6 +45,13 @@ Notes:
   - Safe to call from any thread (browser CDP event thread, worker thread, etc.)
   - No-op if no session exists for worker_id
 
+Function: reset_session
+Input:
+  - worker_id
+Output: None
+Notes:
+  - Public API for orchestrator to clean up watchdog sessions
+
 ## Module: billing
 
 Function: select_profile
@@ -62,19 +73,23 @@ Input:
 Output: None
 
 Function: detect_page_state
-Input: None
+Input:
+  - worker_id
 Output: str
 
 Function: fill_card
 Input:
   - card_info
+  - worker_id
 Output: None
 
 Function: fill_billing
 Input:
   - billing_profile
+  - worker_id
 Output: None
 
 Function: clear_card_fields
-Input: None
+Input:
+  - worker_id
 Output: None
