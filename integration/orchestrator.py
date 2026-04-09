@@ -299,26 +299,19 @@ _idempotency_store_lock = threading.Lock()
 
 
 def _get_idempotency_store() -> _IdempotencyStore:
-    """Build the idempotency store lazily so imports stay side-effect free."""
+    """Return the idempotency store, building and loading it on first call.
+
+    Thread-safe. Combines lazy construction (_build_idempotency_store) and
+    lazy load (_load) into a single atomic init so there is no separate
+    _store_loaded sentinel variable.
+    """
     global _idempotency_store
     with _idempotency_store_lock:
         if _idempotency_store is None:
-            _idempotency_store = _build_idempotency_store()
+            store = _build_idempotency_store()
+            store.load()
+            _idempotency_store = store
         return _idempotency_store
-
-# ── Lazy store loading (HIGH-03) ───────────────────────────────────
-
-_store_loaded: bool = False
-_store_loaded_lock = threading.Lock()
-
-
-def _ensure_store_loaded() -> None:
-    """Load the idempotency store exactly once per process lifetime."""
-    global _store_loaded
-    with _store_loaded_lock:
-        if not _store_loaded:
-            _get_idempotency_store().load()
-            _store_loaded = True
 
 
 def _flush_idempotency_store() -> None:
@@ -370,7 +363,7 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
 
 def initialize_cycle(worker_id: str = "default"):
     """Reset FSM registry and register all valid states for a new cycle."""
-    _ensure_store_loaded()
+    _get_idempotency_store()
     rollout.configure(monitor.check_rollback_needed, monitor.save_baseline)
     fsm.initialize_for_worker(worker_id)
 
