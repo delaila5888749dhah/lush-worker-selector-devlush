@@ -242,8 +242,8 @@ def _check_authorization(change_class: str) -> list[str]:
     Per AI_CONTEXT.md §6 — Authorization:
       All non-normal require: label 'approved-override' OR
       CHANGE_CLASS_APPROVED=true.
-      spec_sync is also authorized by ALLOW_SPEC_MODIFICATION=true
-      (consistent with check_spec_lock and meta_audit).
+      Workflow derives ALLOW_SPEC_MODIFICATION from those same
+      approval signals for downstream spec checks.
       emergency_override additionally needs APPROVED review.
     """
     if change_class == "normal":
