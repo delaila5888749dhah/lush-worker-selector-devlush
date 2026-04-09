@@ -20,8 +20,8 @@ import unittest
 from modules.delay.main import (
     BEHAVIOR_STATES,
     BehaviorStateMachine,
-    _VALID_BEHAVIOR_TRANSITIONS,
 )
+from modules.delay.state import _VALID_BEHAVIOR_TRANSITIONS
 
 
 # ── BEHAVIOR_STATES constants ───────────────────────────────────

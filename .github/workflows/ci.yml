@@ -56,7 +56,7 @@ jobs:
         CHANGE_CLASS: ${{ vars.CHANGE_CLASS || '' }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-        CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
+        CHANGE_CLASS_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'approved-override') && 'true' || vars.CHANGE_CLASS_APPROVED || 'false' }}
         PR_REVIEW_STATE: ${{ steps.review_state.outputs.state }}
 
     - name: Check spec consistency

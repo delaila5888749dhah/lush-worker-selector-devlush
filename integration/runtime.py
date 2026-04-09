@@ -143,7 +143,7 @@ def start_worker(task_fn):
         # Generate a deterministic persona seed from the worker id
         persona_seed = zlib.crc32(wid.encode()) & 0xFFFFFFFF
         persona = PersonaProfile(persona_seed)
-        t = threading.Thread(target=_worker_fn, args=(wid, task_fn, persona), daemon=True)
+        t = threading.Thread(target=_worker_fn, args=(wid, task_fn, persona), daemon=False)
         _workers[wid] = t
         _worker_states[wid] = "IDLE"
     try:
@@ -394,6 +394,17 @@ def stop(timeout=None):
         all_stopped = False
     with _lock:
         _state = "STOPPED"
+    flush_ok = False
+    try:
+        from integration.orchestrator import _flush_idempotency_store
+        _flush_idempotency_store()
+        flush_ok = True
+    except Exception:
+        _logger.warning("Failed to flush idempotency store during shutdown", exc_info=True)
+    if flush_ok:
+        _logger.info("All workers stopped. Idempotency store flushed.")
+    else:
+        _logger.warning("All workers stopped. Idempotency store flush skipped or failed.")
     if not loop_stopped or not all_stopped:
         _log_event("runtime", "stopped", "runtime_stop_partial")
         return False

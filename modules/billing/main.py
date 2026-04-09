@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections
 import logging
 import os
@@ -18,7 +20,7 @@ _PHONE_FIRST_DIGITS = "23456789"
 _PHONE_OTHER_DIGITS = "0123456789"
 
 
-def _pool_dir():
+def _pool_dir() -> Path:
     override = os.getenv("BILLING_POOL_DIR", "").strip()
     if override:
         if "\x00" in override:
@@ -41,13 +43,13 @@ def _pool_dir():
     return Path(__file__).resolve().parents[2] / "billing_pool"
 
 
-def _reset_state():
+def _reset_state() -> None:
     global _profiles
     with _lock:
         _profiles = collections.deque()
 
 
-def _normalize_zip(zip_code):
+def _normalize_zip(zip_code: str | int | None) -> str:
     if zip_code is None:
         return ""
     if isinstance(zip_code, bool):
@@ -57,7 +59,7 @@ def _normalize_zip(zip_code):
     raise ValueError("zip_code must be str or int")
 
 
-def _parse_profile_line(line):
+def _parse_profile_line(line: str) -> BillingProfile | None:
     cleaned = line.strip()
     if not cleaned:
         return None
@@ -81,7 +83,7 @@ def _parse_profile_line(line):
     )
 
 
-def _read_profiles_from_disk():
+def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
     """Read and parse profiles from disk. Must be called without holding _lock."""
     pool_dir = _pool_dir()
     profiles = []
@@ -99,20 +101,20 @@ def _read_profiles_from_disk():
     return collections.deque(profiles)
 
 
-def _generate_phone():
+def _generate_phone() -> str:
     first = random.choice(_PHONE_FIRST_DIGITS)
     rest = "".join(random.choice(_PHONE_OTHER_DIGITS) for _ in range(9))
     return f"{first}{rest}"
 
 
-def _generate_email(first_name=None, last_name=None):
+def _generate_email(first_name: str | None = None, last_name: str | None = None) -> str:
     # Parameters unused intentionally; UUID token prevents PII leakage via name-derived emails
     token = uuid.uuid4().hex[:8]
     domain = random.choice(_EMAIL_DOMAINS)
     return f"user{token}@{domain}"
 
 
-def _find_matching_index(zip_code):
+def _find_matching_index(zip_code: str) -> int | None:
     """Find the index of the first profile matching *zip_code*.
 
     .. warning::
@@ -128,7 +130,7 @@ def _find_matching_index(zip_code):
     return None
 
 
-def _fill_missing(profile):
+def _fill_missing(profile: BillingProfile) -> BillingProfile:
     phone = profile.phone or _generate_phone()
     email = profile.email or _generate_email(profile.first_name, profile.last_name)
     return BillingProfile(
@@ -143,7 +145,7 @@ def _fill_missing(profile):
     )
 
 
-def select_profile(zip_code):
+def select_profile(zip_code: str | int | None = None) -> BillingProfile:
     global _profiles
     normalized_zip = _normalize_zip(zip_code)
 

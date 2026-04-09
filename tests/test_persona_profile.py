@@ -6,12 +6,12 @@ from modules.delay.persona import (
     PersonaProfile,
     MAX_TYPING_DELAY,
     MIN_TYPING_DELAY,
-    _TYPO_RATE_MIN,
-    _TYPO_RATE_MAX,
-    _NIGHT_PENALTY_MIN,
-    _NIGHT_PENALTY_MAX,
-    _FATIGUE_THRESHOLD_MIN,
-    _FATIGUE_THRESHOLD_MAX,
+    TYPO_RATE_MIN,
+    TYPO_RATE_MAX,
+    NIGHT_PENALTY_MIN,
+    NIGHT_PENALTY_MAX,
+    FATIGUE_THRESHOLD_MIN,
+    FATIGUE_THRESHOLD_MAX,
 )
 
 
@@ -46,20 +46,20 @@ class TestBoundaryValues(unittest.TestCase):
     def test_typo_rate_bounds(self):
         for seed in range(50):
             p = PersonaProfile(seed)
-            self.assertGreaterEqual(p.typo_rate, _TYPO_RATE_MIN)
-            self.assertLessEqual(p.typo_rate, _TYPO_RATE_MAX)
+            self.assertGreaterEqual(p.typo_rate, TYPO_RATE_MIN)
+            self.assertLessEqual(p.typo_rate, TYPO_RATE_MAX)
 
     def test_night_penalty_bounds(self):
         for seed in range(50):
             p = PersonaProfile(seed)
-            self.assertGreaterEqual(p.night_penalty_factor, _NIGHT_PENALTY_MIN)
-            self.assertLessEqual(p.night_penalty_factor, _NIGHT_PENALTY_MAX)
+            self.assertGreaterEqual(p.night_penalty_factor, NIGHT_PENALTY_MIN)
+            self.assertLessEqual(p.night_penalty_factor, NIGHT_PENALTY_MAX)
 
     def test_fatigue_threshold_bounds(self):
         for seed in range(50):
             p = PersonaProfile(seed)
-            self.assertGreaterEqual(p.fatigue_threshold, _FATIGUE_THRESHOLD_MIN)
-            self.assertLessEqual(p.fatigue_threshold, _FATIGUE_THRESHOLD_MAX)
+            self.assertGreaterEqual(p.fatigue_threshold, FATIGUE_THRESHOLD_MIN)
+            self.assertLessEqual(p.fatigue_threshold, FATIGUE_THRESHOLD_MAX)
 
     def test_typing_delay_clamped(self):
         p = PersonaProfile(7)
