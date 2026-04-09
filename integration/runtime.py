@@ -344,7 +344,7 @@ def start(task_fn, interval=None):
         if _state not in ("INIT", "STOPPED"):
             return False
         _stop_event.clear()
-        _loop_thread = threading.Thread(target=_runtime_loop, args=(task_fn, interval), daemon=True)
+        _loop_thread = threading.Thread(target=_runtime_loop, args=(task_fn, interval), daemon=False)
         with _trace_lock:
             _trace_id = uuid.uuid4().hex[:12]
         _state = "RUNNING"
