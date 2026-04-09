@@ -1,3 +1,4 @@
+import collections
 import os
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ class BillingTests(unittest.TestCase):
 
     def _set_profiles(self, profiles):
         with billing._lock:
-            billing._profiles = billing.collections.deque(profiles)
+            billing._profiles = collections.deque(profiles)
 
     def test_select_profile_valid_input_returns_profile(self):
         profile = BillingProfile(

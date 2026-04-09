@@ -10,7 +10,7 @@ from modules.common.exceptions import CycleExhaustedError
 from modules.common.types import BillingProfile
 
 _lock = threading.Lock()
-_profiles: collections.deque = collections.deque()
+_profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
