@@ -37,5 +37,9 @@ class WorkerTask:
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def __post_init__(self):
-        if self.task_id is None:
-            raise ValueError("task_id must not be None")
+        if not self.task_id or not isinstance(self.task_id, str):
+            raise ValueError(
+                f"task_id must be a non-empty string, got {self.task_id!r}"
+            )
+        if len(self.task_id.strip()) == 0:
+            raise ValueError("task_id must not be blank or whitespace-only")

@@ -8,9 +8,9 @@ BiometricProfile lives in biometrics.py (Task 10.6).
 """
 from modules.delay.persona import PersonaProfile  # noqa: F401
 from modules.delay.persona import MAX_TYPING_DELAY, MIN_TYPING_DELAY  # noqa: F401
-from modules.delay.persona import _TYPO_RATE_MIN, _TYPO_RATE_MAX  # noqa: F401
-from modules.delay.persona import _NIGHT_PENALTY_MIN, _NIGHT_PENALTY_MAX  # noqa: F401
-from modules.delay.persona import _FATIGUE_THRESHOLD_MIN, _FATIGUE_THRESHOLD_MAX  # noqa: F401
+from modules.delay.persona import TYPO_RATE_MIN, TYPO_RATE_MAX  # noqa: F401
+from modules.delay.persona import NIGHT_PENALTY_MIN, NIGHT_PENALTY_MAX  # noqa: F401
+from modules.delay.persona import FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX  # noqa: F401
 from modules.delay.persona import _PERSONA_TYPES  # noqa: F401
 from modules.delay.state import BehaviorStateMachine, BEHAVIOR_STATES, _VALID_BEHAVIOR_TRANSITIONS  # noqa: F401
 from modules.delay.engine import DelayEngine  # noqa: F401

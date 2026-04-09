@@ -4,11 +4,13 @@ Collects success rate, error rate, memory usage, and worker restart counts.
 Thread-safe via threading.Lock.  No cross-module imports.
 """
 
+import sys
 import threading
 import time
 import logging
 
 _lock = threading.Lock()
+_logger = logging.getLogger(__name__)
 
 # Counters
 _success_count = 0
@@ -76,21 +78,45 @@ def get_error_rate():
         return _error_count / total
 
 
-def get_memory_usage_bytes():
-    """Return the current process RSS memory usage in bytes.
+def get_memory_usage_bytes() -> int:
+    """Return current process RSS memory in bytes.
 
-    Uses /proc/self/status on Linux.  Returns 0 on unsupported platforms.
+    Tries psutil first (cross-platform), then /proc/self/status (Linux),
+    then resource module (macOS). Returns 0 with a warning if all fail.
     """
+    # Method 1: psutil (most accurate, cross-platform)
     try:
-        with open("/proc/self/status", "r") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    # Value is in kB
-                    return int(line.split()[1]) * 1024
-    except (OSError, IndexError, ValueError):
-        logging.getLogger(__name__).debug(
-            "Failed to read VmRSS from /proc/self/status; returning 0", exc_info=True
-        )
+        import psutil
+        return psutil.Process().memory_info().rss
+    except ImportError:
+        pass
+    except Exception as e:
+        _logger.debug("psutil memory check failed: %s", e)
+
+    # Method 2: Linux /proc/self/status
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/status", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, IndexError, ValueError) as e:
+            _logger.debug("Failed to read VmRSS from /proc/self/status: %s", e)
+
+    # Method 3: macOS resource module
+    if sys.platform == "darwin":
+        try:
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        except Exception as e:
+            _logger.debug("resource.getrusage failed: %s", e)
+
+    _logger.warning(
+        "Cannot determine memory usage on platform %r; "
+        "memory rollback threshold will not trigger. "
+        "Install psutil for cross-platform support.",
+        sys.platform,
+    )
     return 0
 
 

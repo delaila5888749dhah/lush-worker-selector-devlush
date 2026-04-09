@@ -5,6 +5,7 @@ No cross-module imports exist within the individual modules themselves;
 this file is the single integration point that wires them together.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 from modules.billing import main as billing
 from modules.cdp import main as cdp
@@ -45,11 +47,18 @@ def _get_trace_id() -> str:
     try:
         from integration.runtime import get_trace_id
         return get_trace_id() or "no-trace"
+    except ImportError:
+        # Acceptable: orchestrator running standalone without runtime module
+        return "no-trace"
     except Exception:
+        # Unexpected error — log at DEBUG to avoid spam, but don't silently swallow
+        _logger.debug(
+            "get_trace_id() raised unexpectedly; log correlation unavailable",
+            exc_info=True,
+        )
         return "no-trace"
 
 # TTL-based idempotency cache with in-flight tracking.
-# NOTE: For production at scale (>10 workers), migrate to Redis SET NX with TTL.
 _IDEMPOTENCY_TTL = 3600  # 1 hour
 _completed_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp
 _in_flight_task_ids: set[str] = set()
@@ -58,12 +67,12 @@ _idempotency_lock = threading.Lock()
 
 # Persistent idempotency store — survives process restarts to prevent double-charges.
 # Configurable via IDEMPOTENCY_STORE_PATH env var.
-# NOTE: For production at scale (>10 workers), migrate to Redis SET NX with TTL.
 _IDEMPOTENCY_STORE_PATH = Path(
     os.getenv("IDEMPOTENCY_STORE_PATH", ".idempotency_store.json")
 )
 
-_init_warning_emitted = False
+# CDP call timeout — prevents worker threads from blocking indefinitely.
+_CDP_CALL_TIMEOUT = float(os.getenv("CDP_CALL_TIMEOUT_SECONDS", "15"))
 
 
 def _load_idempotency_store() -> None:
@@ -79,8 +88,11 @@ def _load_idempotency_store() -> None:
                 age = max(0.0, now_wall - float(wall_ts))
                 if age < _IDEMPOTENCY_TTL:
                     target[k] = now_mono - age
-            except (ValueError, TypeError):
-                pass  # Malformed timestamp — skip this entry, don't block other valid ones
+            except (ValueError, TypeError) as parse_err:
+                _logger.warning(
+                    "Skipping malformed idempotency store entry: key=%r value=%r error=%s",
+                    k, wall_ts, parse_err,
+                )
 
     try:
         if _IDEMPOTENCY_STORE_PATH.exists():
@@ -149,8 +161,159 @@ def _save_idempotency_store() -> None:
         )
 
 
-# Load idempotency state from persistent store on startup.
-_load_idempotency_store()
+# ── Idempotency store abstraction (CRIT-01) ────────────────────────────────
+
+
+class _IdempotencyStore:
+    """Abstract base for idempotency backends."""
+
+    def is_duplicate(self, task_id: str) -> bool:
+        """Return True if task_id is already known (completed/in-flight/submitted).
+
+        For FileIdempotencyStore, also marks the task as in-flight on first
+        encounter.  For RedisIdempotencyStore, atomically sets the key.
+        """
+        raise NotImplementedError
+
+    def mark_submitted(self, task_id: str) -> None:
+        """Record that payment was submitted for task_id (but not yet confirmed)."""
+        raise NotImplementedError
+
+    def mark_completed(self, task_id: str) -> None:
+        """Record that task_id completed successfully."""
+        raise NotImplementedError
+
+    def release_inflight(self, task_id: str) -> None:
+        """Remove task_id from the in-flight set (called in finally block)."""
+        raise NotImplementedError
+
+    def flush(self) -> None:
+        """Force-persist state.  No-op for backends that are always persistent."""
+        raise NotImplementedError
+
+    def load(self) -> None:
+        """Load persisted state on startup.  No-op for always-persistent backends."""
+        raise NotImplementedError
+
+
+class _FileIdempotencyStore(_IdempotencyStore):
+    """File-backed idempotency store using module-level dicts under ``_idempotency_lock``."""
+
+    def is_duplicate(self, task_id: str) -> bool:
+        with _idempotency_lock:
+            _evict_expired_task_ids()
+            if (
+                task_id in _completed_task_ids
+                or task_id in _in_flight_task_ids
+                or task_id in _submitted_task_ids
+            ):
+                return True
+            # Mark as in-flight immediately to block concurrent duplicates.
+            _in_flight_task_ids.add(task_id)
+            return False
+
+    def mark_submitted(self, task_id: str) -> None:
+        with _idempotency_lock:
+            _submitted_task_ids[task_id] = time.monotonic()
+            _save_idempotency_store()
+
+    def mark_completed(self, task_id: str) -> None:
+        with _idempotency_lock:
+            _completed_task_ids[task_id] = time.monotonic()
+            _submitted_task_ids.pop(task_id, None)
+            _save_idempotency_store()
+
+    def release_inflight(self, task_id: str) -> None:
+        with _idempotency_lock:
+            _in_flight_task_ids.discard(task_id)
+
+    def flush(self) -> None:
+        with _idempotency_lock:
+            _save_idempotency_store()
+
+    def load(self) -> None:
+        _load_idempotency_store()
+
+
+class _RedisIdempotencyStore(_IdempotencyStore):
+    """Redis-backed idempotency store.  Uses SET NX EX for atomic cross-process safety."""
+
+    def __init__(self, redis_url: str) -> None:
+        import redis as _redis_lib
+        self._redis = _redis_lib.Redis.from_url(
+            redis_url,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            decode_responses=True,
+        )
+
+    def _key(self, task_id: str) -> str:
+        return f"idempotency:lush-givex:{task_id}"
+
+    def is_duplicate(self, task_id: str) -> bool:
+        # SET NX returns True when the key was set (first time → not a duplicate).
+        # Returns None/False when the key already exists → duplicate.
+        result = self._redis.set(self._key(task_id), "inflight", nx=True, ex=_IDEMPOTENCY_TTL)
+        return result is None or result is False
+
+    def mark_submitted(self, task_id: str) -> None:
+        self._redis.set(self._key(task_id), "submitted", ex=_IDEMPOTENCY_TTL)
+
+    def mark_completed(self, task_id: str) -> None:
+        self._redis.set(self._key(task_id), "completed", ex=_IDEMPOTENCY_TTL)
+
+    def release_inflight(self, task_id: str) -> None:
+        pass  # Key persists with TTL; no explicit cleanup needed.
+
+    def flush(self) -> None:
+        pass  # Redis is always persistent; no explicit flush required.
+
+    def load(self) -> None:
+        pass  # Redis does not require a load step.
+
+
+def _build_idempotency_store() -> _IdempotencyStore:
+    """Select the appropriate idempotency backend based on environment."""
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if redis_url:
+        try:
+            store = _RedisIdempotencyStore(redis_url)
+            _logger.info("Using Redis-based idempotency store (url=%s).", redis_url)
+            return store
+        except Exception:
+            _logger.warning(
+                "Failed to initialise RedisIdempotencyStore (url=%s); "
+                "falling back to file-based store.",
+                redis_url,
+                exc_info=True,
+            )
+    _logger.warning(
+        "[WARN] Using file-based idempotency store. "
+        "Set REDIS_URL for production multi-process deployments."
+    )
+    return _FileIdempotencyStore()
+
+
+_idempotency_store: _IdempotencyStore = _build_idempotency_store()
+
+# ── Lazy store loading (HIGH-03) ───────────────────────────────────
+
+_store_loaded: bool = False
+_store_loaded_lock = threading.Lock()
+
+
+def _ensure_store_loaded() -> None:
+    """Load the idempotency store exactly once per process lifetime."""
+    global _store_loaded
+    with _store_loaded_lock:
+        if not _store_loaded:
+            _idempotency_store.load()
+            _store_loaded = True
+
+
+def _flush_idempotency_store() -> None:
+    """Force-persist idempotency store. Called by runtime on graceful shutdown."""
+    _idempotency_store.flush()
 
 
 def _evict_expired_task_ids() -> None:
@@ -164,16 +327,40 @@ def _evict_expired_task_ids() -> None:
         del _submitted_task_ids[k]
 
 
+# ── CDP timeout helper (HIGH-02) ──────────────────────────────────
+
+
+def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_TIMEOUT, **kwargs: Any) -> Any:
+    """Execute a CDP call with a hard timeout.
+
+    Wraps *fn* in a single-worker ``ThreadPoolExecutor`` and waits at most
+    *timeout* seconds.  Raises ``SessionFlaggedError`` if the call does not
+    complete in time so the runtime treats the session as flagged.
+
+    Args:
+        fn: CDP callable to invoke.
+        *args: Positional arguments forwarded to *fn*.
+        timeout: Maximum seconds to wait (default: ``_CDP_CALL_TIMEOUT``).
+        **kwargs: Keyword arguments forwarded to *fn*.
+
+    Raises:
+        SessionFlaggedError: If the call does not complete within *timeout* seconds.
+    """
+    from modules.common.exceptions import SessionFlaggedError
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise SessionFlaggedError(
+                f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
+                f"timed out after {timeout}s for worker"
+            )
+
+
 def initialize_cycle(worker_id: str = "default"):
     """Reset FSM registry and register all valid states for a new cycle."""
-    global _init_warning_emitted
-    if not _init_warning_emitted:
-        _logger.warning(
-            "Idempotency store is file-based (%s). "
-            "For production at scale (>10 workers), migrate to Redis SET NX with TTL.",
-            _IDEMPOTENCY_STORE_PATH,
-        )
-        _init_warning_emitted = True
+    _ensure_store_loaded()
     rollout.configure(monitor.check_rollback_needed, monitor.save_baseline)
     fsm.initialize_for_worker(worker_id)
 
@@ -184,7 +371,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     Steps:
       1. Select a billing profile from the pool.
       2. Enable the network watchdog for this worker.
-      3. Fill billing and card data via CDP.
+      3. Fill billing and card data via CDP (with timeout).
       4. Wait for the checkout total to be confirmed by the watchdog.
       5. Return (state, total).
 
@@ -205,15 +392,13 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     profile = billing.select_profile(zip_code)
     watchdog.enable_network_monitor(worker_id)
     try:
-        cdp.fill_billing(profile, worker_id=worker_id)
-        cdp.fill_card(task.primary_card, worker_id=worker_id)
+        _cdp_call_with_timeout(cdp.fill_billing, profile, worker_id=worker_id)
+        _cdp_call_with_timeout(cdp.fill_card, task.primary_card, worker_id=worker_id)
         # Payment-submitted checkpoint: persist task_id before waiting for total.
-        # If the process crashes here, _submitted_task_ids records that payment was sent.
+        # If the process crashes here, the submitted state records that payment was sent.
         _task_id = getattr(task, "task_id", None)
         if _task_id is not None:
-            with _idempotency_lock:
-                _submitted_task_ids[_task_id] = time.monotonic()
-                _save_idempotency_store()
+            _idempotency_store.mark_submitted(_task_id)
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
     except Exception as exc:
         _logger.error(
@@ -286,22 +471,19 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
     """
     task_id = getattr(task, "task_id", None)
     if task_id is not None:
-        with _idempotency_lock:
-            _evict_expired_task_ids()
-            if task_id in _completed_task_ids or task_id in _in_flight_task_ids or task_id in _submitted_task_ids:
-                _logger.warning("[trace=%s] Duplicate task_id=%s detected; skipping.", _get_trace_id(), task_id)
-                return "complete", None, None
-            # Mark as in-flight immediately to block concurrent duplicates
-            _in_flight_task_ids.add(task_id)
+        if _idempotency_store.is_duplicate(task_id):
+            _logger.warning(
+                "[trace=%s] Duplicate task_id=%s detected; skipping.",
+                _get_trace_id(),
+                task_id,
+            )
+            return "complete", None, None
     try:
         initialize_cycle(worker_id)
         state, total = run_payment_step(task, zip_code, worker_id=worker_id)
         action = handle_outcome(state, task.order_queue, worker_id=worker_id)
         if task_id is not None:
-            with _idempotency_lock:
-                _completed_task_ids[task_id] = time.monotonic()
-                _submitted_task_ids.pop(task_id, None)
-                _save_idempotency_store()
+            _idempotency_store.mark_completed(task_id)
         return action, state, total
     except Exception as exc:
         _logger.error(
@@ -314,8 +496,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         raise
     finally:
         if task_id is not None:
-            with _idempotency_lock:
-                _in_flight_task_ids.discard(task_id)
+            _idempotency_store.release_inflight(task_id)
         # Clean up CDP driver to prevent registry memory leak (GAP-CDP-01).
         cdp.unregister_driver(worker_id)
         # Clean up FSM state to prevent registry memory leak (HIGH-02 / FSM-002).
