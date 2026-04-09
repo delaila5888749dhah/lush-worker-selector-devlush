@@ -246,6 +246,12 @@ class _RedisIdempotencyStore(_IdempotencyStore):
             socket_timeout=2,
             decode_responses=True,
         )
+        try:
+            self._redis.ping()
+        except Exception as exc:
+            raise ConnectionError(
+                f"Redis ping failed for url={redis_url}: {exc}"
+            ) from exc
 
     def _key(self, task_id: str) -> str:
         return f"idempotency:lush-givex:{task_id}"
