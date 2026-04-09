@@ -5,6 +5,13 @@ from modules.common.types import State
 
 ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
 
+_VALID_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
+    "ui_lock": {"success", "declined", "vbv_3ds"},
+    "vbv_3ds": {"success", "declined"},
+    "success": set(),
+    "declined": set(),
+}
+
 # Per-worker registry: worker_id → {"states": {}, "current": None}
 _registry: dict[str, dict] = {}
 _registry_lock = threading.Lock()
@@ -53,6 +60,12 @@ def transition_for_worker(worker_id: str, target_state: str) -> State:
         entry = _registry.get(worker_id)
         if entry is None or target_state not in entry["states"]:
             raise InvalidTransitionError(f"state '{target_state}' not registered for worker '{worker_id}'")
+        current = entry["current"]
+        if current is not None:
+            current_name = current.name
+            allowed_targets = _VALID_PAYMENT_TRANSITIONS.get(current_name, set())
+            if target_state not in allowed_targets:
+                raise ValueError(f"Invalid transition from {current_name} to {target_state}")
         entry["current"] = entry["states"][target_state]
         return entry["current"]
 

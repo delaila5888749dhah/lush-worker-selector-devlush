@@ -55,8 +55,8 @@ class InitializeCycleTests(unittest.TestCase):
         cleanup_worker("default")
 
     def test_registers_all_states(self):
-        initialize_cycle()
         for name in ("ui_lock", "success", "vbv_3ds", "declined"):
+            initialize_cycle()
             state = transition_for_worker("default", name)
             self.assertEqual(state.name, name)
 
