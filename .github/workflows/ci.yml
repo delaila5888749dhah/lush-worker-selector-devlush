@@ -50,13 +50,19 @@ jobs:
           echo "state=PENDING" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Grant CHANGE_CLASS_APPROVED when approved-override label is present
+      run: |
+        if echo "${{ join(github.event.pull_request.labels.*.name, ',') }}" | grep -qi "approved-override"; then
+          echo "CHANGE_CLASS_APPROVED=true" >> $GITHUB_ENV
+        fi
+
     - name: Check PR scope
       run: python ci/check_pr_scope.py
       env:
         CHANGE_CLASS: ${{ vars.CHANGE_CLASS || '' }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-        CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
+        CHANGE_CLASS_APPROVED: ${{ env.CHANGE_CLASS_APPROVED || vars.CHANGE_CLASS_APPROVED || 'false' }}
         PR_REVIEW_STATE: ${{ steps.review_state.outputs.state }}
 
     - name: Check spec consistency
