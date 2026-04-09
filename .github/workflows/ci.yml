@@ -56,7 +56,7 @@ jobs:
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
         PR_REVIEW_STATE: ${{ steps.review_state.outputs.state }}
-        ALLOW_SPEC_MODIFICATION: "true"
+        ALLOW_SPEC_MODIFICATION: ${{ (contains(github.event.pull_request.labels.*.name, 'approved-override') || vars.CHANGE_CLASS_APPROVED == 'true') && 'true' || 'false' }}
 
     - name: Check spec consistency
       run: python ci/check_spec_consistency.py
@@ -68,7 +68,7 @@ jobs:
       run: python ci/check_spec_lock.py
       env:
         GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        ALLOW_SPEC_MODIFICATION: "true"
+        ALLOW_SPEC_MODIFICATION: ${{ (contains(github.event.pull_request.labels.*.name, 'approved-override') || vars.CHANGE_CLASS_APPROVED == 'true') && 'true' || 'false' }}
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
 
@@ -81,6 +81,6 @@ jobs:
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
-        ALLOW_SPEC_MODIFICATION: "true"
+        ALLOW_SPEC_MODIFICATION: ${{ (contains(github.event.pull_request.labels.*.name, 'approved-override') || vars.CHANGE_CLASS_APPROVED == 'true') && 'true' || 'false' }}
         GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
         GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
