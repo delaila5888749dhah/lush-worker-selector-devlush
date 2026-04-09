@@ -309,6 +309,8 @@ def _runtime_loop(task_fn, interval):
                     _consecutive_rollbacks = 0; cb_pause = 0
                 else:
                     cb_pause = 0
+            if _stop_event.is_set():
+                break
             _apply_scale(target, task_fn)
             _log_event("runtime", action, "loop_tick", {"target": target, "metrics": metrics, "decision": decision})
             _loop_error_count = 0
@@ -362,6 +364,7 @@ def stop(timeout=None):
     """
     global _state, _loop_thread
     timeout = _WORKER_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + timeout
     with _lock:
         if _state != "RUNNING":
             return False
@@ -392,6 +395,17 @@ def stop(timeout=None):
         for wid in stragglers:
             _log_event(wid, "stopping", "hard_timeout")
         all_stopped = False
+    # Second join: give the loop thread remaining budget to finish its
+    # current tick.  _state is STOPPING and _stop_event is set, so the
+    # loop will break at the top of the next iteration or at the
+    # _stop_event guard before _apply_scale.
+    if not loop_stopped and loop_thread is not None and loop_thread.is_alive():
+        remaining = max(0, deadline - time.monotonic())
+        loop_thread.join(timeout=remaining)
+        loop_stopped = not loop_thread.is_alive()
+        if loop_stopped:
+            with _lock:
+                _loop_thread = None
     with _lock:
         _state = "STOPPED"
     flush_ok = False
