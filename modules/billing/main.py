@@ -1,3 +1,4 @@
+import collections
 import logging
 import os
 import random
@@ -9,8 +10,7 @@ from modules.common.exceptions import CycleExhaustedError
 from modules.common.types import BillingProfile
 
 _lock = threading.Lock()
-_profiles = []
-_cursor = 0
+_profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
@@ -42,10 +42,9 @@ def _pool_dir():
 
 
 def _reset_state():
-    global _profiles, _cursor
+    global _profiles
     with _lock:
-        _profiles = []
-        _cursor = 0
+        _profiles = collections.deque()
 
 
 def _normalize_zip(zip_code):
@@ -97,7 +96,7 @@ def _read_profiles_from_disk():
                 if profile is not None:
                     profiles.append(profile)
     random.shuffle(profiles)
-    return profiles
+    return collections.deque(profiles)
 
 
 def _generate_phone():
@@ -114,20 +113,17 @@ def _generate_email(first_name=None, last_name=None):
 
 
 def _find_matching_index(zip_code):
-    """Find the index of the first profile matching *zip_code*, starting from _cursor.
+    """Find the index of the first profile matching *zip_code*.
 
     .. warning::
-        This function reads module-level ``_profiles`` and ``_cursor`` without
-        acquiring ``_lock``.  It **MUST** only be called while the caller
-        already holds ``_lock``.
+        This function reads module-level ``_profiles`` without acquiring
+        ``_lock``.  It **MUST** only be called while the caller already holds
+        ``_lock``.
     """
     if not zip_code:
         return None
-    count = len(_profiles)
-    start = _cursor
-    for offset in range(count):
-        index = (start + offset) % count
-        if _normalize_zip(_profiles[index].zip_code) == zip_code:
+    for index, profile in enumerate(_profiles):
+        if _normalize_zip(profile.zip_code) == zip_code:
             return index
     return None
 
@@ -148,7 +144,7 @@ def _fill_missing(profile):
 
 
 def select_profile(zip_code):
-    global _profiles, _cursor
+    global _profiles
     normalized_zip = _normalize_zip(zip_code)
 
     # Fast path: check if pool is already loaded before doing any I/O
@@ -165,7 +161,6 @@ def select_profile(zip_code):
         with _lock:
             if not _profiles and loaded:
                 _profiles = loaded
-                _cursor = 0
 
     with _lock:
         if not _profiles:
@@ -178,8 +173,12 @@ def select_profile(zip_code):
 
         index = _find_matching_index(normalized_zip)
         if index is None:
-            index = _cursor
-            _cursor = (_cursor + 1) % len(_profiles)
+            # Atomic queue rotation: popleft from front, enrich if needed, append to back
+            profile = _profiles.popleft()
+            if profile.phone is None or profile.email is None:
+                profile = _fill_missing(profile)
+            _profiles.append(profile)
+            return profile
 
         profile = _profiles[index]
         if profile.phone is None or profile.email is None:

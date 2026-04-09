@@ -27,7 +27,7 @@ _decision_history = []
 
 def _in_cooldown(now=None):
     """Return True if a cooldown period is active."""
-    ts = time.time() if now is None else now
+    ts = time.monotonic() if now is None else now
     return (ts - _last_decision_time) < COOLDOWN_SECONDS
 
 
@@ -50,7 +50,7 @@ def evaluate(metrics, current_step_index, max_step_index):
     """
     global _last_decision_time
 
-    now = time.time()
+    now = time.monotonic()
 
     with _lock:
         # ── Rule 0: Cooldown guard ──────────────────────────────
@@ -148,7 +148,11 @@ def get_decision_history():
 
 
 def get_last_decision_time():
-    """Return the epoch timestamp of the last decision."""
+    """Return the monotonic timestamp of the last decision.
+
+    The value is produced by :func:`time.monotonic` and is only meaningful
+    for computing elapsed durations — it is **not** a wall-clock epoch.
+    """
     with _lock:
         return _last_decision_time
 

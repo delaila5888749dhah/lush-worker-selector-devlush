@@ -53,6 +53,38 @@ Notes:
   - Resets current_state to None
   - After reset, transition_to will raise InvalidTransitionError
 
+Function: initialize_for_worker
+Input:
+  - worker_id: str
+Output: None
+Notes:
+  - Resets and re-registers all allowed states for the given worker_id
+
+Function: get_current_state_for_worker
+Input:
+  - worker_id: str
+Output: State | None
+Notes:
+  - Returns the current state for the given worker_id
+  - Returns None if no current state exists for the given worker_id
+
+Function: transition_for_worker
+Input:
+  - worker_id: str
+  - target_state: str
+Output: State
+Error:
+  - Raise InvalidStateError if target_state is not in ALLOWED_STATES
+  - Raise InvalidTransitionError if target_state is not registered for worker_id
+  - Raise ValueError if the transition is not permitted by the payment transition graph
+
+Function: cleanup_worker
+Input:
+  - worker_id: str
+Output: None
+Notes:
+  - Removes all FSM state for the given worker_id from the per-worker registry
+
 ## Module: watchdog
 
 Function: enable_network_monitor

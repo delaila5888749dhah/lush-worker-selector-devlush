@@ -9,6 +9,7 @@ import time
 import uuid
 import zlib
 from modules.behavior import main as behavior
+from modules.fsm import main as fsm
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 from modules.delay.wrapper import wrap as _behavior_wrap
@@ -344,10 +345,12 @@ def start(task_fn, interval=None):
             return False
         _stop_event.clear()
         _loop_thread = threading.Thread(target=_runtime_loop, args=(task_fn, interval), daemon=True)
-        _state = "RUNNING"; _loop_thread.start()
+        with _trace_lock:
+            _trace_id = uuid.uuid4().hex[:12]
+        _state = "RUNNING"
+        loop_thread = _loop_thread
+    loop_thread.start()
     register_signal_handlers()
-    with _trace_lock:
-        _trace_id = uuid.uuid4().hex[:12]
     _log_event("runtime", "started", "runtime_start")
     return True
 def stop(timeout=None):
@@ -366,7 +369,7 @@ def stop(timeout=None):
         loop_thread = _loop_thread
     _stop_event.set()
     loop_deadline = time.monotonic() + (timeout * 0.3)
-    if loop_thread is not None:
+    if loop_thread is not None and loop_thread.is_alive():
         loop_thread.join(timeout=max(0, loop_deadline - time.monotonic()))
     loop_stopped = loop_thread is None or not loop_thread.is_alive()
     with _lock:
@@ -400,9 +403,9 @@ def is_running():
     with _lock: return _state == "RUNNING"
 def get_status():
     """Return a snapshot of the runtime state."""
-    with _trace_lock:
-        tid = _trace_id
     with _lock:
+        with _trace_lock:
+            tid = _trace_id
         return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid}
 def get_deployment_status():
     """Return a comprehensive production deployment health snapshot.
@@ -509,3 +512,7 @@ def reset():
         _trace_id = None
     _stop_event.clear()
     behavior.reset()
+    rollout.reset()
+    monitor.reset()
+    fsm.reset_states()
+    fsm.reset_registry()

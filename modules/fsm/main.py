@@ -111,3 +111,9 @@ def reset_states():
     with _states_lock:
         _states.clear()
         _current_state = None
+
+
+def reset_registry():
+    """Clear all per-worker FSM state. Intended for testing."""
+    with _registry_lock:
+        _registry.clear()

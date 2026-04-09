@@ -1037,6 +1037,32 @@ class TestTraceIdLifecycle(RuntimeResetMixin, unittest.TestCase):
         self.assertEqual(len(tid), 12)
         self.assertRegex(tid, r'^[0-9a-f]{12}$')
 
+    def test_trace_id_published_before_thread_start(self):
+        from integration import runtime
+
+        observed = {}
+        original_thread = runtime.threading.Thread
+
+        def thread_factory(*args, **kwargs):
+            thread = original_thread(*args, **kwargs)
+            original_start = thread.start
+
+            def wrapped_start():
+                observed["trace_id"] = runtime.get_trace_id()
+                observed["state"] = runtime.get_state()
+                return original_start()
+
+            thread.start = wrapped_start
+            return thread
+
+        with patch("integration.runtime.threading.Thread", side_effect=thread_factory):
+            started = runtime.start(lambda _: time.sleep(0.1), interval=0.1)
+
+        self.assertTrue(started)
+        self.assertIsNotNone(observed["trace_id"])
+        self.assertEqual(observed["state"], "RUNNING")
+        self.assertEqual(runtime.get_trace_id(), observed["trace_id"])
+
     def test_trace_id_persists_through_stop(self):
         start(lambda _: time.sleep(0.5), interval=0.1)
         tid = get_trace_id()
