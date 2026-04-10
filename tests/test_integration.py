@@ -1,4 +1,7 @@
+import os
+import sys
 import time
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +19,9 @@ from modules.fsm.main import (
 )
 from modules.watchdog.main import reset as _reset_watchdog
 from integration.orchestrator import (
+    _build_idempotency_store,
     _completed_task_ids,
+    _FileIdempotencyStore,
     _idempotency_lock,
     _in_flight_task_ids,
     _submitted_task_ids,
@@ -483,6 +488,27 @@ class PersistentIdempotencyStoreTests(unittest.TestCase):
         # Its monotonic timestamp should be approximately now (age=0 → mono = now_mono - 0)
         now_mono = time.monotonic()
         self.assertAlmostEqual(_completed_task_ids[task_id], now_mono, delta=2.0)
+
+
+class RedisIdempotencyStoreFallbackTests(unittest.TestCase):
+    def test_build_store_falls_back_to_file_store_when_redis_ping_fails(self):
+        redis_url = "redis://:super-secret@localhost:6379/0"
+        mock_client = MagicMock()
+        mock_client.ping.side_effect = RuntimeError("redis down")
+        fake_redis = types.SimpleNamespace(
+            Redis=types.SimpleNamespace(from_url=MagicMock(return_value=mock_client))
+        )
+        with (
+            patch.dict(os.environ, {"REDIS_URL": redis_url}, clear=False),
+            patch.dict(sys.modules, {"redis": fake_redis}),
+            patch("integration.orchestrator._logger.warning") as mock_warning,
+        ):
+            store = _build_idempotency_store()
+        self.assertIsInstance(store, _FileIdempotencyStore)
+        self.assertGreaterEqual(len(mock_warning.call_args_list), 1)
+        init_warning = mock_warning.call_args_list[0]
+        self.assertIn("Failed to initialise RedisIdempotencyStore", init_warning.args[0])
+        self.assertEqual(init_warning.args[1], "redis://:[REDACTED]@localhost:6379/0")
 
 
 class CDPDriverCleanupTests(unittest.TestCase):

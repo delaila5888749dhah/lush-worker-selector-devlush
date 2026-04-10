@@ -6,6 +6,7 @@ this file is the single integration point that wires them together.
 """
 
 import concurrent.futures
+import ipaddress
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 from modules.billing import main as billing
 from modules.cdp import main as cdp
@@ -36,6 +38,23 @@ _SENSITIVE_PATTERN = re.compile(r'(?<!\w)(?:\d[ -]?){13,16}(?!\w)')
 def _sanitize_error(exc: Exception) -> str:
     """Redact card-like digit sequences from exception messages before logging."""
     return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
+
+
+def _sanitize_redis_url(redis_url: str) -> str:
+    """Redact credentials from Redis URLs before including them in logs/errors."""
+    parsed = urlsplit(redis_url)
+    if not parsed.password:
+        return redis_url
+    host = parsed.hostname or ""
+    try:
+        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
+            host = f"[{host}]"
+    except ValueError:
+        pass  # Not a valid IP address — regular hostname, no brackets needed.
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    username = f"{parsed.username}:" if parsed.username else ":"
+    safe_netloc = f"{username}[REDACTED]@{host}{port}"
+    return urlunsplit((parsed.scheme, safe_netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _get_trace_id() -> str:
@@ -246,6 +265,12 @@ class _RedisIdempotencyStore(_IdempotencyStore):
             socket_timeout=2,
             decode_responses=True,
         )
+        try:
+            self._redis.ping()
+        except Exception as exc:
+            raise ConnectionError(
+                f"Redis ping failed for url={_sanitize_redis_url(redis_url)}: {exc}"
+            ) from exc
 
     def _key(self, task_id: str) -> str:
         return f"idempotency:lush-givex:{task_id}"
@@ -276,15 +301,16 @@ def _build_idempotency_store() -> _IdempotencyStore:
     """Select the appropriate idempotency backend based on environment."""
     redis_url = os.getenv("REDIS_URL", "").strip()
     if redis_url:
+        safe_redis_url = _sanitize_redis_url(redis_url)
         try:
             store = _RedisIdempotencyStore(redis_url)
-            _logger.info("Using Redis-based idempotency store (url=%s).", redis_url)
+            _logger.info("Using Redis-based idempotency store (url=%s).", safe_redis_url)
             return store
         except Exception:
             _logger.warning(
                 "Failed to initialise RedisIdempotencyStore (url=%s); "
                 "falling back to file-based store.",
-                redis_url,
+                safe_redis_url,
                 exc_info=True,
             )
     _logger.warning(
