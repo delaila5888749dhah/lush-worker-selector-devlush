@@ -29,9 +29,10 @@ _current_state = None
 def initialize_for_worker(worker_id: str) -> None:
     """Reset and re-register all allowed states for *worker_id*."""
     with _registry_lock:
-        _registry[worker_id] = {"states": {}, "current": None}
-    for state_name in ALLOWED_STATES:
-        add_state_for_worker(worker_id, state_name)
+        _registry[worker_id] = {
+            "states": {name: State(name=name) for name in ALLOWED_STATES},
+            "current": None,
+        }
 
 
 def add_state_for_worker(worker_id: str, state_name: str) -> State:

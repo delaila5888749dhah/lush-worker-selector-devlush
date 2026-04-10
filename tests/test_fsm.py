@@ -1,10 +1,13 @@
+import threading
 import unittest
 
 from modules.fsm.main import (
+    ALLOWED_STATES,
     add_new_state,
     get_current_state,
     initialize_for_worker,
     cleanup_worker,
+    reset_registry,
     transition_for_worker,
     reset_states,
     transition_to,
@@ -135,6 +138,63 @@ class FSMTransitionGraphTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             transition_for_worker(_WID, "ui_lock")
 
+
+class FSMConcurrentInitializationTests(unittest.TestCase):
+    """Verify that concurrent initialize_for_worker calls are race-free."""
+
+    def setUp(self):
+        reset_registry()
+
+    def tearDown(self):
+        reset_registry()
+
+    def test_concurrent_initialize_same_worker_no_error(self):
+        """Two threads calling initialize_for_worker for the same worker_id
+        must not raise any exception (no TOCTOU state corruption)."""
+        worker_id = "concurrent-init-worker"
+        errors: list[Exception] = []
+        barrier = threading.Barrier(2)
+
+        def _init():
+            barrier.wait()  # start both threads as simultaneously as possible
+            try:
+                initialize_for_worker(worker_id)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t1 = threading.Thread(target=_init)
+        t2 = threading.Thread(target=_init)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        self.assertEqual(errors, [], f"Unexpected errors during concurrent init: {errors}")
+
+    def test_concurrent_initialize_all_states_present(self):
+        """After concurrent initialization the final registry entry must
+        contain every state in ALLOWED_STATES and current must be None."""
+        worker_id = "concurrent-states-worker"
+        barrier = threading.Barrier(2)
+
+        def _init():
+            barrier.wait()
+            initialize_for_worker(worker_id)
+
+        t1 = threading.Thread(target=_init)
+        t2 = threading.Thread(target=_init)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        # After both threads finish, the entry must be complete.
+        for state_name in ALLOWED_STATES:
+            s = transition_for_worker(worker_id, state_name)
+            self.assertIsInstance(s, State)
+            self.assertEqual(s.name, state_name)
+            # Re-initialize before the next iteration so we always start fresh.
+            initialize_for_worker(worker_id)
 
 if __name__ == "__main__":
     unittest.main()
