@@ -100,11 +100,32 @@ point for CDP to signal that a checkout total has been received.
 
 ---
 
+### INV-CDP-01 — _sanitize_error() PII Redaction
+```
+modules/cdp/main.py — _sanitize_error(msg) redacts card numbers, CVV patterns,
+and email addresses before any exception message is logged or re-raised.
+Compiled regex patterns: _CARD_PATTERN (16-digit \b\d{16}\b), _CVV_PATTERN
+(cvv\s*=\s*\d{3,4}, case-insensitive), _EMAIL_PATTERN (RFC-5321 subset).
+```
+**Rule:** Any log output or re-raised exception from the CDP layer MUST have PII stripped by `_sanitize_error()` first. Card numbers (16-digit), CVV patterns, and email addresses MUST NOT appear in log output.
+
+---
+
+### INV-CDP-02 — PID Registry Thread Safety
+```
+modules/cdp/main.py — _pid_registry: dict[worker_id → int]
+Protected by _registry_lock (shared lock with _driver_registry).
+force_kill() pops PID under lock BEFORE calling os.kill().
+```
+**Rule:** `_register_pid()` and `force_kill()` MUST hold `_registry_lock` during all registry reads/writes. `force_kill()` pops the PID entry before sending the signal — ensuring the registry is always cleaned up even if `os.kill()` raises `ProcessLookupError` or `PermissionError`.
+
+---
+
 ## KNOWN GAPS (deferred to Business Logic phase)
 
 | ID | Description | Resolution |
 |---|---|---|
-| GAP-CDP-01 | `modules/cdp/main.py` is a stub (4 × `NotImplementedError`) | Resolved when Business Logic is implemented |
+| GAP-CDP-01 | `modules/cdp/main.py` — PID tracking, `_sanitize_error()`, driver delegation | ✅ Resolved — PR #238 |
 | GAP-FSM-02 | FSM singleton shares state across all workers | Acceptable: `orchestrator._lock` serializes `initialize_cycle()` calls; each cycle resets the FSM before use |
 | GAP-BILLING-01 | `_find_matching_index()` cursor snap race (theoretical) | Acceptable: entire `select_profile()` holds `_lock` during actual selection |
 
@@ -145,3 +166,4 @@ Any PR that modifies the following files MUST include an update to this document
 - `integration/orchestrator.py` (wiring + outcome logic)
 - `integration/runtime.py` (worker state transitions)
 - `modules/rollout/main.py` (SCALE_STEPS)
+- `modules/cdp/main.py` (PID registry, _sanitize_error, driver registry)
