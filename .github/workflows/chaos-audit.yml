@@ -127,5 +127,10 @@ jobs:
 
           ### Scope
           Tests synchronous stub layer only (FakeDriver, no real browser).
-          Does not cover real async CDP callback races after teardown.
+          Validates:
+          - FSM per-worker state isolation (ui_lock, vbv_3ds, success, declined paths)
+          - Watchdog session lifecycle + late-callback injection from external daemon thread
+          - SelectorTimeoutError and PageStateError injection and routing
+          - Thread non-termination and thread leak detection
+          Does not cover real async CDP callback races with a live browser process.
           SUMMARY_EOF

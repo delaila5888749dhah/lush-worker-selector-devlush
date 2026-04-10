@@ -12,6 +12,9 @@ It validates:
   - Watchdog session lifecycle correctness (SessionFlaggedError handling)
   - Thread non-termination detection (threads that fail to exit within budget)
   - Thread leak detection (surplus threads after all workers join)
+  - Watchdog identity-check correctness under concurrent late-callback injection
+  - vbv_3ds intermediate FSM path under concurrent worker load
+  - SelectorTimeoutError and PageStateError injection and correct SessionFlaggedError routing
 
 It does NOT validate:
   - Real async CDP callbacks arriving after worker teardown (no late callbacks in stubs)
@@ -47,6 +50,8 @@ import modules.watchdog.main as watchdog
 from modules.common.exceptions import (
     InvalidStateError,
     InvalidTransitionError,
+    PageStateError,
+    SelectorTimeoutError,
     SessionFlaggedError,
 )
 
@@ -99,6 +104,12 @@ MAX_ACCEPTABLE_THREAD_SURPLUS = 3
 # which must be routed to fsm_error_count, not error_count.
 _CHAOS_EXCEPTIONS = [TimeoutError, ConnectionError, RuntimeError]
 
+# Probability distribution for detect_page_state() outcomes.
+_DETECT_PROB_UI_LOCK          = 0.70
+_DETECT_PROB_SELECTOR_TIMEOUT = 0.10
+_DETECT_PROB_PAGE_STATE_ERR   = 0.10
+# remaining 10% → "vbv_3ds"
+
 # ── Fake driver & card info ────────────────────────────────────────────────────
 
 
@@ -111,7 +122,21 @@ class FakeDriver:
             raise exc_class(f"[chaos] {exc_class.__name__} injected by FakeDriver")
 
     def detect_page_state(self) -> str:
-        return "ui_lock"
+        # Probability distribution:
+        #   70%  → "ui_lock"
+        #   10%  → raise SelectorTimeoutError
+        #   10%  → raise PageStateError
+        #   10%  → "vbv_3ds"
+        roll = random.random()
+        if roll < _DETECT_PROB_UI_LOCK:
+            return "ui_lock"
+        roll -= _DETECT_PROB_UI_LOCK
+        if roll < _DETECT_PROB_SELECTOR_TIMEOUT:
+            raise SelectorTimeoutError("#checkout-total", 5.0)
+        roll -= _DETECT_PROB_SELECTOR_TIMEOUT
+        if roll < _DETECT_PROB_PAGE_STATE_ERR:
+            raise PageStateError("unknown")
+        return "vbv_3ds"
 
 
 @dataclass
@@ -133,6 +158,7 @@ class WorkerStats:
     error_count: int = 0
     timeout_count: int = 0
     fsm_error_count: int = 0
+    vbv_3ds_count: int = 0
 
 
 # ── Worker thread logic ────────────────────────────────────────────────────────
@@ -150,6 +176,11 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
                 watchdog.reset_session(worker_id)
                 watchdog.enable_network_monitor(worker_id)
 
+                # detect_page_state() may return "ui_lock" or "vbv_3ds", or
+                # raise SelectorTimeoutError / PageStateError (both subclass
+                # SessionFlaggedError and are routed to the except below).
+                page_state = cdp.detect_page_state(worker_id)
+
                 # Isolate FSM ValueError from chaos exceptions so real FSM
                 # transition bugs are counted in fsm_error_count, not error_count.
                 try:
@@ -157,6 +188,27 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
                 except ValueError as e:
                     stats.fsm_error_count += 1
                     log.critical("[FSM LEAK] [%s] invalid transition to ui_lock: %s", worker_id, e)
+                    continue
+
+                if page_state == "vbv_3ds":
+                    # Two-step path: ui_lock → vbv_3ds → {success,declined}
+                    try:
+                        fsm.transition_for_worker(worker_id, "vbv_3ds")
+                    except ValueError as e:
+                        stats.fsm_error_count += 1
+                        log.critical("[FSM LEAK] [%s] invalid transition to vbv_3ds: %s", worker_id, e)
+                        continue
+
+                    final_state = random.choice(["success", "declined"])
+                    try:
+                        fsm.transition_for_worker(worker_id, final_state)
+                    except ValueError as e:
+                        stats.fsm_error_count += 1
+                        log.critical("[FSM LEAK] [%s] invalid transition to %s: %s", worker_id, final_state, e)
+                        continue
+
+                    stats.vbv_3ds_count += 1
+                    stats.success_count += 1
                     continue
 
                 cdp.fill_card(FakeCardInfo(), worker_id)
@@ -204,6 +256,36 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
         log.info("[%s] cleaned up", worker_id)
 
 
+# ── Late callback injector ─────────────────────────────────────────────────────
+
+
+class LateCallbackInjector:
+    """
+    Simulates async CDP callbacks arriving from an external thread.
+    Randomly calls notify_total() for random worker IDs at random short delays.
+    Covers three scenarios every watchdog identity-check cares about:
+      1. Callback arrives while session is alive → no-op (event already set) or sets value.
+      2. Callback arrives after reset_session() → no-op (registry has no entry).
+      3. Callback arrives for a worker that has already started a new session →
+         must NOT corrupt the new session (watchdog identity-check prevents this).
+    """
+
+    def __init__(self, worker_ids: list[str], stop_event: threading.Event) -> None:
+        self._worker_ids = worker_ids
+        self._stop_event = stop_event
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            worker_id = random.choice(self._worker_ids)
+            delay = random.uniform(0.0, 0.200)
+            self._stop_event.wait(timeout=delay)
+            if self._stop_event.is_set():
+                break
+            value = random.uniform(50.0, 200.0)
+            watchdog.notify_total(worker_id, value)
+            log.debug("[LATE_CB] notified %s value=%.2f", worker_id, value)
+
+
 # ── Metrics reporter thread ────────────────────────────────────────────────────
 
 
@@ -246,9 +328,11 @@ def main() -> int:
     stop_event = threading.Event()
     all_stats: list[WorkerStats] = []
     worker_threads: list[threading.Thread] = []
+    worker_ids: list[str] = []
 
     for i in range(NUM_WORKERS):
         worker_id = f"worker-{i:02d}"
+        worker_ids.append(worker_id)
         stats = WorkerStats()
         all_stats.append(stats)
 
@@ -264,6 +348,15 @@ def main() -> int:
             daemon=False,
         )
         worker_threads.append(t)
+
+    # Start late-callback injector (daemon so it never blocks process exit).
+    injector = LateCallbackInjector(worker_ids, stop_event)
+    injector_thread = threading.Thread(
+        target=injector.run,
+        name="late-cb-injector",
+        daemon=True,
+    )
+    injector_thread.start()
 
     # Start metrics reporter (daemon so it never blocks process exit).
     reporter_stop = threading.Event()
@@ -293,6 +386,10 @@ def main() -> int:
             break
         t.join(timeout=max(0.1, remaining))
 
+    # Join injector briefly — it is a daemon thread so it will not block exit,
+    # but joining ensures its final log messages are flushed before the report.
+    injector_thread.join(timeout=2)
+
     non_termination_detected = False
     for t in worker_threads:
         if t.is_alive():
@@ -312,6 +409,7 @@ def main() -> int:
     total_error = sum(s.error_count for s in all_stats)
     total_timeout = sum(s.timeout_count for s in all_stats)
     total_fsm_err = sum(s.fsm_error_count for s in all_stats)
+    total_vbv_3ds = sum(s.vbv_3ds_count for s in all_stats)
     final_active = threading.active_count()
 
     print()
@@ -322,6 +420,7 @@ def main() -> int:
     print(f"  Total errors       : {total_error}")
     print(f"  Total timeouts     : {total_timeout}")
     print(f"  FSM errors         : {total_fsm_err}")
+    print(f"  vbv_3ds paths      : {total_vbv_3ds}")
     print(f"  Active threads     : {final_active}  (baseline={baseline_thread_count})")
     print("=" * 60)
     print("  Exit code priority : NON_TERMINATION(3) > FSM_LEAK(2) > THREAD_LEAK(1) > PASS(0)")
