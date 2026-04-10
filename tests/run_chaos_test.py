@@ -6,7 +6,8 @@ non-termination or thread leaks across modules.fsm, modules.watchdog, and module
 
 Scope & Limitations
 -------------------
-This test exercises the *synchronous stub* layer only (FakeDriver, no real browser).
+This test exercises the stub layer (FakeDriver for synchronous workers,
+FakeAsyncDriver for async workers — no real browser).
 It validates:
   - FSM per-worker state isolation under concurrent load (fsm_error_count)
   - Watchdog session lifecycle correctness (SessionFlaggedError handling)
@@ -103,8 +104,9 @@ METRICS_INTERVAL = 5  # seconds between metrics prints
 # FakeAsyncDriver spawns daemon timer threads (2 per fill_card() call). After
 # the worker join deadline, a brief drain sleep is added to let pending Timer B
 # threads fire and exit, so this threshold only needs to cover transient daemon
-# overhead from non-timer sources. 15 provides ample margin.
-MAX_ACCEPTABLE_THREAD_SURPLUS = 15
+# overhead from non-timer sources. 5 is sufficient given the drain sleep above
+# handles timer threads.
+MAX_ACCEPTABLE_THREAD_SURPLUS = 5
 
 # ValueError intentionally excluded: FSM raises ValueError on invalid transitions,
 # which must be routed to fsm_error_count, not error_count.
@@ -298,9 +300,12 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats,
 
                 cdp.fill_card(FakeCardInfo(), worker_id)
 
-                # Notify before wait: event is pre-set so wait_for_total()
-                # returns immediately and still cleans up the session in its finally.
-                watchdog.notify_total(worker_id, 100.0)
+                if not is_async:
+                    # Sync path: pre-set the event so wait_for_total() returns
+                    # immediately and still cleans up the session in its finally.
+                    watchdog.notify_total(worker_id, 100.0)
+                # Async path: Timer A from FakeAsyncDriver.fill_card() will
+                # unblock wait_for_total() naturally; no sync pre-notify.
                 watchdog.wait_for_total(worker_id, timeout=2.0)
 
                 final_state = random.choice(["success", "declined"])
