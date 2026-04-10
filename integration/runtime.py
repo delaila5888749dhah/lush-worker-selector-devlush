@@ -49,10 +49,18 @@ _loop_error_count = 0
 _MAX_LOOP_ERRORS = 10
 def _should_stop_worker(worker_id):
     return worker_id not in _workers or worker_id in _stop_requests or _state == "STOPPING"
-def _log_event(worker_id, state, action, metrics=None):
+def _log_event(worker_id, state, action, metrics=None) -> None:
     with _trace_lock:
         tid = _trace_id or _NO_TRACE
-    _logger.info("%s | %s | %s | %s | %s | %s", datetime.now(timezone.utc).isoformat(timespec="seconds"), worker_id, tid, state, action, metrics or "")
+    _logger.info(
+        "%s | %s | %s | %s | %s | %s",
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        worker_id,
+        tid,
+        state,
+        action,
+        metrics or "",
+    )
 def _sanitize_error(exc: Exception) -> str:
     """Redact card-like digit sequences from exception messages before logging."""
     return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
@@ -198,9 +206,10 @@ def stop_worker(worker_id, timeout=None):
         _worker_states.pop(worker_id, None)
     _log_event(worker_id, "stopped", "stop_requested")
     return True
-def get_active_workers():
+def get_active_workers() -> list[str]:
     """Return a list of active worker ids."""
-    with _lock: return list(_workers.keys())
+    with _lock:
+        return list(_workers.keys())
 def set_worker_state(worker_id, new_state):
     """Set the execution state of a worker with validated transitions.
 
@@ -424,8 +433,9 @@ def stop(timeout=None):
         return False
     _log_event("runtime", "stopped", "runtime_stop")
     return True
-def is_running():
-    with _lock: return _state == "RUNNING"
+def is_running() -> bool:
+    with _lock:
+        return _state == "RUNNING"
 def get_status():
     """Return a snapshot of the runtime state."""
     with _lock:
@@ -513,9 +523,10 @@ def verify_deployment():
         },
         "errors": errors,
     }
-def get_state():
+def get_state() -> str:
     """Return the current lifecycle state."""
-    with _lock: return _state
+    with _lock:
+        return _state
 def set_behavior_delay_enabled(enabled):
     """Enable or disable behavioral delay wrapping for workers."""
     global _behavior_delay_enabled
