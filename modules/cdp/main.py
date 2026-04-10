@@ -102,13 +102,13 @@ def force_kill(worker_id: str) -> None:
         return
     try:
         os.kill(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    except (ProcessLookupError, PermissionError) as exc:
+        _log.debug("force_kill: SIGKILL failed for worker %r pid %d: %s", worker_id, pid, exc)
     except AttributeError:
         try:
             os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
+        except (ProcessLookupError, PermissionError) as exc:
+            _log.debug("force_kill: SIGTERM fallback failed for worker %r pid %d: %s", worker_id, pid, exc)
 
 
 def detect_page_state(worker_id: str) -> str:
