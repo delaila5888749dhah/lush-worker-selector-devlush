@@ -361,12 +361,11 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
         SessionFlaggedError: If the call does not complete within *timeout* seconds.
     """
     from modules.common.exceptions import SessionFlaggedError
-    with _cdp_executor_lock:
-        future = _cdp_executor.submit(fn, *args, **kwargs)
+    future = _cdp_executor.submit(fn, *args, **kwargs)
     try:
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
-        future.cancel()
+        future.cancel()  # Best-effort; no-op if the task is already running.
         raise SessionFlaggedError(
             f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
             f"timed out after {timeout}s for worker"
