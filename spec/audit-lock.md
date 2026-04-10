@@ -100,29 +100,11 @@ point for CDP to signal that a checkout total has been received.
 
 ---
 
-### INV-CDP-01 — _sanitize_error() PII Redaction
-```
-modules/cdp/main.py — _sanitize_error(msg) redacts card numbers and emails
-before any exception message is exposed via logs or re-raised strings.
-```
-**Rule:** Any exception or log output from the CDP layer MUST pass through `_sanitize_error()` before being propagated. Card numbers (16-digit), CVV patterns, and email addresses must never appear in log output.
-
----
-
-### INV-CDP-02 — PID Registry Thread Safety
-```
-modules/cdp/main.py — _pid_registry: dict[worker_id → int]
-Protected by _registry_lock (shared with driver registry).
-```
-**Rule:** `_register_pid()` and `force_kill()` MUST hold `_registry_lock` during all registry reads/writes. `force_kill()` must remove the PID entry after sending the signal.
-
----
-
 ## KNOWN GAPS (deferred to Business Logic phase)
 
 | ID | Description | Resolution |
 |---|---|---|
-| GAP-CDP-01 | `modules/cdp/main.py` — PID tracking, `_sanitize_error()`, driver delegation | ✅ Resolved — PR #237 |
+| GAP-CDP-01 | `modules/cdp/main.py` is a stub (4 × `NotImplementedError`) | Resolved when Business Logic is implemented |
 | GAP-FSM-02 | FSM singleton shares state across all workers | Acceptable: `orchestrator._lock` serializes `initialize_cycle()` calls; each cycle resets the FSM before use |
 | GAP-BILLING-01 | `_find_matching_index()` cursor snap race (theoretical) | Acceptable: entire `select_profile()` holds `_lock` during actual selection |
 

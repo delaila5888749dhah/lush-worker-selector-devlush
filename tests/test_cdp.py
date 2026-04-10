@@ -9,11 +9,10 @@ Covers:
 - Thread-safety smoke test for the driver registry
 """
 
-import os
 import signal
 import threading
 import unittest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import modules.cdp.main as cdp
 from modules.cdp.main import (
