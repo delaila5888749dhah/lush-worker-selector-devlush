@@ -15,7 +15,6 @@ concurrency:
 jobs:
   ci_checks:
     runs-on: ubuntu-latest
-    environment: production
     env:
       ALLOW_SPEC_MODIFICATION: ${{ (contains(github.event.pull_request.labels.*.name, 'approved-override') || vars.CHANGE_CLASS_APPROVED == 'true') && 'true' || 'false' }}
     steps:
