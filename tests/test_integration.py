@@ -27,6 +27,7 @@ from integration.orchestrator import (
     _submitted_task_ids,
     _IDEMPOTENCY_STORE_PATH,
     _IDEMPOTENCY_TTL,
+    _cdp_call_with_timeout,
     _load_idempotency_store,
     _save_idempotency_store,
     handle_outcome,
@@ -647,6 +648,52 @@ class FsmRegistryLeakTests(unittest.TestCase):
                 run_cycle(_make_task(), worker_id=worker_id)
         with self.assertRaises(InvalidTransitionError):
             transition_for_worker(worker_id, "success")
+
+
+class CdpCallWithTimeoutTests(unittest.TestCase):
+    """Tests for _cdp_call_with_timeout using the shared executor."""
+
+    def test_successful_call_returns_result(self):
+        """A fast callable returns its result normally."""
+        result = _cdp_call_with_timeout(lambda: 42, timeout=5)
+        self.assertEqual(result, 42)
+
+    def test_args_and_kwargs_forwarded(self):
+        """Positional and keyword arguments are forwarded to the callable."""
+        def adder(a, b, extra=0):
+            return a + b + extra
+        result = _cdp_call_with_timeout(adder, 1, 2, timeout=5, extra=10)
+        self.assertEqual(result, 13)
+
+    def test_timeout_raises_session_flagged_error(self):
+        """A slow callable triggers SessionFlaggedError after timeout."""
+        import threading as _t
+        blocker = _t.Event()
+
+        def slow_fn():
+            blocker.wait(timeout=10)
+
+        with self.assertRaises(SessionFlaggedError) as ctx:
+            _cdp_call_with_timeout(slow_fn, timeout=0.1)
+        self.assertIn("timed out", str(ctx.exception))
+        blocker.set()  # Unblock the background thread.
+
+    def test_callable_exception_propagated(self):
+        """Exceptions raised inside the callable propagate to the caller."""
+        def failing_fn():
+            raise ValueError("boom")
+        with self.assertRaises(ValueError):
+            _cdp_call_with_timeout(failing_fn, timeout=5)
+
+    def test_submit_after_shutdown_raises_session_flagged_error(self):
+        """Submitting after executor shutdown raises SessionFlaggedError."""
+        import concurrent.futures
+        dead_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        dead_executor.shutdown(wait=True)
+        with patch("integration.orchestrator._cdp_executor", dead_executor):
+            with self.assertRaises(SessionFlaggedError) as ctx:
+                _cdp_call_with_timeout(lambda: 1, timeout=5)
+            self.assertIn("unavailable", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ No cross-module imports exist within the individual modules themselves;
 this file is the single integration point that wires them together.
 """
 
+import atexit
 import concurrent.futures
 import ipaddress
 import json
@@ -92,6 +93,11 @@ _IDEMPOTENCY_STORE_PATH = Path(
 
 # CDP call timeout — prevents worker threads from blocking indefinitely.
 _CDP_CALL_TIMEOUT = float(os.getenv("CDP_CALL_TIMEOUT_SECONDS", "15"))
+_cdp_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=int(os.getenv("CDP_EXECUTOR_MAX_WORKERS", "8")),
+    thread_name_prefix="cdp-timeout",
+)
+_cdp_executor_lock = threading.Lock()
 
 
 def _load_idempotency_store() -> None:
@@ -345,6 +351,15 @@ def _flush_idempotency_store() -> None:
     _get_idempotency_store().flush()
 
 
+def _shutdown_cdp_executor() -> None:
+    """Shutdown the shared CDP executor. Called on graceful shutdown or process exit."""
+    with _cdp_executor_lock:
+        _cdp_executor.shutdown(wait=False, cancel_futures=True)
+
+
+atexit.register(_shutdown_cdp_executor)
+
+
 def _evict_expired_task_ids() -> None:
     """Remove task_ids that have exceeded the TTL. Must be called while holding _idempotency_lock."""
     cutoff = time.monotonic() - _IDEMPOTENCY_TTL
@@ -360,11 +375,14 @@ def _evict_expired_task_ids() -> None:
 
 
 def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_TIMEOUT, **kwargs: Any) -> Any:
-    """Execute a CDP call with a hard timeout.
+    """Execute a CDP call with a caller-side timeout using the shared CDP executor.
 
-    Wraps *fn* in a single-worker ``ThreadPoolExecutor`` and waits at most
-    *timeout* seconds.  Raises ``SessionFlaggedError`` if the call does not
-    complete in time so the runtime treats the session as flagged.
+    Submits *fn* to the shared ``_cdp_executor`` and waits at most *timeout*
+    seconds for the result. **Note:** timing out only unblocks the caller; the
+    underlying CDP callable may continue running in the background because
+    ``future.cancel()`` is best-effort and cannot interrupt an already-running
+    thread.  Raises ``SessionFlaggedError`` if the call does not complete in
+    time so the runtime treats the session as flagged.
 
     Args:
         fn: CDP callable to invoke.
@@ -373,18 +391,25 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
         **kwargs: Keyword arguments forwarded to *fn*.
 
     Raises:
-        SessionFlaggedError: If the call does not complete within *timeout* seconds.
+        SessionFlaggedError: If the call does not complete within *timeout*
+            seconds, or if the executor is unavailable (e.g. after shutdown).
     """
     from modules.common.exceptions import SessionFlaggedError
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            raise SessionFlaggedError(
-                f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
-                f"timed out after {timeout}s for worker"
-            )
+    try:
+        future = _cdp_executor.submit(fn, *args, **kwargs)
+    except RuntimeError as exc:
+        raise SessionFlaggedError(
+            f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
+            "could not be scheduled because the CDP executor is unavailable"
+        ) from exc
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        future.cancel()  # Best-effort; no-op if the task is already running.
+        raise SessionFlaggedError(
+            f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
+            f"timed out after {timeout}s for worker"
+        )
 
 
 def initialize_cycle(worker_id: str = "default"):
