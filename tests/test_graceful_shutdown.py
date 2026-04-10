@@ -71,7 +71,10 @@ class TestStopWorkerIdleOrSafePoint(GracefulShutdownResetMixin, unittest.TestCas
             barrier.wait(timeout=3)
 
         wid = start_worker(task)
-        started.wait(timeout=2)
+        self.assertTrue(
+            started.wait(timeout=2),
+            "worker did not start before forcing IDLE state",
+        )
         # Force IDLE
         with runtime._lock:
             runtime._worker_states[wid] = "IDLE"
@@ -89,7 +92,10 @@ class TestStopWorkerIdleOrSafePoint(GracefulShutdownResetMixin, unittest.TestCas
             barrier.wait(timeout=3)
 
         wid = start_worker(task)
-        started.wait(timeout=2)
+        self.assertTrue(
+            started.wait(timeout=2),
+            "worker did not start before forcing SAFE_POINT state",
+        )
         # Force SAFE_POINT
         with runtime._lock:
             runtime._worker_states[wid] = "SAFE_POINT"
@@ -180,7 +186,10 @@ class TestStopWorkerCriticalSection(GracefulShutdownResetMixin, unittest.TestCas
         self.assertFalse(result)
         # Release the worker and wait for it to clean up
         hold_forever.set()
-        _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT)
+        self.assertTrue(
+            _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT),
+            "worker did not clean up after critical-section timeout release",
+        )
 
     def test_cs_timeout_worker_remains_registered_until_natural_exit(self):
         """Timed-out CS worker stays in registry; cleanup deferred to finally."""
@@ -205,7 +214,10 @@ class TestStopWorkerCriticalSection(GracefulShutdownResetMixin, unittest.TestCas
 
         # Let worker finish naturally
         proceed.set()
-        _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT)
+        self.assertTrue(
+            _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT),
+            "worker did not unregister after leaving CRITICAL_SECTION",
+        )
         # Worker cleaned up by _worker_fn finally block
         self.assertNotIn(wid, get_all_worker_states())
 
@@ -250,7 +262,10 @@ class TestWorkerFnSafePointCheck(GracefulShutdownResetMixin, unittest.TestCase):
         with runtime._lock:
             runtime._stop_requests.add(wid)
         proceed.set()
-        _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT)
+        self.assertTrue(
+            _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT),
+            "worker did not stop after safe-point stop request",
+        )
         # Worker should have stopped after 1 cycle (the safe-point check
         # after task completion catches the stop request)
         self.assertNotIn(wid, get_all_worker_states())
@@ -285,7 +300,15 @@ class TestStopSetsStoppingState(GracefulShutdownResetMixin, unittest.TestCase):
             slow_barrier.wait(timeout=3)
 
         wid = start_worker(task)
-        cycle_started.wait(timeout=2)  # wait until first cycle has started
+        self.assertTrue(
+            cycle_started.wait(timeout=2),
+            "worker did not start a cycle before shutdown",
+        )
+        self.assertGreaterEqual(
+            len(cycles),
+            1,
+            "worker should have completed at least one cycle before shutdown",
+        )
         slow_barrier.set()
         runtime.stop(timeout=CLEANUP_TIMEOUT)
         # Worker should have exited
@@ -310,7 +333,10 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
             time.sleep(10)  # stuck for a long time
 
         wid = start_worker(stuck_task)
-        cs_entered.wait(timeout=2)  # wait until task has entered CRITICAL_SECTION
+        self.assertTrue(
+            cs_entered.wait(timeout=2),
+            "Worker did not enter CRITICAL_SECTION before stop() was invoked",
+        )
 
         result = runtime.stop(timeout=0.5)
         # Incomplete shutdown — stragglers still running
