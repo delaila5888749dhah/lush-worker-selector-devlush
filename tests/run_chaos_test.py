@@ -14,7 +14,7 @@ import random
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # Ensure repo root is on sys.path so module imports work when run directly.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,14 +40,14 @@ log = logging.getLogger(__name__)
 # ── Configuration ──────────────────────────────────────────────────────────────
 
 NUM_WORKERS = 10
-DURATION_SECONDS = 30
-CHAOS_PROBABILITY = 0.40
+DURATION_SECONDS = int(os.environ.get("CHAOS_DURATION", "30"))
+CHAOS_PROBABILITY = float(os.environ.get("CHAOS_PROBABILITY_ENV", "0.40"))
 METRICS_INTERVAL = 5  # seconds between metrics prints
 # Allow up to this many extra threads after all workers join (the main thread
 # itself + any OS/Python internal threads that may linger briefly).
 MAX_ACCEPTABLE_THREAD_SURPLUS = 3
 
-_CHAOS_EXCEPTIONS = [TimeoutError, ConnectionError, RuntimeError, ValueError]
+_CHAOS_EXCEPTIONS = [TimeoutError, ConnectionError, RuntimeError]
 
 # ── Fake driver & card info ────────────────────────────────────────────────────
 
@@ -63,16 +63,13 @@ class FakeDriver:
     def detect_page_state(self) -> str:
         return "ui_lock"
 
-
 @dataclass
 class FakeCardInfo:
     number: str = "4111111111111111"
     expiry: str = "12/29"
     cvv: str = "123"
 
-
 # ── Per-worker statistics ──────────────────────────────────────────────────────
-
 
 @dataclass
 class WorkerStats:
@@ -80,7 +77,6 @@ class WorkerStats:
     error_count: int = 0
     timeout_count: int = 0
     fsm_error_count: int = 0
-
 
 # ── Worker thread logic ────────────────────────────────────────────────────────
 
@@ -90,15 +86,38 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
     try:
         while not stop_event.is_set():
             try:
-                fsm.transition_for_worker(worker_id, "ui_lock")
-                cdp.fill_card(FakeCardInfo(), worker_id)
-                watchdog.wait_for_total(worker_id, timeout=2.0)
+                # Fix #1: always start each iteration with a fresh watchdog
+                # session.  wait_for_total() tears down its own session entry
+                # (including on SessionFlaggedError), so the next iteration
+                # must not rely on any previous monitor still being present.
+                watchdog.reset_session(worker_id)
                 watchdog.enable_network_monitor(worker_id)
+
+                try:
+                    fsm.transition_for_worker(worker_id, "ui_lock")
+                except ValueError as e:
+                    stats.fsm_error_count += 1
+                    log.critical("[FSM LEAK] [%s] invalid transition to ui_lock: %s", worker_id, e)
+                    continue
+
+                cdp.fill_card(FakeCardInfo(), worker_id)
+
+                # Notify before wait so the event is already set.
                 watchdog.notify_total(worker_id, 100.0)
+                watchdog.wait_for_total(worker_id, timeout=2.0)
+
                 final_state = random.choice(["success", "declined"])
-                fsm.transition_for_worker(worker_id, final_state)
+
+                try:
+                    fsm.transition_for_worker(worker_id, final_state)
+                except ValueError as e:
+                    stats.fsm_error_count += 1
+                    log.critical("[FSM LEAK] [%s] invalid transition to %s: %s", worker_id, final_state, e)
+                    continue
+
                 stats.success_count += 1
-            except (TimeoutError, ConnectionError, RuntimeError, ValueError) as e:
+
+            except (TimeoutError, ConnectionError, RuntimeError) as e:
                 stats.error_count += 1
                 log.error("[%s] chaos exception: %s", worker_id, e)
             except SessionFlaggedError as e:
@@ -114,16 +133,12 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
                 # CRITICAL: always reset FSM back to initial state for next iteration.
                 fsm.initialize_for_worker(worker_id)
     finally:
-        # Per-worker teardown: always executed even if an unexpected exception
-        # propagates out of the while loop.
         fsm.cleanup_worker(worker_id)
         cdp.unregister_driver(worker_id)
         watchdog.reset_session(worker_id)
         log.info("[%s] cleaned up", worker_id)
 
-
 # ── Metrics reporter thread ────────────────────────────────────────────────────
-
 
 def _metrics_reporter(
     stop_event: threading.Event,
@@ -148,9 +163,7 @@ def _metrics_reporter(
             baseline_thread_count,
         )
 
-
 # ── Main ───────────────────────────────────────────────────────────────────────
-
 
 def main() -> int:
     baseline_thread_count = threading.active_count()
@@ -204,19 +217,28 @@ def main() -> int:
     stop_event.set()
     log.info("Stop event set — waiting for workers to finish …")
 
-    # ── Join workers ──────────────────────────────────────────────
     deadlock_detected = False
+    worker_join_timeout = 10
+    worker_join_deadline = time.monotonic() + worker_join_timeout
     for t in worker_threads:
-        t.join(timeout=10)
+        remaining = worker_join_deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        t.join(timeout=max(0.1, remaining))
+
+    for t in worker_threads:
         if t.is_alive():
-            log.critical("[DEADLOCK] thread %s did not terminate within join timeout", t.name)
+            log.critical(
+                "[DEADLOCK] thread %s did not terminate within %ss overall join timeout",
+                t.name,
+                worker_join_timeout,
+            )
             deadlock_detected = True
 
     # Stop metrics reporter.
     reporter_stop.set()
     reporter.join(timeout=5)
 
-    # ── Final report ──────────────────────────────────────────────
     total_success = sum(s.success_count for s in all_stats)
     total_error = sum(s.error_count for s in all_stats)
     total_timeout = sum(s.timeout_count for s in all_stats)
@@ -234,7 +256,6 @@ def main() -> int:
     print(f"  Active threads   : {final_active}  (baseline={baseline_thread_count})")
     print("=" * 60)
 
-    # ── Assertions ────────────────────────────────────────────────
     exit_code = 0
 
     if total_fsm_err > 0:
@@ -248,8 +269,8 @@ def main() -> int:
     thread_surplus = final_active - baseline_thread_count
     if thread_surplus > MAX_ACCEPTABLE_THREAD_SURPLUS:
         print(
-            f"❌ [FAIL] THREAD LEAK — {thread_surplus} extra threads still alive "
-            f"(active={final_active}, baseline={baseline_thread_count})"
+            f"❌ [FAIL] THREAD LEAK — {thread_surplus} extra threads still alive \
+            (active={final_active}, baseline={baseline_thread_count})"
         )
         if exit_code == 0:
             exit_code = 1
