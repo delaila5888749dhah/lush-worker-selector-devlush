@@ -77,6 +77,7 @@ _cdp_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=int(os.getenv("CDP_EXECUTOR_MAX_WORKERS", "8")),
     thread_name_prefix="cdp-timeout",
 )
+_cdp_executor_lock = threading.Lock()
 
 
 def _load_idempotency_store() -> None:
@@ -325,7 +326,8 @@ def _flush_idempotency_store() -> None:
 
 def _shutdown_cdp_executor() -> None:
     """Shutdown the shared CDP executor. Called by runtime on graceful shutdown."""
-    _cdp_executor.shutdown(wait=False, cancel_futures=True)
+    with _cdp_executor_lock:
+        _cdp_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _evict_expired_task_ids() -> None:
@@ -359,7 +361,8 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
         SessionFlaggedError: If the call does not complete within *timeout* seconds.
     """
     from modules.common.exceptions import SessionFlaggedError
-    future = _cdp_executor.submit(fn, *args, **kwargs)
+    with _cdp_executor_lock:
+        future = _cdp_executor.submit(fn, *args, **kwargs)
     try:
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
