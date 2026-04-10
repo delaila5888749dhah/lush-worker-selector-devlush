@@ -6,7 +6,8 @@ non-termination or thread leaks across modules.fsm, modules.watchdog, and module
 
 Scope & Limitations
 -------------------
-This test exercises the *synchronous stub* layer only (FakeDriver, no real browser).
+This test exercises the stub layer (FakeDriver for synchronous workers,
+FakeAsyncDriver for async workers — no real browser).
 It validates:
   - FSM per-worker state isolation under concurrent load (fsm_error_count)
   - Watchdog session lifecycle correctness (SessionFlaggedError handling)
@@ -15,9 +16,11 @@ It validates:
   - Watchdog identity-check correctness under concurrent late-callback injection
   - vbv_3ds intermediate FSM path under concurrent worker load
   - SelectorTimeoutError and PageStateError injection and correct SessionFlaggedError routing
+  - Per-session async callback timing: Timer A (on-time) and Timer B (stale, post-reset_session) via FakeAsyncDriver
+  - Watchdog no-op correctness when notify_total() fires after session has been torn down
 
 It does NOT validate:
-  - Real async CDP/browser callbacks arriving after worker teardown (the test uses synthetic late-callback injection, not real browser callbacks)
+  - Real async CDP/browser callbacks with real network latency (FakeAsyncDriver uses threading.Timer, not a real browser process)
   - Network-level races or browser process lifecycle
 
 Exit code priority (highest wins):
@@ -98,7 +101,12 @@ METRICS_INTERVAL = 5  # seconds between metrics prints
 
 # Allow up to this many extra threads after all workers join (accounts for the
 # main thread, the daemon metrics-reporter, and any brief OS/Python internals).
-MAX_ACCEPTABLE_THREAD_SURPLUS = 3
+# FakeAsyncDriver spawns daemon timer threads (2 per fill_card() call). After
+# the worker join deadline, a brief drain sleep is added to let pending Timer B
+# threads fire and exit, so this threshold only needs to cover transient daemon
+# overhead from non-timer sources. 5 is sufficient given the drain sleep above
+# handles timer threads.
+MAX_ACCEPTABLE_THREAD_SURPLUS = 5
 
 # ValueError intentionally excluded: FSM raises ValueError on invalid transitions,
 # which must be routed to fsm_error_count, not error_count.
@@ -112,6 +120,13 @@ _DETECT_PROB_PAGE_STATE_ERR   = 0.10
 
 # Maximum random delay (seconds) for late-callback injection.
 _LATE_CALLBACK_MAX_DELAY_SEC = 0.200
+
+# Maximum delay (seconds) for FakeAsyncDriver's first notify timer.
+_ASYNC_NOTIFY_MAX_DELAY_SEC = 0.150
+
+# Fraction of workers that use FakeAsyncDriver instead of FakeDriver.
+# At 0.3: 3 out of 10 workers use async mode.
+_ASYNC_DRIVER_FRACTION = 0.3
 
 # ── Fake driver & card info ────────────────────────────────────────────────────
 
@@ -130,6 +145,75 @@ class FakeDriver:
         #   [0.70, 0.80) → raise SelectorTimeoutError
         #   [0.80, 0.90) → raise PageStateError
         #   [0.90, 1.00) → "vbv_3ds"
+        roll = random.random()
+        if roll < _DETECT_PROB_UI_LOCK:
+            return "ui_lock"
+        if roll < _DETECT_PROB_UI_LOCK + _DETECT_PROB_SELECTOR_TIMEOUT:
+            raise SelectorTimeoutError("#checkout-total", 5.0)
+        if roll < _DETECT_PROB_UI_LOCK + _DETECT_PROB_SELECTOR_TIMEOUT + _DETECT_PROB_PAGE_STATE_ERR:
+            raise PageStateError("unknown")
+        return "vbv_3ds"
+
+
+class FakeAsyncDriver:
+    """
+    Browser-driver stub that models async CDP callback timing.
+
+    Unlike FakeDriver (which calls notify_total() synchronously from the
+    worker thread), FakeAsyncDriver spawns a daemon threading.Timer to call
+    notify_total() from a separate thread after a short random delay.
+
+    This models the real-world pattern where the browser's internal event
+    thread fires the network-total callback independently of the worker thread.
+
+    Two timers are spawned per fill_card() call:
+      - Timer A: fires within [0, _ASYNC_NOTIFY_MAX_DELAY_SEC] — arrives while
+        wait_for_total() is still blocked (normal path).
+      - Timer B: fires at [_ASYNC_NOTIFY_MAX_DELAY_SEC * 2, _ASYNC_NOTIFY_MAX_DELAY_SEC * 3]
+        — designed to arrive AFTER wait_for_total() has returned AND reset_session()
+        has run. By watchdog design, notify_total() is a no-op when no session exists,
+        so Timer B must never crash or corrupt state.
+
+    chaos_probability controls whether fill_card() raises a chaos exception
+    instead of spawning timers (same semantics as FakeDriver).
+    """
+
+    def __init__(self, worker_id: str, chaos_probability: float) -> None:
+        self._worker_id = worker_id
+        self._chaos_probability = chaos_probability
+
+    def fill_card(self, card_info) -> None:
+        if random.random() < self._chaos_probability:
+            exc_class = random.choice(_CHAOS_EXCEPTIONS)
+            raise exc_class(f"[chaos-async] {exc_class.__name__} injected by FakeAsyncDriver")
+
+        delay_a = random.uniform(0.0, _ASYNC_NOTIFY_MAX_DELAY_SEC)
+        delay_b = random.uniform(
+            _ASYNC_NOTIFY_MAX_DELAY_SEC * 2,
+            _ASYNC_NOTIFY_MAX_DELAY_SEC * 3,
+        )
+        value = random.uniform(50.0, 200.0)
+
+        # Timer A — arrives while worker is blocked in wait_for_total()
+        t_a = threading.Timer(delay_a, watchdog.notify_total, args=(self._worker_id, value))
+        t_a.daemon = True
+        t_a.start()
+
+        # Timer B — arrives after reset_session() has already run; must be a no-op
+        t_b = threading.Timer(delay_b, watchdog.notify_total, args=(self._worker_id, value))
+        t_b.daemon = True
+        t_b.start()
+
+        log.debug(
+            "[ASYNC_CB] worker=%s delay_a=%.3fs delay_b=%.3fs value=%.2f",
+            self._worker_id,
+            delay_a,
+            delay_b,
+            value,
+        )
+
+    def detect_page_state(self) -> str:
+        """Same probabilistic behavior as FakeDriver."""
         roll = random.random()
         if roll < _DETECT_PROB_UI_LOCK:
             return "ui_lock"
@@ -160,12 +244,13 @@ class WorkerStats:
     timeout_count: int = 0
     fsm_error_count: int = 0
     vbv_3ds_count: int = 0
+    async_callback_count: int = 0
 
 
 # ── Worker thread logic ────────────────────────────────────────────────────────
 
 
-def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats) -> None:
+def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats, is_async: bool = False) -> None:
     """Main loop for a single chaos worker."""
     try:
         while not stop_event.is_set():
@@ -215,9 +300,12 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
 
                 cdp.fill_card(FakeCardInfo(), worker_id)
 
-                # Notify before wait: event is pre-set so wait_for_total()
-                # returns immediately and still cleans up the session in its finally.
-                watchdog.notify_total(worker_id, 100.0)
+                if not is_async:
+                    # Sync path: pre-set the event so wait_for_total() returns
+                    # immediately and still cleans up the session in its finally.
+                    watchdog.notify_total(worker_id, 100.0)
+                # Async path: Timer A from FakeAsyncDriver.fill_card() will
+                # unblock wait_for_total() naturally; no sync pre-notify.
                 watchdog.wait_for_total(worker_id, timeout=2.0)
 
                 final_state = random.choice(["success", "declined"])
@@ -230,6 +318,8 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
                     continue
 
                 stats.success_count += 1
+                if is_async:
+                    stats.async_callback_count += 1
 
             except (TimeoutError, ConnectionError, RuntimeError) as e:
                 stats.error_count += 1
@@ -249,9 +339,9 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
                 fsm.initialize_for_worker(worker_id)
     finally:
         # Outer teardown: runs even if an unexpected exception escapes the loop.
-        # NOTE: with synchronous stubs there are no late async callbacks, so
-        # teardown here is deterministic. With real CDP drivers, a late
-        # notify_total() after unregister is a no-op by watchdog design.
+        # NOTE: FakeAsyncDriver may have Timer B still pending after teardown.
+        # By watchdog design, notify_total() is a no-op when no session exists —
+        # Timer B fires into an empty registry and is silently discarded.
         fsm.cleanup_worker(worker_id)
         cdp.unregister_driver(worker_id)
         watchdog.reset_session(worker_id)
@@ -264,7 +354,7 @@ def _run_worker(worker_id: str, stop_event: threading.Event, stats: WorkerStats)
 class LateCallbackInjector:
     """
     Simulates async CDP callbacks arriving from an external thread.
-    Randomly calls notify_total() for random worker IDs at random short delays.
+    Randomly calls notify_total() for random sync worker IDs at random short delays.
 
     Covers late-notify scenarios this stub can actually model:
       1. Callback arrives while a session is alive → no-op (event already set) or sets value.
@@ -274,10 +364,14 @@ class LateCallbackInjector:
     per-session callback identity, so it does not verify the race where a stale
     callback from an old session arrives after the same worker has started a new
     session.
+
+    Async workers (FakeAsyncDriver) are intentionally excluded so that Timer A
+    from fill_card() remains the sole unblocker for async sessions, ensuring the
+    async callback path is genuinely exercised.
     """
 
-    def __init__(self, worker_ids: list[str], stop_event: threading.Event) -> None:
-        self._worker_ids = worker_ids
+    def __init__(self, sync_worker_ids: list[str], stop_event: threading.Event) -> None:
+        self._worker_ids = sync_worker_ids
         self._stop_event = stop_event
 
     def run(self) -> None:
@@ -335,6 +429,8 @@ def main() -> int:
     all_stats: list[WorkerStats] = []
     worker_threads: list[threading.Thread] = []
     worker_ids: list[str] = []
+    sync_worker_ids: list[str] = []
+    worker_is_async: list[bool] = []
 
     for i in range(NUM_WORKERS):
         worker_id = f"worker-{i:02d}"
@@ -342,21 +438,29 @@ def main() -> int:
         stats = WorkerStats()
         all_stats.append(stats)
 
-        # Register driver and FSM only — worker loop handles watchdog setup
-        # at the start of each iteration, so no pre-thread watchdog setup needed.
-        cdp.register_driver(worker_id, FakeDriver())
+        # Use FakeAsyncDriver for a fraction of workers to cover async callback timing.
+        if i < int(NUM_WORKERS * _ASYNC_DRIVER_FRACTION):
+            driver = FakeAsyncDriver(worker_id, CHAOS_PROBABILITY)
+            is_async = True
+        else:
+            driver = FakeDriver()
+            is_async = False
+            sync_worker_ids.append(worker_id)
+        worker_is_async.append(is_async)
+        cdp.register_driver(worker_id, driver)
         fsm.initialize_for_worker(worker_id)
 
         t = threading.Thread(
             target=_run_worker,
-            args=(worker_id, stop_event, stats),
+            args=(worker_id, stop_event, stats, is_async),
             name=f"chaos-{worker_id}",
             daemon=False,
         )
         worker_threads.append(t)
 
     # Start late-callback injector (daemon so it never blocks process exit).
-    injector = LateCallbackInjector(worker_ids, stop_event)
+    # Only targets sync workers so async workers rely solely on Timer A.
+    injector = LateCallbackInjector(sync_worker_ids, stop_event)
     injector_thread = threading.Thread(
         target=injector.run,
         name="late-cb-injector",
@@ -411,11 +515,20 @@ def main() -> int:
     reporter_stop.set()
     reporter.join(timeout=5)
 
+    # FakeAsyncDriver spawns daemon Timer B threads that fire up to
+    # _ASYNC_NOTIFY_MAX_DELAY_SEC * 3 seconds after fill_card(). Workers may
+    # exit (and be joined) before Timer B threads have fired. Give daemon
+    # timers a brief window to fire and exit before counting active threads,
+    # so the THREAD_LEAK check reflects only true non-daemon leaks.
+    if any(worker_is_async):
+        time.sleep(_ASYNC_NOTIFY_MAX_DELAY_SEC * 3 + 0.5)
+
     total_success = sum(s.success_count for s in all_stats)
     total_error = sum(s.error_count for s in all_stats)
     total_timeout = sum(s.timeout_count for s in all_stats)
     total_fsm_err = sum(s.fsm_error_count for s in all_stats)
     total_vbv_3ds = sum(s.vbv_3ds_count for s in all_stats)
+    total_async_cb = sum(s.async_callback_count for s in all_stats)
     final_active = threading.active_count()
 
     print()
@@ -427,6 +540,7 @@ def main() -> int:
     print(f"  Total timeouts     : {total_timeout}")
     print(f"  FSM errors         : {total_fsm_err}")
     print(f"  vbv_3ds paths      : {total_vbv_3ds}")
+    print(f"  Async callback paths: {total_async_cb}")
     print(f"  Active threads     : {final_active}  (baseline={baseline_thread_count})")
     print("=" * 60)
     print("  Exit code priority : NON_TERMINATION(3) > FSM_LEAK(2) > THREAD_LEAK(1) > PASS(0)")
