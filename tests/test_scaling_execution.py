@@ -31,6 +31,20 @@ from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 
 
+def _wait_until(condition_fn, timeout=2.0, interval=0.01):
+    """Poll condition_fn until it returns True or timeout expires.
+
+    Returns True if the condition was met within the timeout window,
+    False if the deadline was reached without the condition becoming True.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition_fn():
+            return True
+        time.sleep(interval)
+    return False
+
+
 class ScalingResetMixin:
     """Common setUp/tearDown for scaling execution tests."""
 
@@ -64,7 +78,8 @@ class TestDecisionRouting(ScalingResetMixin, unittest.TestCase):
 
         # Healthy metrics → behavior should decide SCALE_UP
         start(task_fn, interval=0.05)
-        time.sleep(0.4)
+        # Wait until rollout advances past step 0 (up to 2 s)
+        _wait_until(lambda: rollout.get_current_step_index() > 0)
         # Should have scaled up from step 0
         step = rollout.get_current_step_index()
         self.assertGreater(step, 0, "Expected rollout to advance past step 0")
@@ -92,7 +107,8 @@ class TestDecisionRouting(ScalingResetMixin, unittest.TestCase):
             tick.wait(timeout=2)
 
         start(task_fn, interval=0.05)
-        time.sleep(0.3)
+        # Wait until rollback reduces the step index (up to 2 s)
+        _wait_until(lambda: rollout.get_current_step_index() < initial_step)
         # Should have rolled back
         step_after = rollout.get_current_step_index()
         self.assertLess(step_after, initial_step,
@@ -139,7 +155,8 @@ class TestConsecutiveRollbacks(ScalingResetMixin, unittest.TestCase):
         behavior.expire_cooldown_for_testing()
 
         start(lambda _: time.sleep(0.5), interval=0.05)
-        time.sleep(0.3)
+        # Wait until at least one rollback is recorded (up to 2 s)
+        _wait_until(lambda: get_status()["consecutive_rollbacks"] > 0)
         status = get_status()
         self.assertGreater(status["consecutive_rollbacks"], 0)
         stop(timeout=2)
@@ -160,7 +177,8 @@ class TestConsecutiveRollbacks(ScalingResetMixin, unittest.TestCase):
             tick.wait(timeout=2)
 
         start(task_fn, interval=0.05)
-        time.sleep(0.3)
+        # Wait until scale-up clears the counter (up to 2 s)
+        _wait_until(lambda: get_status()["consecutive_rollbacks"] == 0)
         status = get_status()
         self.assertEqual(status["consecutive_rollbacks"], 0,
                          "SCALE_UP should clear consecutive_rollbacks")
@@ -314,7 +332,8 @@ class TestBehaviorCalledCorrectly(ScalingResetMixin, unittest.TestCase):
 
         with patch.object(behavior, "evaluate", side_effect=spy_evaluate):
             start(lambda _: time.sleep(0.5), interval=0.05)
-            time.sleep(0.2)
+            # Wait until evaluate() has been called at least once (up to 2 s)
+            _wait_until(lambda: len(captured) > 0)
             stop(timeout=2)
 
         self.assertGreater(len(captured), 0, "evaluate() should have been called")
@@ -361,7 +380,8 @@ class TestSafeGuardGating(ScalingResetMixin, unittest.TestCase):
                           return_value=(behavior.SCALE_UP, ["test_scale_up"])), \
              patch("integration.runtime._is_safe_locked", return_value=True):
             start(lambda _: time.sleep(0.5), interval=0.05)
-            time.sleep(0.3)
+            # Wait until rollout actually advances (up to 2 s)
+            _wait_until(lambda: rollout.get_current_step_index() > 0)
             step = rollout.get_current_step_index()
             stop(timeout=2)
 
@@ -384,7 +404,10 @@ class TestSafeGuardGating(ScalingResetMixin, unittest.TestCase):
                               return_value=(behavior.SCALE_UP, ["test"])), \
                  patch("integration.runtime._is_safe_locked", return_value=False):
                 start(lambda _: time.sleep(0.5), interval=0.05)
-                time.sleep(0.3)
+                # Wait until at least one deferred log appears (up to 2 s)
+                _wait_until(
+                    lambda: any("scaling_deferred" in r.getMessage() for r in log_records)
+                )
                 stop(timeout=2)
         finally:
             logger.removeHandler(handler)
@@ -449,7 +472,8 @@ class TestSafeGuardGating(ScalingResetMixin, unittest.TestCase):
                              "Should still be at step 0 while unsafe")
             # Now mark as safe
             safe_flag.set()
-            time.sleep(0.3)
+            # Wait until rollout advances (up to 2 s)
+            _wait_until(lambda: rollout.get_current_step_index() > 0)
             step = rollout.get_current_step_index()
             stop(timeout=2)
 

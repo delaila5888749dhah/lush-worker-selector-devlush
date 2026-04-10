@@ -28,6 +28,20 @@ from modules.rollout import main as rollout
 CLEANUP_TIMEOUT = 3
 
 
+def _wait_until(condition_fn, timeout=2.0, interval=0.01):
+    """Poll condition_fn until it returns True or timeout expires.
+
+    Returns True if the condition was met within the timeout window,
+    False if the deadline was reached without the condition becoming True.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition_fn():
+            return True
+        time.sleep(interval)
+    return False
+
+
 class GracefulShutdownResetMixin:
     """Common setUp/tearDown for graceful shutdown tests."""
 
@@ -49,9 +63,18 @@ class TestStopWorkerIdleOrSafePoint(GracefulShutdownResetMixin, unittest.TestCas
     """stop_worker() stops immediately when worker is IDLE or SAFE_POINT."""
 
     def test_idle_worker_stops_immediately(self):
+        started = threading.Event()
         barrier = threading.Event()
-        wid = start_worker(lambda _: barrier.wait(timeout=3))
-        time.sleep(0.05)
+
+        def task(_):
+            started.set()
+            barrier.wait(timeout=3)
+
+        wid = start_worker(task)
+        self.assertTrue(
+            started.wait(timeout=2),
+            "worker did not start before forcing IDLE state",
+        )
         # Force IDLE
         with runtime._lock:
             runtime._worker_states[wid] = "IDLE"
@@ -61,9 +84,18 @@ class TestStopWorkerIdleOrSafePoint(GracefulShutdownResetMixin, unittest.TestCas
         self.assertNotIn(wid, get_all_worker_states())
 
     def test_safe_point_worker_stops_immediately(self):
+        started = threading.Event()
         barrier = threading.Event()
-        wid = start_worker(lambda _: barrier.wait(timeout=3))
-        time.sleep(0.05)
+
+        def task(_):
+            started.set()
+            barrier.wait(timeout=3)
+
+        wid = start_worker(task)
+        self.assertTrue(
+            started.wait(timeout=2),
+            "worker did not start before forcing SAFE_POINT state",
+        )
         # Force SAFE_POINT
         with runtime._lock:
             runtime._worker_states[wid] = "SAFE_POINT"
@@ -152,9 +184,12 @@ class TestStopWorkerCriticalSection(GracefulShutdownResetMixin, unittest.TestCas
         # Very short timeout — worker won't leave CS in time
         result = stop_worker(wid, timeout=0.2)
         self.assertFalse(result)
-        # Cleanup
+        # Release the worker and wait for it to clean up
         hold_forever.set()
-        time.sleep(0.2)
+        self.assertTrue(
+            _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT),
+            "worker did not clean up after critical-section timeout release",
+        )
 
     def test_cs_timeout_worker_remains_registered_until_natural_exit(self):
         """Timed-out CS worker stays in registry; cleanup deferred to finally."""
@@ -179,11 +214,10 @@ class TestStopWorkerCriticalSection(GracefulShutdownResetMixin, unittest.TestCas
 
         # Let worker finish naturally
         proceed.set()
-        deadline = time.monotonic() + CLEANUP_TIMEOUT
-        while time.monotonic() < deadline:
-            if wid not in get_all_worker_states():
-                break
-            time.sleep(0.01)
+        self.assertTrue(
+            _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT),
+            "worker did not unregister after leaving CRITICAL_SECTION",
+        )
         # Worker cleaned up by _worker_fn finally block
         self.assertNotIn(wid, get_all_worker_states())
 
@@ -228,11 +262,10 @@ class TestWorkerFnSafePointCheck(GracefulShutdownResetMixin, unittest.TestCase):
         with runtime._lock:
             runtime._stop_requests.add(wid)
         proceed.set()
-        deadline = time.monotonic() + CLEANUP_TIMEOUT
-        while time.monotonic() < deadline:
-            if wid not in get_all_worker_states():
-                break
-            time.sleep(0.01)
+        self.assertTrue(
+            _wait_until(lambda: wid not in get_all_worker_states(), timeout=CLEANUP_TIMEOUT),
+            "worker did not stop after safe-point stop request",
+        )
         # Worker should have stopped after 1 cycle (the safe-point check
         # after task completion catches the stop request)
         self.assertNotIn(wid, get_all_worker_states())
@@ -258,14 +291,24 @@ class TestStopSetsStoppingState(GracefulShutdownResetMixin, unittest.TestCase):
         """Workers check _should_stop_worker and exit when state is STOPPING."""
         runtime._state = "RUNNING"
         cycles = []
+        cycle_started = threading.Event()
         slow_barrier = threading.Event()
 
         def task(wid):
             cycles.append(1)
+            cycle_started.set()
             slow_barrier.wait(timeout=3)
 
         wid = start_worker(task)
-        time.sleep(0.1)  # let first cycle start
+        self.assertTrue(
+            cycle_started.wait(timeout=2),
+            "worker did not start a cycle before shutdown",
+        )
+        self.assertGreaterEqual(
+            len(cycles),
+            1,
+            "worker should have completed at least one cycle before shutdown",
+        )
         slow_barrier.set()
         runtime.stop(timeout=CLEANUP_TIMEOUT)
         # Worker should have exited
@@ -282,13 +325,18 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
         """Workers that don't stop within timeout are logged but left registered
         so their threads can still call set_worker_state() safely."""
         runtime._state = "RUNNING"
+        cs_entered = threading.Event()
 
         def stuck_task(wid):
             set_worker_state(wid, "CRITICAL_SECTION")
+            cs_entered.set()
             time.sleep(10)  # stuck for a long time
 
         wid = start_worker(stuck_task)
-        time.sleep(0.1)  # let task enter CRITICAL_SECTION
+        self.assertTrue(
+            cs_entered.wait(timeout=2),
+            "Worker did not enter CRITICAL_SECTION before stop() was invoked",
+        )
 
         result = runtime.stop(timeout=0.5)
         # Incomplete shutdown — stragglers still running
