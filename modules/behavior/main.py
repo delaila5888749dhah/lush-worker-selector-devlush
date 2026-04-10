@@ -31,7 +31,11 @@ def _in_cooldown(now=None):
     return (ts - _last_decision_time) < COOLDOWN_SECONDS
 
 
-def evaluate(metrics, current_step_index, max_step_index):
+def evaluate(
+    metrics: dict[str, float | int | None],
+    current_step_index: int,
+    max_step_index: int,
+) -> tuple[str, list[str]]:
     """Evaluate metrics and return a scaling decision.
 
     This is the core decision function.  It applies rule-based logic to
@@ -40,6 +44,10 @@ def evaluate(metrics, current_step_index, max_step_index):
     Args:
         metrics: dict with keys ``error_rate``, ``success_rate``,
             ``restarts_last_hour``, ``baseline_success_rate`` (may be None).
+            Values are expected to be finite floats as produced by
+            ``monitor.get_metrics()``.  Non-finite values (NaN, inf) from
+            custom callers are not guarded against and may produce
+            unreliable decisions.
         current_step_index: zero-based index of the current scaling step.
         max_step_index: maximum step index (len(SCALE_STEPS) - 1).
 
