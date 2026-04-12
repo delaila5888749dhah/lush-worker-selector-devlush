@@ -92,9 +92,6 @@ class DelayEngine:
         """
         if not self.is_delay_permitted():
             return 0.0
-        with self._lock:
-            pass  # use persona lock via get_typing_delay path
-        # Reuse persona RNG via the existing lock-protected method
         raw = self._persona.get_typing_delay(0)
         clamped = max(MIN_FOCUS_DELAY, min(raw * 0.4, MAX_FOCUS_DELAY))
         return self._accumulate(clamped)

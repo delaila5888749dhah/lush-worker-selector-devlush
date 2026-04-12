@@ -27,6 +27,9 @@ from modules.delay.state import BehaviorStateMachine
 from modules.delay.engine import DelayEngine
 from modules.delay.temporal import TemporalModel
 
+# Logging for this module uses the standard library logger.
+# Debug output is visible when the application configures logging
+# (e.g. via logging.basicConfig or a logging framework at startup).
 _log = logging.getLogger(__name__)
 
 # Action types handled by the wrapper's behavioral injection model.

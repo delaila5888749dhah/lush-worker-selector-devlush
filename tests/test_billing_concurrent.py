@@ -4,6 +4,7 @@ import os
 import tempfile
 import threading
 import unittest
+import unittest.mock
 
 from modules.billing import main as billing
 from modules.common.types import BillingProfile
@@ -171,10 +172,6 @@ class ColdStartConcurrentTests(unittest.TestCase):
             with billing._lock:
                 # Pool must be non-empty after cold start
                 self.assertGreater(len(billing._profiles), 0)
-
-
-# Allow `unittest.mock` reference in the class body
-import unittest.mock  # noqa: E402
 
 
 if __name__ == "__main__":
