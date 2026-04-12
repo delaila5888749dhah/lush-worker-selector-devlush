@@ -23,10 +23,6 @@ from modules.delay.config import (  # noqa: F401
     validate_config,
     MIN_CLICK_DELAY,
     MAX_CLICK_DELAY,
-    MIN_FOCUS_DELAY,
-    MAX_FOCUS_DELAY,
-    MIN_NAVIGATION_DELAY,
-    MAX_NAVIGATION_DELAY,
     MIN_THINKING_DELAY,
     CDP_CALL_TIMEOUT,
 )
@@ -58,10 +54,6 @@ __all__ = [
     "validate_config",
     "MIN_CLICK_DELAY",
     "MAX_CLICK_DELAY",
-    "MIN_FOCUS_DELAY",
-    "MAX_FOCUS_DELAY",
-    "MIN_NAVIGATION_DELAY",
-    "MAX_NAVIGATION_DELAY",
     "MIN_THINKING_DELAY",
     "CDP_CALL_TIMEOUT",
 ]

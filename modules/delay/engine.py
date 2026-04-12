@@ -1,6 +1,6 @@
 """DelayEngine — Action-Aware Bounded Delay Calculator (Task 10.3).
 
-Calculates delays based on action type (typing/click/thinking/focus/navigation),
+Calculates delays based on action type (typing/click/thinking),
 BehaviorState context, and PersonaProfile.  All delays are clamped
 by hard constraints before being applied.
 
@@ -18,10 +18,6 @@ from modules.delay.config import (
     MAX_HESITATION_DELAY,
     MAX_STEP_DELAY,
     WATCHDOG_HEADROOM,
-    MIN_FOCUS_DELAY,
-    MAX_FOCUS_DELAY,
-    MIN_NAVIGATION_DELAY,
-    MAX_NAVIGATION_DELAY,
 )
 from modules.delay.persona import PersonaProfile
 from modules.delay.state import BehaviorStateMachine
@@ -84,37 +80,12 @@ class DelayEngine:
         clamped = max(MIN_THINKING_DELAY, min(raw, MAX_HESITATION_DELAY))
         return self._accumulate(clamped)
 
-    def calculate_focus_delay(self) -> float:
-        """Return focus delay (0.3–0.8 s, clamped).
-
-        Simulates initial attention before form interaction.
-        Returns 0.0 when delay is not permitted.
-        """
-        if not self.is_delay_permitted():
-            return 0.0
-        raw = self._persona.get_typing_delay(0)
-        clamped = max(MIN_FOCUS_DELAY, min(raw * 0.4, MAX_FOCUS_DELAY))
-        return self._accumulate(clamped)
-
-    def calculate_navigation_delay(self) -> float:
-        """Return navigation delay (0.5–1.5 s, clamped).
-
-        Simulates time spent between page sections or scrolling.
-        Returns 0.0 when delay is not permitted.
-        """
-        if not self.is_delay_permitted():
-            return 0.0
-        raw = self._persona.get_typing_delay(0)
-        clamped = max(MIN_NAVIGATION_DELAY, min(raw * 0.85, MAX_NAVIGATION_DELAY))
-        return self._accumulate(clamped)
-
     # ── dispatcher ───────────────────────────────────────────────
 
     def calculate_delay(self, action_type: str) -> float:
         """Dispatch to the appropriate calculator by *action_type*.
 
-        Supported types: ``"typing"``, ``"click"``, ``"thinking"``,
-        ``"focus"``, ``"navigation"``.
+        Supported types: ``"typing"``, ``"click"``, ``"thinking"``.
         Unknown types return 0.0.
         """
         if action_type == "typing":
@@ -123,10 +94,6 @@ class DelayEngine:
             return self.calculate_click_delay()
         if action_type == "thinking":
             return self.calculate_thinking_delay()
-        if action_type == "focus":
-            return self.calculate_focus_delay()
-        if action_type == "navigation":
-            return self.calculate_navigation_delay()
         return 0.0
 
     def get_base_delay(self, action_type: str) -> float:
@@ -139,12 +106,6 @@ class DelayEngine:
             return max(MIN_THINKING_DELAY, min(raw, MAX_HESITATION_DELAY))
         if action_type == "click":
             return self.calculate_click_delay()
-        if action_type == "focus":
-            raw = self._persona.get_typing_delay(0)
-            return max(MIN_FOCUS_DELAY, min(raw * 0.4, MAX_FOCUS_DELAY))
-        if action_type == "navigation":
-            raw = self._persona.get_typing_delay(0)
-            return max(MIN_NAVIGATION_DELAY, min(raw * 0.85, MAX_NAVIGATION_DELAY))
         return 0.0
 
     def accumulate_delay(self, delay: float) -> float:

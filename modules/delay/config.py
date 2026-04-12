@@ -67,18 +67,6 @@ WATCHDOG_HEADROOM: float = _env_float("WATCHDOG_HEADROOM", 3.0)
 MIN_CLICK_DELAY: float = _env_float("MIN_CLICK_DELAY", 0.05)
 MAX_CLICK_DELAY: float = _env_float("MAX_CLICK_DELAY", 0.25)
 
-# ── Focus delay (initial attention before form interaction) ───────────────────
-MIN_FOCUS_DELAY: float = _env_float("MIN_FOCUS_DELAY", 0.3)
-MAX_FOCUS_DELAY: float = _env_float("MAX_FOCUS_DELAY", 0.8)
-
-# ── Typing burst (per-keystroke within a group) ───────────────────────────────
-MIN_TYPING_BURST_DELAY: float = _env_float("MIN_TYPING_BURST_DELAY", 0.03)
-MAX_TYPING_BURST_DELAY: float = _env_float("MAX_TYPING_BURST_DELAY", 0.08)
-
-# ── Navigation delay (between page sections / scroll) ────────────────────────
-MIN_NAVIGATION_DELAY: float = _env_float("MIN_NAVIGATION_DELAY", 0.5)
-MAX_NAVIGATION_DELAY: float = _env_float("MAX_NAVIGATION_DELAY", 1.5)
-
 # ── CDP call timeout ──────────────────────────────────────────────────────────
 CDP_CALL_TIMEOUT: float = _env_float("CDP_CALL_TIMEOUT_SECONDS", 15.0)
 
@@ -144,14 +132,6 @@ def validate_config() -> None:
     if not (MIN_CLICK_DELAY < MAX_CLICK_DELAY):
         raise ValueError(
             f"MIN_CLICK_DELAY ({MIN_CLICK_DELAY}) must be < MAX_CLICK_DELAY ({MAX_CLICK_DELAY})"
-        )
-    if not (MIN_FOCUS_DELAY < MAX_FOCUS_DELAY):
-        raise ValueError(
-            f"MIN_FOCUS_DELAY ({MIN_FOCUS_DELAY}) must be < MAX_FOCUS_DELAY ({MAX_FOCUS_DELAY})"
-        )
-    if not (MIN_NAVIGATION_DELAY < MAX_NAVIGATION_DELAY):
-        raise ValueError(
-            f"MIN_NAVIGATION_DELAY ({MIN_NAVIGATION_DELAY}) must be < MAX_NAVIGATION_DELAY ({MAX_NAVIGATION_DELAY})"
         )
     if not (CDP_CALL_TIMEOUT > 0):
         raise ValueError(f"CDP_CALL_TIMEOUT({CDP_CALL_TIMEOUT}) must be > 0")
