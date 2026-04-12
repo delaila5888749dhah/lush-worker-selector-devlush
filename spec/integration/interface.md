@@ -93,3 +93,15 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
+
+## Ext-3: Health Check Endpoint
+
+- **Module:** `modules.observability.healthcheck`
+- **Entry point:** `get_health(status_fn=None) -> dict`
+- **HTTP server:** `start_server(host, port, status_fn)` / `stop_server()`
+- **Default port:** 8080 (configurable)
+- **Endpoint:** `GET /health` → JSON health snapshot
+- **Status values:** `"healthy"` | `"degraded"` | `"unknown"`
+- **Dependency injection:** `status_fn` accepts `integration.runtime.get_deployment_status`
+  to avoid circular import (modules → integration direction is forbidden)
+- **Backward compatibility:** Additive only — no existing interface changes
