@@ -11,10 +11,12 @@ import functools
 import threading
 import time
 
-from modules.delay.persona import PersonaProfile, MAX_TYPING_DELAY
+from modules.delay.persona import PersonaProfile, MAX_TYPING_DELAY, MIN_TYPING_DELAY
 from modules.delay.state import BehaviorStateMachine
 from modules.delay.engine import DelayEngine, MAX_HESITATION_DELAY
 from modules.delay.temporal import TemporalModel
+
+_MIN_THINKING_DELAY = 3.0
 
 
 def inject_step_delay(
@@ -44,8 +46,9 @@ def inject_step_delay(
     Returns
     -------
     float
-        Actual delay injected in seconds.  Returns ``0.0`` when no delay
-        was injected.
+        Delay requested from ``time.sleep()`` / ``stop_event.wait()`` after
+        temporal modifiers, hard clamps, and accumulator headroom are applied.
+        Returns ``0.0`` when no delay was injected.
 
     Rules:
 
@@ -56,20 +59,27 @@ def inject_step_delay(
     """
     if not engine.is_delay_permitted():
         return 0.0
-    delay = engine.calculate_delay(action_type)
-    delay = temporal.apply_temporal_modifier(delay, action_type)
+
+    base_delay = engine.get_base_delay(action_type)
+    if base_delay <= 0:
+        return 0.0
+
+    delay = temporal.apply_temporal_modifier(base_delay, action_type)
     delay = temporal.apply_micro_variation(delay)
     if action_type == "typing":
-        delay = max(0.0, min(delay, MAX_TYPING_DELAY))
+        delay = max(MIN_TYPING_DELAY, min(delay, MAX_TYPING_DELAY))
     elif action_type == "thinking":
-        delay = max(0.0, min(delay, MAX_HESITATION_DELAY))
+        delay = max(_MIN_THINKING_DELAY, min(delay, MAX_HESITATION_DELAY))
     else:
-        delay = max(0.0, delay)
-    if delay > 0:
-        if stop_event is not None:
-            stop_event.wait(timeout=delay)
-        else:
-            time.sleep(delay)
+        return 0.0
+
+    delay = engine.accumulate_delay(delay)
+    if delay <= 0:
+        return 0.0
+    if stop_event is not None:
+        stop_event.wait(timeout=delay)
+    else:
+        time.sleep(delay)
     return delay
 
 

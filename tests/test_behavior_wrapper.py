@@ -1,7 +1,7 @@
 """Tests for BehaviorWrapper — Task 10.5."""
-import time
+import threading
 import unittest
-from unittest.mock import patch, call
+from unittest.mock import patch
 
 from modules.delay.main import PersonaProfile, wrap
 from modules.delay.state import BehaviorStateMachine
@@ -111,13 +111,14 @@ class TestDeterminism(unittest.TestCase):
         """Same seed must produce identical delay values across two independent wraps."""
         delays_a = []
         delays_b = []
-        for delays, seed in [(delays_a, 77), (delays_b, 77)]:
-            persona = PersonaProfile(seed)
-            wrapped = wrap(_dummy_task, persona)
-            with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
-                wrapped("w-1")
-                for c in mock_sleep.call_args_list:
-                    delays.append(c[0][0])
+        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+            for delays, seed in [(delays_a, 77), (delays_b, 77)]:
+                persona = PersonaProfile(seed)
+                wrapped = wrap(_dummy_task, persona)
+                with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+                    wrapped("w-1")
+                    for c in mock_sleep.call_args_list:
+                        delays.append(c[0][0])
         self.assertTrue(len(delays_a) > 0, "At least one delay should be generated")
         self.assertEqual(delays_a, delays_b, "Same seed must yield identical delay sequence")
 
@@ -139,13 +140,19 @@ class TestInjectStepDelay(unittest.TestCase):
             result = inject_step_delay(engine, temporal, "typing")
         mock_sleep.assert_called_once()
         self.assertGreater(result, 0.0)
+        self.assertAlmostEqual(result, engine.get_step_accumulated_delay(), places=10)
 
     def test_thinking_injects_positive_delay(self):
         engine, temporal, _ = self._make_engine_and_temporal()
-        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+        with (
+            patch.object(TemporalModel, "get_time_state", return_value="DAY"),
+            patch("modules.delay.wrapper.time.sleep") as mock_sleep,
+        ):
             result = inject_step_delay(engine, temporal, "thinking")
         mock_sleep.assert_called_once()
         self.assertGreater(result, 0.0)
+        self.assertGreaterEqual(result, 3.0)
+        self.assertLessEqual(result, 5.0)
 
     def test_click_returns_zero(self):
         engine, temporal, _ = self._make_engine_and_temporal()
@@ -168,6 +175,25 @@ class TestInjectStepDelay(unittest.TestCase):
             result = inject_step_delay(engine, temporal, "typing")
         if mock_sleep.called:
             self.assertAlmostEqual(result, mock_sleep.call_args[0][0], places=10)
+            self.assertAlmostEqual(result, engine.get_step_accumulated_delay(), places=10)
+
+    def test_stop_event_path_returns_requested_delay(self):
+        engine, temporal, _ = self._make_engine_and_temporal()
+        stop_event = threading.Event()
+        stop_event.set()
+        with patch.object(stop_event, "wait", wraps=stop_event.wait) as mock_wait:
+            result = inject_step_delay(engine, temporal, "typing", stop_event=stop_event)
+        mock_wait.assert_called_once()
+        self.assertAlmostEqual(result, mock_wait.call_args[1]["timeout"], places=10)
+
+    def test_accumulator_headroom_caps_requested_delay(self):
+        engine, temporal, _ = self._make_engine_and_temporal()
+        engine.accumulate_delay(6.8)
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_step_delay(engine, temporal, "typing")
+        mock_sleep.assert_called_once()
+        self.assertAlmostEqual(result, 0.2, places=10)
+        self.assertAlmostEqual(engine.get_step_accumulated_delay(), 7.0, places=10)
 
 
 class TestWrapInjectsBothDelayTypes(unittest.TestCase):

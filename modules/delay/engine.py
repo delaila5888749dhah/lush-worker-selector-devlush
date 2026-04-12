@@ -87,6 +87,22 @@ class DelayEngine:
             return self.calculate_thinking_delay()
         return 0.0
 
+    def get_base_delay(self, action_type: str) -> float:
+        """Return a clamped base delay without recording it in the accumulator."""
+        if action_type == "typing":
+            raw = self._persona.get_typing_delay(0)
+            return max(MIN_TYPING_DELAY, min(raw, MAX_TYPING_DELAY))
+        if action_type == "thinking":
+            raw = self._persona.get_hesitation_delay()
+            return max(_MIN_THINKING_DELAY, min(raw, MAX_HESITATION_DELAY))
+        if action_type == "click":
+            return self.calculate_click_delay()
+        return 0.0
+
+    def accumulate_delay(self, delay: float) -> float:
+        """Record a caller-provided delay against the step accumulator."""
+        return self._accumulate(delay)
+
     # ── accumulator ──────────────────────────────────────────────
 
     def get_step_accumulated_delay(self) -> float:
