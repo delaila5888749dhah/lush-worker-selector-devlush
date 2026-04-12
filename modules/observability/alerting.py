@@ -18,7 +18,7 @@ RESTART_THRESHOLD = 3              # > 3 per hour
 SUCCESS_RATE_DROP_THRESHOLD = 0.10  # > 10% drop from baseline
 
 
-def evaluate_alerts(metrics: dict) -> list:
+def evaluate_alerts(metrics: dict) -> list[str]:
     """Evaluate metric thresholds and return a list of alert message strings.
 
     Returns an empty list if no thresholds are exceeded.
