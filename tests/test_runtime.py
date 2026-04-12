@@ -96,7 +96,7 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
         wid = start_worker(_blocking_task)
         # Wait until the worker is actually inside the blocking call so that
         # stop_worker's insufficient timeout genuinely expires.
-        entered.wait(timeout=2)
+        entered.wait(timeout=CLEANUP_TIMEOUT)
         try:
             self.assertFalse(stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT))
             # Worker stays registered until thread naturally exits
