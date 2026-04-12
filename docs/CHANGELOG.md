@@ -3,6 +3,7 @@
 All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
+## [Unreleased]
 ## [Phase 7 — Observability Extensions] — 2026-04-12
 
 ### Added
