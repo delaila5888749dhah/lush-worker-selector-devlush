@@ -54,7 +54,7 @@ def _sanitize_redis_url(redis_url: str) -> str:
     except ValueError:
         pass  # Not a valid IP address — regular hostname, no brackets needed.
     port = f":{parsed.port}" if parsed.port is not None else ""
-    username = f"{parsed.username}:":" if parsed.username else ":"
+    username = f"{parsed.username}:" if parsed.username else ":"
     safe_netloc = f"{username}[REDACTED]@{host}{port}"
     return urlunsplit((parsed.scheme, safe_netloc, parsed.path, parsed.query, parsed.fragment))
 
