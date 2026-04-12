@@ -62,10 +62,6 @@ class TestExportMetrics(unittest.TestCase):
 
     def test_log_export_disabled(self):
         metrics_exporter.set_log_export_enabled(False)
-        # Should not emit any DEBUG log — assertLogs would fail if nothing logged,
-        # so we use a custom exporter as a side-channel and verify no debug log.
-        import logging
-        logger = logging.getLogger("modules.observability.metrics_exporter")
         with self.assertRaises(AssertionError):
             with self.assertLogs("modules.observability.metrics_exporter", level="DEBUG") as cm:
                 metrics_exporter.export_metrics(_SAMPLE)

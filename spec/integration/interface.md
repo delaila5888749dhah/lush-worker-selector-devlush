@@ -93,14 +93,3 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
-
-## Ext-1: Metrics Export
-
-- **Module:** `modules.observability.metrics_exporter`
-- **Entry point:** `export_metrics(metrics: dict) -> None`
-- **Called from:** `integration.runtime._runtime_loop` after `monitor.get_metrics()`
-- **Default backend:** Structured JSON log at DEBUG level
-- **Custom backends:** Register via `register_exporter(fn)` / `unregister_exporter(fn)`
-- **Fail-safe:** Exceptions in exporters are caught; loop is never disrupted
-- **Thread-safe:** All shared state guarded by `threading.Lock()`
-- **Backward compatibility:** Additive only — no existing interface changes
