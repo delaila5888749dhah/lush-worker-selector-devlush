@@ -144,6 +144,17 @@ class TestIsRunning(unittest.TestCase):
     def test_not_running_initially(self):
         self.assertFalse(is_running())
 
+    def test_running_after_start(self):
+        start_server(port=0)
+        time.sleep(0.05)
+        self.assertTrue(is_running())
+
+    def test_not_running_after_stop(self):
+        start_server(port=0)
+        time.sleep(0.05)
+        stop_server()
+        self.assertFalse(is_running())
+
 
 if __name__ == "__main__":
     unittest.main()

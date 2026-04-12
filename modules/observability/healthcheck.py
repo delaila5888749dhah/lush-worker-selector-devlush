@@ -11,7 +11,7 @@ _server_instance = None
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "127.0.0.1"
 _UNKNOWN = {"status": "unknown", "running": False, "state": "unknown",
-            "worker_count": 0, "consecutive_rollbacks": 0}
+            "worker_count": 0, "consecutive_rollbacks": 0, "errors": []}
 
 
 def get_health(status_fn=None) -> dict:
