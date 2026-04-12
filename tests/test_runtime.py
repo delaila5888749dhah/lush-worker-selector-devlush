@@ -87,12 +87,7 @@ class TestStopWorker(RuntimeResetMixin, unittest.TestCase):
 
     def test_stop_running_worker_timeout_removes_zombie(self):
         barrier = threading.Event()
-        entered = threading.Event()
-        def _blocking_task(_):
-            entered.set()
-            barrier.wait(timeout=WORKER_BLOCK_TIMEOUT)
-        wid = start_worker(_blocking_task)
-        entered.wait(timeout=WORKER_BLOCK_TIMEOUT)
+        wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
         try:
             self.assertFalse(stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT))
             # Worker stays registered until thread naturally exits
@@ -627,12 +622,7 @@ class TestZombieWorkerCleanup(RuntimeResetMixin, unittest.TestCase):
     def test_timeout_worker_eventually_cleaned_up(self):
         """Worker cleans up from _workers after its blocking task completes."""
         barrier = threading.Event()
-        entered = threading.Event()
-        def _blocking_task(_):
-            entered.set()
-            barrier.wait(timeout=WORKER_BLOCK_TIMEOUT)
-        wid = start_worker(_blocking_task)
-        entered.wait(timeout=WORKER_BLOCK_TIMEOUT)
+        wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
         with runtime._lock:
             worker_thread = runtime._workers[wid]
         # Force a timeout on stop
@@ -649,12 +639,7 @@ class TestZombieWorkerCleanup(RuntimeResetMixin, unittest.TestCase):
     def test_stop_requests_cleaned_after_timeout_worker_exits(self):
         """No stale _stop_requests entries after timed-out worker exits."""
         barrier = threading.Event()
-        entered = threading.Event()
-        def _blocking_task(_):
-            entered.set()
-            barrier.wait(timeout=WORKER_BLOCK_TIMEOUT)
-        wid = start_worker(_blocking_task)
-        entered.wait(timeout=WORKER_BLOCK_TIMEOUT)
+        wid = start_worker(lambda _: barrier.wait(timeout=WORKER_BLOCK_TIMEOUT))
         with runtime._lock:
             worker_thread = runtime._workers[wid]
         stop_worker(wid, timeout=INSUFFICIENT_TIMEOUT)
