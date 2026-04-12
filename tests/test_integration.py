@@ -30,6 +30,7 @@ from integration.orchestrator import (
     _cdp_call_with_timeout,
     _load_idempotency_store,
     _save_idempotency_store,
+    get_cdp_metrics,
     handle_outcome,
     initialize_cycle,
     run_cycle,
@@ -695,6 +696,37 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
                 _cdp_call_with_timeout(lambda: 1, timeout=5)
             self.assertIn("unavailable", str(ctx.exception))
 
+    def test_cdp_timeout_increments_counter(self):
+        """A timeout must increment get_cdp_metrics()['total_timeouts']."""
+        import threading as _t
+        blocker = _t.Event()
+        metrics_before = get_cdp_metrics()
+
+        def slow():
+            blocker.wait(timeout=10)
+
+        try:
+            with self.assertRaises(SessionFlaggedError):
+                _cdp_call_with_timeout(slow, timeout=0.05)
+        finally:
+            blocker.set()
+
+        metrics_after = get_cdp_metrics()
+        self.assertGreater(
+            metrics_after["total_timeouts"],
+            metrics_before["total_timeouts"],
+        )
+
+    def test_get_cdp_metrics_returns_expected_keys(self):
+        """get_cdp_metrics() must return a dict with exactly two keys."""
+        m = get_cdp_metrics()
+        self.assertEqual(
+            set(m.keys()),
+            {"total_timeouts", "active_cdp_requests"},
+        )
+        self.assertIsInstance(m["total_timeouts"], int)
+        self.assertIsInstance(m["active_cdp_requests"], int)
+
 
 class CDPPoolSaturationTests(unittest.TestCase):
     """Stress test: 8 simultaneous timeout-style tasks against a mock executor."""
@@ -755,6 +787,128 @@ class CDPPoolSaturationTests(unittest.TestCase):
             # Verify the pool is still healthy and accepts new work
             final = executor.submit(lambda: "healthy")
             self.assertEqual(final.result(timeout=5.0), "healthy")
+
+
+class CDPExecutorBehaviorTests(unittest.TestCase):
+    """Verify executor behavior under timeout and queue pressure conditions.
+
+    These tests document and verify the known semantics of ThreadPoolExecutor
+    as used by _cdp_call_with_timeout():
+    - submit() enqueues immediately, does not block.
+    - future.cancel() after timeout is best-effort (no-op if running).
+    - Executor recovers and accepts new work after timed-out tasks complete.
+    - Queued tasks execute as slots become available.
+    """
+
+    def test_executor_recovers_after_timeout(self):
+        """After a timeout, executor must accept and complete new submissions."""
+        import concurrent.futures
+        import threading as _t
+        block = _t.Event()
+        ready = _t.Event()
+
+        def blocking_task():
+            ready.set()
+            block.wait(timeout=10)
+            return "completed"
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            future = executor.submit(blocking_task)
+            ready.wait(timeout=2)
+
+            timed_out = False
+            try:
+                future.result(timeout=0.05)
+            except concurrent.futures.TimeoutError:
+                timed_out = True
+                future.cancel()  # best-effort; no-op
+
+            # Unblock the running task so its slot is returned to the pool
+            block.set()
+            future.result(timeout=5)  # wait for natural completion
+
+            # Executor must now accept new work
+            result = executor.submit(lambda: "new_work").result(timeout=5)
+        finally:
+            executor.shutdown(wait=False)
+
+        self.assertTrue(timed_out)
+        self.assertEqual(result, "new_work")
+
+    def test_submit_enqueues_when_all_slots_busy(self):
+        """When all slots are occupied, submit() enqueues without raising.
+
+        This verifies that ThreadPoolExecutor.submit() does NOT block or raise
+        when max_workers slots are all busy — the task is enqueued and will
+        execute once a slot becomes available.
+        """
+        import concurrent.futures
+        import threading as _t
+        hold = _t.Event()
+        started = _t.Barrier(3)  # 2 hold_task threads + main thread all rendezvous here
+
+        def hold_task():
+            started.wait(timeout=5)
+            hold.wait(timeout=10)
+            return "slot_released"
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            f1 = executor.submit(hold_task)
+            f2 = executor.submit(hold_task)
+            started.wait(timeout=5)  # both tasks are now running
+
+            # This must NOT raise — it queues the task
+            f3 = executor.submit(lambda: "queued_work")
+
+            hold.set()  # release all blocked tasks
+            results = [f1.result(timeout=5), f2.result(timeout=5), f3.result(timeout=5)]
+        finally:
+            executor.shutdown(wait=False)
+
+        self.assertIn("queued_work", results)
+
+    def test_multiple_sequential_timeouts_do_not_deadlock(self):
+        """Multiple sequential timeout scenarios must not deadlock the executor."""
+        import concurrent.futures
+        import threading as _t
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        results = []
+        errors = []
+
+        try:
+            for i in range(4):
+                block = _t.Event()
+                ready = _t.Event()
+
+                def make_task(b, r, idx=i):
+                    def task():
+                        r.set()
+                        b.wait(timeout=5)
+                        return f"done-{idx}"
+                    return task
+
+                f = executor.submit(make_task(block, ready))
+                ready.wait(timeout=2)
+                try:
+                    f.result(timeout=0.05)
+                except concurrent.futures.TimeoutError:
+                    f.cancel()
+                    errors.append("timeout")
+                block.set()
+
+                # Verify executor still works
+                try:
+                    r = executor.submit(lambda: "ok").result(timeout=5)
+                    results.append(r)
+                except Exception as exc:
+                    errors.append(f"unexpected: {exc}")
+        finally:
+            executor.shutdown(wait=False)
+
+        self.assertEqual(results.count("ok"), 4)
+        self.assertEqual(errors.count("timeout"), 4)
 
 
 if __name__ == "__main__":

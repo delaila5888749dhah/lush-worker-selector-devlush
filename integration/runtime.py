@@ -102,7 +102,13 @@ def _worker_fn(worker_id, task_fn, persona):
     else:
         wrapped_task = task_fn
     try:
-        _log_event(worker_id, "running", "start")
+        persona_ctx: dict = {}
+        if persona is not None:
+            persona_ctx = {
+                "persona_seed": persona._seed,
+                "persona_type": persona.persona_type,
+            }
+        _log_event(worker_id, "running", "start", persona_ctx)
         while True:
             with _lock:
                 if _should_stop_worker(worker_id):
@@ -110,20 +116,26 @@ def _worker_fn(worker_id, task_fn, persona):
                 _transition_worker_state_locked(worker_id, "IN_CYCLE")
             try:
                 wrapped_task(worker_id)
+                persona_type_tag = persona.persona_type if persona is not None else None
                 try:
-                    monitor.record_success()
+                    monitor.record_success(persona_type=persona_type_tag)
                 except Exception:
                     _logger.warning("monitor.record_success() failed for %s", worker_id, exc_info=True)
                 with _lock:
                     _restart_delay = 0
             except Exception as exc:
+                persona_type_tag = persona.persona_type if persona is not None else None
                 try:
-                    monitor.record_error()
+                    monitor.record_error(persona_type=persona_type_tag)
                 except Exception:
                     _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
                 with _lock:
                     if worker_id in _workers and worker_id not in _stop_requests: _pending_restarts += 1
-                _log_event(worker_id, "error", "task_failed", {"error": _sanitize_error(exc)})
+                err_data: dict = {"error": _sanitize_error(exc)}
+                if persona_type_tag is not None:
+                    err_data["persona_type"] = persona_type_tag
+                    err_data["persona_seed"] = persona._seed
+                _log_event(worker_id, "error", "task_failed", err_data)
                 break
             with _lock:
                 current_state = _worker_states.get(worker_id)

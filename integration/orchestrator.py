@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from modules.billing import main as billing
 from modules.cdp import main as cdp
+from modules.delay.config import CDP_CALL_TIMEOUT as _CDP_CALL_TIMEOUT_CONFIG
 from modules.fsm import main as fsm
 from modules.fsm.main import ALLOWED_STATES as _FSM_STATES  # noqa: F401 — Imported from fsm canonical source; intentionally unused but enforces INV-FSM-01 at import time
 from modules.monitor import main as monitor
@@ -92,12 +93,23 @@ _IDEMPOTENCY_STORE_PATH = Path(
 )
 
 # CDP call timeout — prevents worker threads from blocking indefinitely.
-_CDP_CALL_TIMEOUT = float(os.getenv("CDP_CALL_TIMEOUT_SECONDS", "15"))
+_CDP_CALL_TIMEOUT = float(os.getenv("CDP_CALL_TIMEOUT_SECONDS", str(_CDP_CALL_TIMEOUT_CONFIG)))
 _cdp_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=int(os.getenv("CDP_EXECUTOR_MAX_WORKERS", "8")),
     thread_name_prefix="cdp-timeout",
 )
 _cdp_executor_lock = threading.Lock()
+
+_cdp_timeout_count: int = 0          # total CDP calls that timed out (caller-side)
+_active_cdp_requests: int = 0        # orchestration-level tracking only
+_cdp_metric_lock = threading.Lock()  # protects _cdp_timeout_count and _active_cdp_requests
+
+# NOTE on _active_cdp_requests:
+# This counter reflects orchestration-level tracking only.
+# It does NOT accurately reflect executor thread occupancy.
+# After a caller times out and future.cancel() is called,
+# the underlying thread may still be running while this
+# counter has already been decremented.
 
 
 def _load_idempotency_store() -> None:
@@ -184,7 +196,6 @@ def _save_idempotency_store() -> None:
             _IDEMPOTENCY_STORE_PATH,
             exc_info=True,
         )
-
 
 # ── Idempotency store abstraction (CRIT-01) ────────────────────────────────
 
@@ -356,7 +367,6 @@ def _shutdown_cdp_executor() -> None:
     with _cdp_executor_lock:
         _cdp_executor.shutdown(wait=False, cancel_futures=True)
 
-
 atexit.register(_shutdown_cdp_executor)
 
 
@@ -373,16 +383,24 @@ def _evict_expired_task_ids() -> None:
 
 # ── CDP timeout helper (HIGH-02) ──────────────────────────────────
 
-
 def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_TIMEOUT, **kwargs: Any) -> Any:
     """Execute a CDP call with a caller-side timeout using the shared CDP executor.
 
-    Submits *fn* to the shared ``_cdp_executor`` and waits at most *timeout*
-    seconds for the result. **Note:** timing out only unblocks the caller; the
-    underlying CDP callable may continue running in the background because
-    ``future.cancel()`` is best-effort and cannot interrupt an already-running
-    thread.  Raises ``SessionFlaggedError`` if the call does not complete in
-    time so the runtime treats the session as flagged.
+    Submits *fn* to the shared ``_cdp_executor`` (ThreadPoolExecutor). The task
+    is enqueued immediately — submit() does not block waiting for a free thread
+    slot. ``future.result(timeout=timeout)`` is then called to wait for the result.
+
+    If the timeout expires:
+    - The caller is unblocked and ``SessionFlaggedError`` is raised.
+    - ``future.cancel()`` is attempted as a best-effort hint. Because the task
+      is likely already running, cancel() is a no-op in the common case — the
+      underlying thread continues running until the CDP call completes or the
+      browser process is killed. This is an inherent limitation of CPython's
+      ThreadPoolExecutor; there is no mechanism to interrupt a running thread.
+    - If all ``max_workers`` slots are occupied by hung (timed-out) tasks,
+      new submissions will queue in the executor's internal work queue, increasing
+      end-to-end latency. Monitor ``_active_cdp_requests`` and ``_cdp_timeout_count``
+      to detect this condition.
 
     Args:
         fn: CDP callable to invoke.
@@ -394,22 +412,61 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
         SessionFlaggedError: If the call does not complete within *timeout*
             seconds, or if the executor is unavailable (e.g. after shutdown).
     """
+    global _cdp_timeout_count, _active_cdp_requests
     from modules.common.exceptions import SessionFlaggedError
+
+    fn_name = getattr(fn, "__name__", repr(fn))
+
+    with _cdp_metric_lock:
+        _active_cdp_requests += 1
     try:
-        future = _cdp_executor.submit(fn, *args, **kwargs)
-    except RuntimeError as exc:
-        raise SessionFlaggedError(
-            f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
-            "could not be scheduled because the CDP executor is unavailable"
-        ) from exc
-    try:
-        return future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
-        future.cancel()  # Best-effort; no-op if the task is already running.
-        raise SessionFlaggedError(
-            f"CDP call '{getattr(fn, '__name__', repr(fn))}' "
-            f"timed out after {timeout}s for worker"
-        )
+        try:
+            future = _cdp_executor.submit(fn, *args, **kwargs)
+        except RuntimeError as exc:
+            raise SessionFlaggedError(
+                f"CDP call '{fn_name}' could not be scheduled because "
+                "the CDP executor is unavailable"
+            ) from exc
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()  # Best-effort; no-op if the task is already running.
+            with _cdp_metric_lock:
+                _cdp_timeout_count += 1
+                _snapshot_active = _active_cdp_requests
+                _snapshot_timeouts = _cdp_timeout_count
+            _logger.warning(
+                "[trace=%s] CDP call '%s' timed out after %.1fs "
+                "(active_cdp_requests=%d, total_timeouts=%d). "
+                "Note: the underlying thread may still be running.",
+                _get_trace_id(),
+                fn_name,
+                timeout,
+                _snapshot_active,
+                _snapshot_timeouts,
+            )
+            raise SessionFlaggedError(
+                f"CDP call '{fn_name}' timed out after {timeout}s for worker"
+            )
+    finally:
+        with _cdp_metric_lock:
+            _active_cdp_requests -= 1
+
+
+def get_cdp_metrics() -> dict:
+    """Return a snapshot of CDP executor health metrics.
+
+    Returns:
+        dict with keys:
+            ``total_timeouts``: cumulative count of caller-side timeouts.
+            ``active_cdp_requests``: current orchestration-level request count.
+                See NOTE on _active_cdp_requests for accuracy limitations.
+    """
+    with _cdp_metric_lock:
+        return {
+            "total_timeouts": _cdp_timeout_count,
+            "active_cdp_requests": _active_cdp_requests,
+        }
 
 
 def initialize_cycle(worker_id: str = "default"):
