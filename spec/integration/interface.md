@@ -93,13 +93,3 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
-
-## Ext-4: Structured Log Aggregation
-
-- **Module:** `modules.observability.log_sink`
-- **Entry point:** `emit(event: dict) -> None`
-- **Called from:** `integration.runtime._log_event` alongside existing pipe-delimited format
-- **Log schema:** `{"ts": float, "source": str, "level": str, "event": str, "data": dict}`
-- **Default backend:** Structured JSON log at DEBUG level via Python logging
-- **Custom sinks:** Register via `register_sink(fn)` / `unregister_sink(fn)`
-- **Backward compatibility:** Additive — pipe-delimited format unchanged, JSON is additional
