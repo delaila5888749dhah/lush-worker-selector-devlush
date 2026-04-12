@@ -37,7 +37,9 @@ class TestWrapperApplied(_RuntimeReset):
 
         wid = runtime.start_worker(task)
         time.sleep(0.5)
-        stopped = runtime.stop_worker(wid, timeout=5)
+        # Timeout must accommodate the full behavioral delay cycle:
+        # max typing delay (1.8s) + task (0.1s) + max thinking delay (5.0s) = 6.9s.
+        stopped = runtime.stop_worker(wid, timeout=10)
         self.assertTrue(stopped, "worker did not stop within timeout")
         self.assertNotIn(wid, runtime.get_active_workers())
 
