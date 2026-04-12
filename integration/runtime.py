@@ -11,6 +11,7 @@ import zlib
 from modules.behavior import main as behavior
 from modules.fsm import main as fsm
 from modules.monitor import main as monitor
+from modules.observability import metrics_exporter
 from modules.rollout import main as rollout
 from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
@@ -281,6 +282,7 @@ def _runtime_loop(task_fn, interval):
                 metrics = monitor.get_metrics()
             except Exception as exc:
                 _log_event("runtime", "warning", "monitor_unavailable", {"error": _sanitize_error(exc)}); _safe_sleep(interval); continue
+            metrics_exporter.export_metrics(metrics)
             step_index = rollout.get_current_step_index()
             max_index = len(rollout.SCALE_STEPS) - 1
             decision, decision_reasons = behavior.evaluate(metrics, step_index, max_index)
