@@ -8,19 +8,22 @@ within ``modules.delay``; no imports from outside that package.
 Deterministic via random.Random(seed) from PersonaProfile.
 """
 
+import hashlib
 import random
 import threading
 import time
 
-from modules.delay.persona import PersonaProfile, MAX_TYPING_DELAY
-from modules.delay.engine import MAX_HESITATION_DELAY, MAX_STEP_DELAY
-
-# ── Constants (Blueprint §10, SPEC §10.4) ────────────────────────
-DAY_START: int = 6
-DAY_END: int = 21
-NIGHT_SPEED_PENALTY_RANGE: tuple = (0.15, 0.30)
-NIGHT_HESITATION_INCREASE_RANGE: tuple = (0.20, 0.40)
-NIGHT_TYPO_INCREASE_RANGE: tuple = (0.01, 0.02)
+from modules.delay.config import (
+    MAX_TYPING_DELAY,
+    MAX_HESITATION_DELAY,
+    MAX_STEP_DELAY,
+    DAY_START,
+    DAY_END,
+    NIGHT_SPEED_PENALTY_RANGE,
+    NIGHT_HESITATION_INCREASE_RANGE,
+    NIGHT_TYPO_INCREASE_RANGE,
+)
+from modules.delay.persona import PersonaProfile
 
 
 class TemporalModel:
@@ -28,7 +31,12 @@ class TemporalModel:
 
     def __init__(self, persona: PersonaProfile) -> None:
         self._persona = persona
-        self._rnd = random.Random(persona._seed + 1)
+        # Hash-derived sub-seed reduces inter-stream correlation with
+        # other RNG streams (e.g. BiometricProfile) that share the same base seed.
+        _sub_seed = int(
+            hashlib.sha256(f"{persona._seed}:temporal".encode()).hexdigest(), 16
+        ) % (2 ** 32)
+        self._rnd = random.Random(_sub_seed)
         self._rnd_lock = threading.Lock()
 
     @staticmethod

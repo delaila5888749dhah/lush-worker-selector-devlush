@@ -8,6 +8,7 @@ Thread-safe via threading.Lock.  Deterministic via random.Random(seed).
 Imports limited to ``modules.delay`` submodules (stdlib only).
 """
 
+import hashlib
 import random
 import threading
 
@@ -21,7 +22,11 @@ class BiometricProfile:
 
     def __init__(self, persona: PersonaProfile) -> None:
         self._persona = persona
-        self._rnd = random.Random(persona._seed + 2)
+        # Hash-derived sub-seed reduces inter-stream correlation with TemporalModel.
+        _sub_seed = int(
+            hashlib.sha256(f"{persona._seed}:biometrics".encode()).hexdigest(), 16
+        ) % (2 ** 32)
+        self._rnd = random.Random(_sub_seed)
         self._rnd_lock = threading.Lock()
 
     def generate_keystroke_delay(self, char_index: int) -> float:

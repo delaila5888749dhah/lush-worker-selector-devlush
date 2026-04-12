@@ -80,5 +80,35 @@ class TestDeterminism(_BioSetup):
         self.assertEqual(p1, p2)
 
 
+class BiometricProductionPathTests(unittest.TestCase):
+    """Verify BiometricProfile is reachable from the delay module public API."""
+
+    def test_biometric_profile_accessible_via_delay_main(self):
+        from modules.delay.main import BiometricProfile as BP, PersonaProfile as PP
+        p = PP(42)
+        bio = BP(p)
+        pattern = bio.generate_4x4_pattern()
+        self.assertEqual(len(pattern), 19)
+
+    def test_biometric_profile_rng_independent_from_persona(self):
+        """BiometricProfile RNG must use a sub-seed, not share persona._rnd."""
+        from modules.delay.biometrics import BiometricProfile as BP
+        p = PersonaProfile(42)
+        # Drain persona._rnd with 100 calls
+        for _ in range(100):
+            p.get_typing_delay(0)
+        bio_after_drain = BP(p)
+
+        # Fresh persona (same seed), create BiometricProfile immediately
+        p2 = PersonaProfile(42)
+        bio_fresh = BP(p2)
+
+        # Both should produce the same 4×4 pattern because bio uses its own seeded RNG
+        self.assertEqual(
+            bio_after_drain.generate_4x4_pattern(),
+            bio_fresh.generate_4x4_pattern(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

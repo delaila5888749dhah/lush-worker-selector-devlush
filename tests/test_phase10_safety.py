@@ -72,7 +72,11 @@ class TestCriticalSectionZeroDelay(unittest.TestCase):
         self.assertEqual(e.calculate_typing_delay(0), 0.0)
 
     def test_api_wait_critical_section(self):
-        """API wait scenario — set_critical_section blocks all delay types."""
+        """API wait scenario — set_critical_section blocks accumulating delay types.
+
+        Click delays are NOT accumulated and bypass the critical section guard —
+        they represent a physical reaction time offset (0.05–0.25 s).
+        """
         p = PersonaProfile(1)
         sm = BehaviorStateMachine()
         e = DelayEngine(p, sm)
@@ -80,7 +84,10 @@ class TestCriticalSectionZeroDelay(unittest.TestCase):
         sm.set_critical_section(True)
         self.assertEqual(e.calculate_delay("typing"), 0.0)
         self.assertEqual(e.calculate_delay("thinking"), 0.0)
-        self.assertEqual(e.calculate_delay("click"), 0.0)
+        # Click delay bypasses the critical section guard (non-accumulated micro-delay)
+        d = e.calculate_delay("click")
+        self.assertGreaterEqual(d, 0.05)
+        self.assertLessEqual(d, 0.25)
 
     def test_page_reload_critical_section(self):
         """Page reload — critical flag blocks, then clearing re-enables."""

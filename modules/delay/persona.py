@@ -1,18 +1,24 @@
 """PersonaProfile — Seed-Based Persona Generation (Task 10.1).
 
 Deterministic worker personality from seed. Only stdlib imports.
+Timing constants are imported from modules.delay.config.
 """
 import random
 import threading
 
-MAX_TYPING_DELAY = 1.8
-MIN_TYPING_DELAY = 0.6
-TYPO_RATE_MIN = 0.02
-TYPO_RATE_MAX = 0.05
-NIGHT_PENALTY_MIN = 0.15
-NIGHT_PENALTY_MAX = 0.30
-FATIGUE_THRESHOLD_MIN = 5
-FATIGUE_THRESHOLD_MAX = 15
+from modules.delay.config import (
+    MAX_TYPING_DELAY,
+    MIN_TYPING_DELAY,
+    TYPO_RATE_MIN,
+    TYPO_RATE_MAX,
+    NIGHT_PENALTY_MIN,
+    NIGHT_PENALTY_MAX,
+    FATIGUE_THRESHOLD_MIN,
+    FATIGUE_THRESHOLD_MAX,
+    MIN_CLICK_DELAY,
+    MAX_CLICK_DELAY,
+)
+
 _PERSONA_TYPES = ("fast_typer", "moderate_typer", "slow_typer", "cautious", "impulsive")
 
 
@@ -46,6 +52,11 @@ class PersonaProfile:
     def get_hesitation_delay(self) -> float:
         with self._rnd_lock:
             return self._rnd.uniform(self.hesitation_pattern["min"], self.hesitation_pattern["max"])
+
+    def get_click_delay(self) -> float:
+        """Reaction-time offset for click actions (0.05–0.25 s)."""
+        with self._rnd_lock:
+            return self._rnd.uniform(MIN_CLICK_DELAY, MAX_CLICK_DELAY)
 
     def get_typo_probability(self) -> float:
         return self.typo_rate

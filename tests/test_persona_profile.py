@@ -138,5 +138,48 @@ class TestThreadSafety(unittest.TestCase):
             self.assertLessEqual(d, MAX_TYPING_DELAY)
 
 
+class WorkerSeedUniquenessTests(unittest.TestCase):
+    """Persona seeds for worker-1 through worker-8 must be unique and non-colliding."""
+
+    def test_worker_seeds_produce_unique_personas(self):
+        """Different worker IDs → different seeds → different persona attributes."""
+        worker_ids = [f"worker-{i}" for i in range(1, 9)]
+        seeds = [hash(wid) & 0xFFFFFFFF for wid in worker_ids]
+        self.assertEqual(
+            len(set(seeds)),
+            len(seeds),
+            "All worker seeds must be unique",
+        )
+        personas = [PersonaProfile(s) for s in seeds]
+        profiles = [p.to_dict() for p in personas]
+        typing_speeds = [p["typing_speed"] for p in profiles]
+        self.assertEqual(
+            len(set(round(s, 10) for s in typing_speeds)),
+            len(typing_speeds),
+            "All worker personas must have distinct typing speeds",
+        )
+
+    def test_same_worker_id_always_produces_same_persona(self):
+        seed = hash("worker-1") & 0xFFFFFFFF
+        p1 = PersonaProfile(seed)
+        p2 = PersonaProfile(seed)
+        self.assertEqual(p1.to_dict(), p2.to_dict())
+
+    def test_rng_streams_independent_across_temporal_and_biometrics(self):
+        """TemporalModel and BiometricProfile RNG streams must be independent."""
+        from modules.delay.temporal import TemporalModel
+        from modules.delay.biometrics import BiometricProfile
+        p = PersonaProfile(42)
+        tm = TemporalModel(p)
+        bio = BiometricProfile(p)
+        temporal_vals = [tm.apply_micro_variation(1.0) for _ in range(10)]
+        bio_vals = [bio.apply_noise(1.0) for _ in range(10)]
+        self.assertNotEqual(
+            temporal_vals,
+            bio_vals,
+            "Temporal and biometric RNG streams must be independent",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

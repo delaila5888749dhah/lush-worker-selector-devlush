@@ -261,5 +261,51 @@ class TestMultiStepFormSimulation(unittest.TestCase):
         self.assertGreater(delay2, 0.0, "Second step should inject a positive delay after reset")
 
 
+class StopEventEarlyExitTests(unittest.TestCase):
+    """inject_step_delay() stop_event early-exit correctness."""
+
+    def _make_components(self, seed=42):
+        persona = PersonaProfile(seed)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        temporal = TemporalModel(persona)
+        sm.transition("FILLING_FORM")
+        return engine, temporal
+
+    def test_stop_event_set_before_call_exits_early(self):
+        """When stop_event is already set, wait() returns immediately."""
+        import time as _time
+        engine, temporal = self._make_components()
+        stop_event = threading.Event()
+        stop_event.set()  # pre-set: "already stopped"
+
+        t0 = _time.monotonic()
+        result = inject_step_delay(engine, temporal, "typing", stop_event=stop_event)
+        elapsed = _time.monotonic() - t0
+
+        # Result should still be the delay value (wait returns True immediately)
+        self.assertGreater(result, 0.0)
+        # Elapsed wall time should be well under the delay value (early exit)
+        self.assertLess(
+            elapsed,
+            result,
+            "stop_event.wait() should return immediately when pre-set",
+        )
+
+    def test_stop_event_not_set_uses_wait_with_positive_timeout(self):
+        """When stop_event is not set, wait() is called with a positive timeout."""
+        engine, temporal = self._make_components()
+        stop_event = threading.Event()  # NOT set
+
+        with patch.object(stop_event, "wait", wraps=stop_event.wait) as mock_wait:
+            with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+                result = inject_step_delay(engine, temporal, "typing", stop_event=stop_event)
+
+        mock_wait.assert_called_once()
+        timeout_arg = mock_wait.call_args[1]["timeout"]
+        self.assertGreater(timeout_arg, 0.0)
+        self.assertAlmostEqual(result, timeout_arg, places=10)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -85,7 +85,9 @@ class TestFullPipeline(unittest.TestCase):
         d_think = e.calculate_delay("thinking")
 
         self.assertGreater(d_type, 0.0)
-        self.assertEqual(d_click, 0.0)
+        # Click delay is now a non-accumulated reaction offset (0.05–0.25 s)
+        self.assertGreaterEqual(d_click, 0.05)
+        self.assertLessEqual(d_click, 0.25)
         self.assertGreaterEqual(d_think, 0.0)
         self.assertLessEqual(e.get_step_accumulated_delay(), MAX_STEP_DELAY)
 

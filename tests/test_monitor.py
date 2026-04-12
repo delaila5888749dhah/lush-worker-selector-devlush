@@ -219,5 +219,49 @@ class TestReset(MonitorResetMixin, unittest.TestCase):
         self.assertIsNone(m["baseline_success_rate"])
 
 
+class PersonaTaggedErrorTests(unittest.TestCase):
+    """Tests for persona-tagged error and success recording."""
+
+    def setUp(self):
+        from modules.monitor import main as monitor
+        monitor.reset()
+        self.monitor = monitor
+
+    def tearDown(self):
+        self.monitor.reset()
+
+    def test_record_error_with_persona_tag(self):
+        self.monitor.record_error(persona_type="fast_typer")
+        self.monitor.record_error(persona_type="fast_typer")
+        self.monitor.record_error(persona_type="cautious")
+        rates = self.monitor.get_error_rates_by_persona()
+        self.assertIn("fast_typer", rates)
+        self.assertIn("cautious", rates)
+
+    def test_record_error_without_persona_tag_still_increments_total(self):
+        self.monitor.record_error()
+        self.assertEqual(self.monitor.get_error_rate(), 1.0)
+
+    def test_error_rate_by_persona_correct(self):
+        """fast_typer: 2 errors out of 4 total → 0.5 rate."""
+        for _ in range(2):
+            self.monitor.record_success(persona_type="fast_typer")
+            self.monitor.record_error(persona_type="fast_typer")
+        rates = self.monitor.get_error_rates_by_persona()
+        self.assertAlmostEqual(rates["fast_typer"], 0.5)
+
+    def test_reset_clears_persona_counts(self):
+        self.monitor.record_error(persona_type="fast_typer")
+        self.monitor.reset()
+        rates = self.monitor.get_error_rates_by_persona()
+        self.assertEqual(rates, {})
+
+    def test_get_metrics_includes_persona_counts(self):
+        self.monitor.record_error(persona_type="slow_typer")
+        m = self.monitor.get_metrics()
+        self.assertIn("error_counts_by_persona", m)
+        self.assertIn("slow_typer", m["error_counts_by_persona"])
+
+
 if __name__ == "__main__":
     unittest.main()

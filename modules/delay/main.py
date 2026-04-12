@@ -19,6 +19,17 @@ from modules.delay.temporal import DAY_START, DAY_END  # noqa: F401
 from modules.delay.temporal import NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE  # noqa: F401
 from modules.delay.biometrics import BiometricProfile  # noqa: F401
 from modules.delay.wrapper import wrap  # noqa: F401  — Task 10.5
+from modules.delay.config import (  # noqa: F401
+    validate_config,
+    MIN_CLICK_DELAY,
+    MAX_CLICK_DELAY,
+    MIN_FOCUS_DELAY,
+    MAX_FOCUS_DELAY,
+    MIN_NAVIGATION_DELAY,
+    MAX_NAVIGATION_DELAY,
+    MIN_THINKING_DELAY,
+)
+from modules.delay.calibration import CalibrationReport, run_calibration_loop  # noqa: F401
 
 __all__ = [
     "PersonaProfile",
@@ -44,4 +55,14 @@ __all__ = [
     "NIGHT_TYPO_INCREASE_RANGE",
     "BiometricProfile",
     "wrap",
+    "validate_config",
+    "MIN_CLICK_DELAY",
+    "MAX_CLICK_DELAY",
+    "MIN_FOCUS_DELAY",
+    "MAX_FOCUS_DELAY",
+    "MIN_NAVIGATION_DELAY",
+    "MAX_NAVIGATION_DELAY",
+    "MIN_THINKING_DELAY",
+    "CalibrationReport",
+    "run_calibration_loop",
 ]

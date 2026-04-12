@@ -33,8 +33,11 @@ class TestTypingDelay(_EngineSetup):
 
 
 class TestClickDelay(_EngineSetup):
-    def test_click_is_zero(self):
-        self.assertEqual(self.engine.calculate_click_delay(), 0.0)
+    def test_click_returns_reaction_delay(self):
+        """click delay is now a small non-zero spatial/reaction offset."""
+        d = self.engine.calculate_click_delay()
+        self.assertGreaterEqual(d, 0.05)
+        self.assertLessEqual(d, 0.25)
 
 
 class TestThinkingDelay(_EngineSetup):
@@ -58,7 +61,9 @@ class TestDispatcher(_EngineSetup):
         self.assertGreater(d, 0.0)
 
     def test_click_dispatch(self):
-        self.assertEqual(self.engine.calculate_delay("click"), 0.0)
+        d = self.engine.calculate_delay("click")
+        self.assertGreaterEqual(d, 0.05)
+        self.assertLessEqual(d, 0.25)
 
     def test_unknown_dispatch(self):
         self.assertEqual(self.engine.calculate_delay("unknown"), 0.0)
@@ -182,13 +187,15 @@ class TestBoundaryConditions(_EngineSetup):
         d = self.engine.calculate_delay("typing")
         self.assertGreater(d, 0.0)
 
-    def test_click_always_zero_regardless_of_state(self):
-        """Click delay is always zero, even in safe state."""
+    def test_click_always_returns_reaction_delay_regardless_of_state(self):
+        """Click delay is a small non-zero value, even in critical states."""
         self.sm.transition("FILLING_FORM")
-        self.assertEqual(self.engine.calculate_click_delay(), 0.0)
+        d1 = self.engine.calculate_click_delay()
+        self.assertGreaterEqual(d1, 0.05)
         self.sm.transition("PAYMENT")
         self.sm.transition("VBV")
-        self.assertEqual(self.engine.calculate_click_delay(), 0.0)
+        d2 = self.engine.calculate_click_delay()
+        self.assertGreaterEqual(d2, 0.05)
 
 
 if __name__ == "__main__":

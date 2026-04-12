@@ -8,15 +8,30 @@ Deterministic via seed-based random from PersonaProfile.
 """
 
 import functools
+import logging
 import threading
 import time
 
-from modules.delay.persona import PersonaProfile, MAX_TYPING_DELAY, MIN_TYPING_DELAY
+from modules.delay.config import (
+    MAX_TYPING_DELAY,
+    MIN_TYPING_DELAY,
+    MIN_THINKING_DELAY,
+    MAX_HESITATION_DELAY,
+    MIN_FOCUS_DELAY,
+    MAX_FOCUS_DELAY,
+    MIN_NAVIGATION_DELAY,
+    MAX_NAVIGATION_DELAY,
+)
+from modules.delay.persona import PersonaProfile
 from modules.delay.state import BehaviorStateMachine
-from modules.delay.engine import DelayEngine, MAX_HESITATION_DELAY
+from modules.delay.engine import DelayEngine
 from modules.delay.temporal import TemporalModel
 
-_MIN_THINKING_DELAY = 3.0
+_log = logging.getLogger(__name__)
+
+# Action types handled by the wrapper's behavioral injection model.
+# Click delays bypass the wrapper (they're micro-delays applied directly).
+_INJECTABLE_ACTIONS = frozenset(("typing", "thinking", "focus", "navigation"))
 
 
 def inject_step_delay(
@@ -38,7 +53,9 @@ def inject_step_delay(
     temporal : TemporalModel
         Initialised temporal model instance.
     action_type : str
-        ``"typing"``, ``"click"``, or ``"thinking"``.
+        ``"typing"``, ``"thinking"``, ``"focus"``, or ``"navigation"``.
+        ``"click"`` and unknown types return ``0.0`` immediately (click delays
+        are micro-delays applied directly, not via the wrapper model).
     stop_event : threading.Event | None
         When provided, ``stop_event.wait(timeout=delay)`` is used instead
         of ``time.sleep(delay)``.
@@ -52,11 +69,16 @@ def inject_step_delay(
 
     Rules:
 
+    - Only injects for action_type in (typing, thinking, focus, navigation)
     - Only injects when ``engine.is_delay_permitted() == True``
     - Delay is clamped by ``action_type`` hard limits
     - Temporal modifier and micro-variation are applied
     - Thread-safe (reuses existing locks in engine and temporal)
     """
+    # Click and unknown types bypass the wrapper's behavioral injection model.
+    if action_type not in _INJECTABLE_ACTIONS:
+        return 0.0
+
     if not engine.is_delay_permitted():
         return 0.0
 
@@ -69,9 +91,11 @@ def inject_step_delay(
     if action_type == "typing":
         delay = max(MIN_TYPING_DELAY, min(delay, MAX_TYPING_DELAY))
     elif action_type == "thinking":
-        delay = max(_MIN_THINKING_DELAY, min(delay, MAX_HESITATION_DELAY))
-    else:
-        return 0.0
+        delay = max(MIN_THINKING_DELAY, min(delay, MAX_HESITATION_DELAY))
+    elif action_type == "focus":
+        delay = max(MIN_FOCUS_DELAY, min(delay, MAX_FOCUS_DELAY))
+    elif action_type == "navigation":
+        delay = max(MIN_NAVIGATION_DELAY, min(delay, MAX_NAVIGATION_DELAY))
 
     delay = engine.accumulate_delay(delay)
     if delay <= 0:
@@ -80,6 +104,12 @@ def inject_step_delay(
         stop_event.wait(timeout=delay)
     else:
         time.sleep(delay)
+    _log.debug(
+        "inject_step_delay: action=%s delay=%.4fs accumulated=%.4fs",
+        action_type,
+        delay,
+        engine.get_step_accumulated_delay(),
+    )
     return delay
 
 
@@ -107,11 +137,14 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
     engine = DelayEngine(persona, sm)
     temporal = TemporalModel(persona)
 
+    _log.debug("wrap: persona_type=%s seed=%d", persona.persona_type, persona._seed)
+
     @functools.wraps(task_fn)
     def _wrapped(*args, **kwargs):
         # Injection point 1: typing delay before form interaction.
         sm.transition("FILLING_FORM")
-        inject_step_delay(engine, temporal, "typing", stop_event)
+        typing_delay = inject_step_delay(engine, temporal, "typing", stop_event)
+        _log.debug("wrap: pre-form typing_delay=%.4fs", typing_delay)
         try:
             result = task_fn(*args, **kwargs)
         finally:
@@ -123,7 +156,8 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
         # Re-enter FILLING_FORM; accumulator was reset above so the
         # thinking delay is not blocked by the earlier typing delay.
         sm.transition("FILLING_FORM")
-        inject_step_delay(engine, temporal, "thinking", stop_event)
+        thinking_delay = inject_step_delay(engine, temporal, "thinking", stop_event)
+        _log.debug("wrap: post-fill thinking_delay=%.4fs", thinking_delay)
         engine.reset_step_accumulator()
         sm.reset()
 

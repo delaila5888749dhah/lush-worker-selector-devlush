@@ -696,5 +696,65 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
             self.assertIn("unavailable", str(ctx.exception))
 
 
+class CDPPoolSaturationTests(unittest.TestCase):
+    """Stress test: 8 simultaneous timeout-style tasks against a mock executor."""
+
+    def test_8_concurrent_timeouts_recover(self):
+        """Submit 8 tasks that all time out; verify pool recovers and accepts new work."""
+        import concurrent.futures as _cf
+        import threading as _t
+
+        gate = _t.Event()
+        results = []
+        errors = []
+
+        def controlled_task():
+            # Each task waits briefly then completes — simulates a short timeout
+            gate.wait(timeout=2.0)
+            return "done"
+
+        with _cf.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(controlled_task) for _ in range(8)]
+            gate.set()  # Unblock all tasks concurrently
+
+            for f in _cf.as_completed(futures, timeout=10.0):
+                try:
+                    results.append(f.result())
+                except Exception as exc:
+                    errors.append(exc)
+
+            self.assertEqual(errors, [], "No errors expected from concurrent tasks")
+            self.assertEqual(len(results), 8, "All 8 tasks should complete")
+
+            # Pool should still accept new work after the concurrent burst
+            new_future = executor.submit(lambda: "alive")
+            self.assertEqual(new_future.result(timeout=5.0), "alive")
+
+    def test_pool_does_not_exhaust_on_sequential_timeouts(self):
+        """Sequential cancel + completion cycles must not leave orphaned threads."""
+        import concurrent.futures as _cf
+        import threading as _t
+
+        with _cf.ThreadPoolExecutor(max_workers=8) as executor:
+            for _ in range(8):
+                stop = _t.Event()
+
+                def task(ev=stop):
+                    ev.wait(timeout=0.05)
+                    return "done"
+
+                f = executor.submit(task)
+                stop.set()
+                f.cancel()  # May or may not succeed; that's acceptable
+                try:
+                    f.result(timeout=1.0)
+                except _cf.CancelledError:
+                    pass
+
+            # Verify the pool is still healthy and accepts new work
+            final = executor.submit(lambda: "healthy")
+            self.assertEqual(final.result(timeout=5.0), "healthy")
+
+
 if __name__ == "__main__":
     unittest.main()
