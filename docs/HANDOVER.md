@@ -7,7 +7,7 @@
 
 ## System Overview
 
-`lush-givex-worker` là worker tự động hóa checkout sử dụng CDP (Chrome DevTools Protocol) để mô phỏng hành vi người dùng thực, tích hợp với Givex payment gateway.
+`lush-givex-worker` is an automated checkout worker that uses CDP (Chrome DevTools Protocol) to simulate real user behavior, integrated with the Givex payment gateway.
 
 ---
 
@@ -61,10 +61,10 @@ modules/fsm/                     — Finite State Machine for worker lifecycle
 
 | Item | Status | Notes |
 |---|---|---|
-| PR #252 CDP timing audit | DRAFT — ngoài roadmap | Có thể merge sau bàn giao nếu cần |
-| `modules/delay/biometrics.py` | NOT WIRED | Module hoàn chỉnh nhưng chưa gọi từ production path |
-| Monitor persona-tagging | Deferred to Phase 11 | Chưa implement |
-| Calibration harness | Deferred to Phase 11 | Chưa implement |
+| PR #252 CDP timing audit | DRAFT — outside roadmap | Can be merged post-handover if needed |
+| `modules/delay/biometrics.py` | NOT WIRED | Module complete but not called from production path |
+| Monitor persona-tagging | Deferred to Phase 11 | Not yet implemented |
+| Calibration harness | Deferred to Phase 11 | Not yet implemented |
 
 ---
 
