@@ -13,6 +13,7 @@ from modules.fsm import main as fsm
 from modules.monitor import main as monitor
 from modules.observability import alerting
 from modules.observability import metrics_exporter
+from modules.observability import log_sink
 from modules.rollout import main as rollout
 from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
@@ -50,6 +51,9 @@ _restart_delay: float = 0
 _loop_error_count = 0
 _MAX_LOOP_ERRORS = 10
 def _should_stop_worker(worker_id):
+    t = _workers.get(worker_id)
+    if t is not None and t is not threading.current_thread():
+        return True
     return worker_id not in _workers or worker_id in _stop_requests or _state == "STOPPING"
 def _log_event(worker_id, state, action, metrics=None) -> None:
     with _trace_lock:
@@ -63,6 +67,13 @@ def _log_event(worker_id, state, action, metrics=None) -> None:
         action,
         metrics or "",
     )
+    log_sink.emit({
+        "ts": time.time(),
+        "source": worker_id,
+        "level": state,
+        "event": action,
+        "data": metrics if isinstance(metrics, dict) else {},
+    })
 def _sanitize_error(exc: Exception) -> str:
     """Redact card-like digit sequences from exception messages before logging."""
     return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
@@ -559,4 +570,5 @@ def reset():
     fsm.reset_states()
     fsm.reset_registry()
     metrics_exporter.reset()
+    log_sink.reset()
     alerting.reset()
