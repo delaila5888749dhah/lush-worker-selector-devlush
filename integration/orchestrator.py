@@ -436,6 +436,8 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
             future.cancel()  # Best-effort; no-op if the task is already running.
             with _cdp_metric_lock:
                 _cdp_timeout_count += 1
+                _snapshot_active = _active_cdp_requests
+                _snapshot_timeouts = _cdp_timeout_count
             _logger.warning(
                 "[trace=%s] CDP call '%s' timed out after %.1fs "
                 "(active_cdp_requests=%d, total_timeouts=%d). "
@@ -443,8 +445,8 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
                 _get_trace_id(),
                 fn_name,
                 timeout,
-                _active_cdp_requests,
-                _cdp_timeout_count,
+                _snapshot_active,
+                _snapshot_timeouts,
             )
             raise SessionFlaggedError(
                 f"CDP call '{fn_name}' timed out after {timeout}s for worker"

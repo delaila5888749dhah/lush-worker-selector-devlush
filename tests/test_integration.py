@@ -844,7 +844,7 @@ class CDPExecutorBehaviorTests(unittest.TestCase):
         import concurrent.futures
         import threading as _t
         hold = _t.Event()
-        started = _t.Barrier(3)
+        started = _t.Barrier(3)  # 2 hold_task threads + main thread all rendezvous here
 
         def hold_task():
             started.wait(timeout=5)
