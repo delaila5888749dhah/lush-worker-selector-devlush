@@ -148,7 +148,7 @@ Output: None
   - `set_log_alert_enabled(enabled: bool) -> None`
   - `get_status() -> dict`
   - `reset() -> None`
-- **Called from:** `integration.runtime._runtime_loop` after `metrics_exporter.export_metrics()`, before `behavior.evaluate()`
+- **Called from:** `integration.runtime._runtime_loop` after `metrics_exporter.export_metrics(metrics)`, before `behavior.evaluate()`
 - **Thresholds:**
   - `error_rate > 0.05` (5%) → alert
   - `restarts_last_hour > 3` → alert
