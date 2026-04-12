@@ -128,8 +128,20 @@ def parse_spec_signatures(path: Path | str) -> list[SignatureRecord]:
     signatures: list[SignatureRecord] = []
     seen_names: dict[str, int] = {}
     pending_index: int | None = None
+    in_observability_section = False
 
     for line_no, raw_line in enumerate(content.splitlines(), start=1):
+        stripped = raw_line.strip()
+        # Observability module sections use bullet-list documentation format
+        # (not Function:/Input:/Output:) — skip them to avoid false duplicates.
+        if stripped.startswith("## Module: modules.observability."):
+            in_observability_section = True
+            continue
+        if in_observability_section and stripped.startswith("## "):
+            in_observability_section = False
+        if in_observability_section:
+            continue
+
         normalized = normalize_line(raw_line)
         if not normalized:
             continue

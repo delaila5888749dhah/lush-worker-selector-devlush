@@ -1,6 +1,6 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 5.1
+spec-version: 5.2
 
 > **v5.0 Breaking Changes:**
 > - CDP functions (detect_page_state, fill_card, fill_billing, clear_card_fields) now require worker_id parameter
@@ -138,7 +138,49 @@ Output: None
 
 ---
 
+## Module: modules.observability.log_sink
+
+- **Entry point:** `emit(event: dict) -> None`
+- **Called from:** `integration.runtime._log_event` alongside existing pipe-delimited format
+- **Log schema:** `{"ts": float, "source": str, "level": str, "event": str, "data": dict}`
+- **Default backend:** Structured JSON log at DEBUG level via Python logging
+- **Custom sinks:** Register via `register_sink(fn)` / `unregister_sink(fn)`
+- **Fail-safe:** `emit()` wraps all logic in try/except — never propagates into `_log_event`
+- **Thread-safe:** All shared state guarded by `threading.Lock`
+- **Reset:** `reset()` clears all sink state — called from `integration.runtime.reset()`
+- **Backward compatibility:** Additive — pipe-delimited format unchanged, JSON is additional
+
+---
+
+## Module: modules.observability.alerting
+
+- **Entry points:**
+  - `evaluate_alerts(metrics: dict) -> list[str]`
+  - `send_alert(message: str) -> None`
+  - `register_alert_handler(fn) -> None`
+  - `unregister_alert_handler(fn) -> bool`
+  - `set_log_alert_enabled(enabled: bool) -> None`
+  - `get_status() -> dict`
+  - `reset() -> None`
+- **Called from:** `integration.runtime._runtime_loop` after `metrics_exporter.export_metrics(metrics)`, before `behavior.evaluate()`
+- **Thresholds:**
+  - `error_rate > 0.05` (5%) → alert
+  - `restarts_last_hour > 3` → alert
+  - `success_rate < baseline_success_rate - 0.10` (only when `baseline_success_rate` is not `None`) → alert
+- **Default backend:** `_logger.warning("ALERT: %s", message)` via Python logging
+- **Custom handlers:** Register via `register_alert_handler(fn)` / `unregister_alert_handler(fn) -> bool`
+- **Fail-safe:** `evaluate_alerts()` and `send_alert()` both wrap all logic in `try/except` — never propagate exceptions into `_runtime_loop`
+- **Thread-safe:** All shared state (`_alert_handlers`, `_alert_count`, `_log_alert_enabled`) guarded by `threading.Lock`; handler list is snapshot-copied before iteration
+- **Reset:** `reset()` clears all handler and counter state — called from `integration.runtime.reset()`
+- **Backward compatibility:** Additive only — existing rollback logic in `_runtime_loop` unchanged
+
+---
+
 ## Changelog
+
+### v5.2 (2026-04-12)
+- Added Ext-2 Alerting Rules contract (`modules.observability.alerting`).
+- Added Ext-4 Structured Log Aggregation contract (`modules.observability.log_sink`).
 
 ### v5.1 (2026-04-12)
 - Added Ext-1 Metrics Export contract (`modules.observability.metrics_exporter`).
