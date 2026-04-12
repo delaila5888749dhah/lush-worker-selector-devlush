@@ -1,6 +1,6 @@
 """Tests for modules.observability.alerting (Ext-2)."""
 import unittest
-from unittest import mock
+import unittest.mock as mock
 from modules.observability import alerting
 
 _NORMAL_METRICS = {
