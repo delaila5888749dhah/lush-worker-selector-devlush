@@ -45,7 +45,7 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | File | Version | Cập nhật |
 |------|---------|----------|
 | `spec/core/interface.md` | 5.0 | 2026-04-08 |
-| `spec/integration/interface.md` | 5.0 | 2026-04-08 |
+| `spec/integration/interface.md` | 5.1 | 2026-04-12 |
 | `spec/interface.md` (aggregated) | 5.0 | 2026-04-08 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
