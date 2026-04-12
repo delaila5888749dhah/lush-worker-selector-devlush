@@ -1,33 +1,52 @@
 # Staging Runbook — Phase 4
 
+> This repository does not ship a `main.py` staging CLI. The supported
+> control surface is the in-process `integration.runtime` API.
+
 ## Start Staging
 
 ```bash
 # 1. Verify environment
 python -m unittest discover tests  # all pass
 
-# 2. Start 1 worker (warm-up)
-python main.py --workers 1 --mode staging
+# 2. Open a Python control session and start the runtime at the default
+# warm-up step (1 worker). Replace staging_task with your existing staging
+# checkout callable from the deployment harness.
+python
+>>> from integration.runtime import get_deployment_status, start, stop
+>>> from modules.rollout import main as rollout
+>>> def staging_task(worker_id):
+...     ...
+...
+>>> start(staging_task, interval=10)
+True
+>>> get_deployment_status()
 
-# 3. Monitor metrics (5 phút đầu)
-# Check logs: tail -f logs/staging.log
+# 3. Monitor logs during the first 5 minutes from the same process that
+# started staging.
 
-# 4. Scale to 3 workers after 30 min stable
-python main.py --workers 3 --mode staging
+# 4. After ~30 minutes of stability, request the next rollout step (3 workers)
+# from that same control session. The runtime loop will apply the target on its
+# next tick.
+>>> rollout.try_scale_up()
+(3, 'scaled_up', [])
 ```
 
 ## Kill-Switch (Emergency Stop)
 
 ```bash
-python main.py --stop-all
-# OR: Ctrl+C → graceful shutdown
-# OR: kill -SIGTERM $(pgrep -f "main.py")
+# In the same Python control session that started staging:
+>>> stop(timeout=30)
+
+# Out-of-band emergency stop for the staging process:
+kill -SIGTERM <staging-runtime-pid>
 ```
 
 ## Check Metrics
 
 ```bash
-python -c "from integration.runtime import Runtime; r = Runtime(); print(r.get_deployment_status())"
+# Run from the same Python control session / deployment harness process:
+>>> get_deployment_status()
 ```
 
 ## Rollback
@@ -40,5 +59,5 @@ Automatic rollback triggers:
 ## Log Format
 
 ```
-timestamp | worker_id | trace_id | state | action | status
+timestamp|worker_id|trace_id|state|action|status
 ```

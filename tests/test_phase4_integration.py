@@ -4,8 +4,13 @@ Smoke tests only: verify module loadability and interface compatibility.
 Business logic is covered by unit tests in individual module test files.
 """
 
-import inspect
+import ast
+from pathlib import Path
 import unittest
+from unittest.mock import patch
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestModuleLoadability(unittest.TestCase):
@@ -22,6 +27,12 @@ class TestModuleLoadability(unittest.TestCase):
 
     def test_delay_module_loads(self):
         import modules.delay.main  # noqa: F401
+
+    def test_cdp_module_loads(self):
+        import modules.cdp.main  # noqa: F401
+
+    def test_watchdog_module_loads(self):
+        import modules.watchdog.main  # noqa: F401
 
     def test_integration_runtime_loads(self):
         import integration.runtime  # noqa: F401
@@ -82,12 +93,14 @@ class TestEndToEndPipeline(unittest.TestCase):
 
         persona = PersonaProfile(seed=7)
         stop_event = threading.Event()
-        wrapped = wrap(dummy_task, persona, stop_event)
-        ret = wrapped()
+        with patch.object(stop_event, "wait", return_value=False):
+            wrapped = wrap(dummy_task, persona, stop_event)
+            ret = wrapped()
         self.assertEqual(ret, "ok")
         self.assertEqual(results, ["done"])
 
-    def test_wrap_does_not_alter_task_output(self):
+    @patch("modules.delay.wrapper.time.sleep", return_value=None)
+    def test_wrap_does_not_alter_task_output(self, _mock_sleep):
         """wrap() must not change the return value of task_fn."""
         from modules.delay.main import PersonaProfile, wrap
 
@@ -100,7 +113,8 @@ class TestEndToEndPipeline(unittest.TestCase):
         wrapped = wrap(identity_task, persona)
         self.assertIs(wrapped(), sentinel)
 
-    def test_wrap_propagates_exceptions(self):
+    @patch("modules.delay.wrapper.time.sleep", return_value=None)
+    def test_wrap_propagates_exceptions(self, _mock_sleep):
         """wrap() must propagate exceptions from task_fn unchanged."""
         from modules.delay.main import PersonaProfile, wrap
 
@@ -119,20 +133,36 @@ class TestEndToEndPipeline(unittest.TestCase):
 class TestModuleIsolation(unittest.TestCase):
     """Verify no cross-module import violations at runtime. (CP-1)"""
 
-    def _get_source(self, module_name):
-        import importlib
-        mod = importlib.import_module(module_name)
-        return inspect.getsource(mod)
+    def _iter_python_files(self, package_path):
+        return sorted((REPO_ROOT / package_path).rglob("*.py"))
+
+    def _assert_no_imports(self, package_path, forbidden_prefix):
+        for file_path in self._iter_python_files(package_path):
+            source = file_path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(file_path))
+            relative_path = file_path.relative_to(REPO_ROOT)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imported = alias.name
+                        self.assertFalse(
+                            imported == forbidden_prefix
+                            or imported.startswith(f"{forbidden_prefix}."),
+                            f"{relative_path}:{node.lineno} imports {imported}",
+                        )
+                elif isinstance(node, ast.ImportFrom):
+                    imported = node.module or ""
+                    self.assertFalse(
+                        imported == forbidden_prefix
+                        or imported.startswith(f"{forbidden_prefix}."),
+                        f"{relative_path}:{node.lineno} imports {imported}",
+                    )
 
     def test_delay_module_no_integration_import(self):
-        src = self._get_source("modules.delay.main")
-        self.assertNotIn("from integration", src)
-        self.assertNotIn("import integration", src)
+        self._assert_no_imports("modules/delay", "integration")
 
     def test_behavior_module_no_delay_import(self):
-        src = self._get_source("modules.behavior.main")
-        self.assertNotIn("from modules.delay", src)
-        self.assertNotIn("import modules.delay", src)
+        self._assert_no_imports("modules/behavior", "modules.delay")
 
 
 class TestBillingAtomicInterface(unittest.TestCase):
@@ -169,7 +199,7 @@ class TestScalingIntegration(unittest.TestCase):
         self.assertIsInstance(reasons, list)
 
     def test_scale_up_on_healthy_metrics(self):
-        from modules.behavior.main import evaluate, SCALE_UP, HOLD
+        from modules.behavior.main import evaluate, SCALE_UP
         metrics = {
             "error_rate": 0.01,
             "success_rate": 0.85,
@@ -177,8 +207,7 @@ class TestScalingIntegration(unittest.TestCase):
             "baseline_success_rate": None,
         }
         decision, _ = evaluate(metrics, 0, 3)
-        # SCALE_UP when healthy and not at max step; HOLD is also acceptable
-        self.assertIn(decision, {SCALE_UP, HOLD})
+        self.assertEqual(decision, SCALE_UP)
 
     def test_scale_down_on_high_error_rate(self):
         from modules.behavior.main import evaluate, SCALE_DOWN

@@ -11,7 +11,7 @@
 
 Các điều kiện bắt buộc phải PASS trước khi bắt đầu staging:
 
-- [ ] Phase 10 LOCKED (PR #241, #242 merged to main) ✅
+- [ ] Phase 10 LOCKED (PR #241, #242 merged to main)
 - [ ] CI xanh trên main (all checks pass)
 - [ ] Tất cả unit tests pass: `python -m unittest discover tests`
 - [ ] behavior layer: inject_step_delay() hoạt động đúng (verified PR #241)
