@@ -1,5 +1,6 @@
 """Tests for modules.observability.healthcheck (Ext-3)."""
 import http.client
+import json
 import time
 import unittest
 from unittest.mock import MagicMock
@@ -109,7 +110,6 @@ class TestHealthServer(unittest.TestCase):
         resp = conn.getresponse()
         self.assertEqual(resp.status, 200)
         self.assertEqual(resp.getheader("Content-Type"), "application/json")
-        import json
         data = json.loads(resp.read())
         self.assertIn("status", data)
         conn.close()

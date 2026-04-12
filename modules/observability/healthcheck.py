@@ -60,7 +60,14 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, status_fn=None) -> bool:
 
 
 def stop_server(timeout=5.0) -> bool:
-    """Stop health check server. Returns True if stopped cleanly."""
+    """Stop health check server. Returns True if stopped cleanly.
+
+    Thread-safety note: shutdown() is called under _lock; the subsequent
+    join() and server_close() run outside _lock to avoid a deadlock with
+    the daemon thread (serve_forever acquires no public locks). is_running()
+    may return True briefly between shutdown() and the final state reset —
+    this accurately reflects that the thread is still alive until join completes.
+    """
     global _server_thread, _server_instance
     with _lock:
         if _server_instance is None or _server_thread is None or not _server_thread.is_alive():
@@ -83,7 +90,12 @@ def is_running() -> bool:
 
 
 def reset() -> None:
-    """Reset server state. Intended for testing."""
+    """Reset server state. Intended for testing only.
+
+    Calls stop_server() (which is itself thread-safe) then clears any
+    residual state under _lock. Not safe to call concurrently with
+    start_server(); callers must ensure no concurrent server operations.
+    """
     global _server_thread, _server_instance
     stop_server()
     with _lock:
