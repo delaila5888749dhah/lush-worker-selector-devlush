@@ -96,7 +96,7 @@ Output: None
 
 ---
 
-## Module: observability.metrics_exporter
+## Module: modules.observability.metrics_exporter
 
 - **Entry point:** `export_metrics(metrics: dict) -> None`
 - **Called from:** `integration.runtime._runtime_loop` after `monitor.get_metrics()`
@@ -110,7 +110,7 @@ Output: None
 
 ---
 
-## Module: observability.healthcheck
+## Module: modules.observability.healthcheck
 
 - **Entry points:**
   - `get_health(status_fn=None) -> dict`
