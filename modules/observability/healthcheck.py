@@ -58,8 +58,8 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, status_fn=None) -> bool:
     if stale_inst is not None:
         try:
             stale_inst.server_close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("healthcheck: stale server_close() failed (ignored): %s", exc)
     with _lock:
         if _stopping:
             return False
@@ -152,5 +152,5 @@ def reset() -> None:
     if inst is not None:
         try:
             inst.server_close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("healthcheck: reset server_close() failed (ignored): %s", exc)
