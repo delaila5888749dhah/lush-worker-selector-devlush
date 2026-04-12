@@ -11,6 +11,7 @@ import zlib
 from modules.behavior import main as behavior
 from modules.fsm import main as fsm
 from modules.monitor import main as monitor
+from modules.observability import alerting
 from modules.observability import metrics_exporter
 from modules.rollout import main as rollout
 from modules.delay.wrapper import wrap as _behavior_wrap
@@ -283,6 +284,9 @@ def _runtime_loop(task_fn, interval):
             except Exception as exc:
                 _log_event("runtime", "warning", "monitor_unavailable", {"error": _sanitize_error(exc)}); _safe_sleep(interval); continue
             metrics_exporter.export_metrics(metrics)
+            _alerts = alerting.evaluate_alerts(metrics)
+            for _alert_msg in _alerts:
+                alerting.send_alert(_alert_msg)
             step_index = rollout.get_current_step_index()
             max_index = len(rollout.SCALE_STEPS) - 1
             decision, decision_reasons = behavior.evaluate(metrics, step_index, max_index)
@@ -555,3 +559,4 @@ def reset():
     fsm.reset_states()
     fsm.reset_registry()
     metrics_exporter.reset()
+    alerting.reset()
