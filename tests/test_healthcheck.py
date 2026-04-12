@@ -156,5 +156,41 @@ class TestIsRunning(unittest.TestCase):
         self.assertFalse(is_running())
 
 
+class TestStopServerTimeout(unittest.TestCase):
+    def setUp(self):
+        stop_server()
+        reset()
+
+    def tearDown(self):
+        stop_server()
+        reset()
+
+    def test_stop_timeout_preserves_refs(self):
+        start_server(port=0)
+        time.sleep(0.05)
+        # timeout=0.0 guarantees join times out immediately
+        result = stop_server(timeout=0.0)
+        self.assertFalse(result)
+        self.assertTrue(is_running())
+        with healthcheck._lock:
+            self.assertIsNotNone(healthcheck._server_instance)
+        # Normal stop should now succeed
+        result = stop_server()
+        self.assertTrue(result)
+        self.assertFalse(is_running())
+
+    def test_reset_after_timeout_no_orphan(self):
+        start_server(port=0)
+        time.sleep(0.05)
+        # timeout=0.0 preserves refs
+        stop_server(timeout=0.0)
+        reset()
+        self.assertFalse(is_running())
+        with healthcheck._lock:
+            self.assertIsNone(healthcheck._server_thread)
+            self.assertIsNone(healthcheck._server_instance)
+            self.assertFalse(healthcheck._stopping)
+
+
 if __name__ == "__main__":
     unittest.main()

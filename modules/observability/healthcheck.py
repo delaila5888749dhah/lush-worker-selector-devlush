@@ -65,20 +65,37 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, status_fn=None) -> bool:
 def stop_server(timeout=5.0) -> bool:
     """Stop health check server. Returns True if stopped cleanly.
 
-    Thread-safety note: shutdown() is called under _lock; the subsequent
-    join() and server_close() run outside _lock to avoid a deadlock with
-    the daemon thread (serve_forever acquires no public locks). A _stopping
-    flag prevents start_server() from racing during shutdown. If join()
-    times out, references are preserved so callers can retry.
+    Thread-safety: references are captured under _lock and a _stopping flag
+    blocks concurrent start_server() calls. shutdown() is initiated in a
+    daemon thread so that join(timeout) can honour the caller's timeout;
+    the subsequent server_close() runs outside _lock.  If join() times out,
+    references are preserved so callers can retry.
+
+    If a previous call timed out and the thread has since exited, the next
+    call cleans up the stale instance and returns True.
     """
     global _server_thread, _server_instance, _stopping
+    with _lock:
+        # Cleanup path: thread exited after a previous timed-out stop attempt.
+        if (_server_thread is not None and not _server_thread.is_alive()
+                and _server_instance is not None):
+            stale_inst = _server_instance
+            _server_thread = None
+            _server_instance = None
+            _stopping = False
+        else:
+            stale_inst = None
+    if stale_inst is not None:
+        stale_inst.server_close()
+        return True
     with _lock:
         if _server_instance is None or _server_thread is None or not _server_thread.is_alive():
             return False
         inst = _server_instance
         thread = _server_thread
         _stopping = True
-        inst.shutdown()
+    # Initiate shutdown in a daemon thread so join() can respect the timeout.
+    threading.Thread(target=inst.shutdown, daemon=True).start()
     thread.join(timeout=timeout)
     if thread.is_alive():
         with _lock:
@@ -101,13 +118,20 @@ def is_running() -> bool:
 def reset() -> None:
     """Reset server state. Intended for testing only.
 
-    Calls stop_server() (which is itself thread-safe) then clears any
-    residual state under _lock. Not safe to call concurrently with
-    start_server(); callers must ensure no concurrent server operations.
+    Calls stop_server() (which is itself thread-safe) then force-closes any
+    remaining instance and clears all state under _lock. Not safe to call
+    concurrently with start_server(); callers must ensure no concurrent
+    server operations.
     """
     global _server_thread, _server_instance, _stopping
-    stop_server()
+    stop_server(timeout=5.0)
     with _lock:
+        inst = _server_instance
         _server_thread = None
         _server_instance = None
         _stopping = False
+    if inst is not None:
+        try:
+            inst.server_close()
+        except Exception:
+            pass
