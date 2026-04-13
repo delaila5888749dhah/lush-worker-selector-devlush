@@ -4,6 +4,13 @@ Implements the full happy-path flow for purchasing Givex e-gift cards
 via Chrome DevTools Protocol (CDP) / Selenium.  All selector constants
 are defined at module level so they can be patched in tests without
 touching the class.
+
+URL flow:
+  Step 0:  https://wwws-usa2.givex.com/cws4.0/lushusa/
+  Step 1:  https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/
+  Step 2a: https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/shopping-cart.html
+  Step 2b: https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/checkout.html
+  Step 4:  https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html
 """
 
 from __future__ import annotations
@@ -16,50 +23,57 @@ from modules.common.exceptions import SelectorTimeoutError
 
 _log = logging.getLogger(__name__)
 
-# ── URL constants ────────────────────────────────────────────────────────────
-URL_BASE = "https://wwws-usa2.givex.com/cws4.0/lushusa/"
+# ── URL constants ──────────────────────────────────────────────────────────────
+URL_BASE       = "https://wwws-usa2.givex.com/cws4.0/lushusa/"
+URL_EGIFT      = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/"
+URL_CART       = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/shopping-cart.html"
+URL_CHECKOUT   = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/checkout.html"
+URL_PAYMENT    = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html"
+URL_GEO_CHECK  = "https://lumtest.com/myip.json"
 
-# ── URL fragments used to detect order confirmation ─────────────────────────
+# URL fragments used to detect order confirmation
 URL_CONFIRM_FRAGMENTS = ("/confirmation", "/order-confirmation", "order-confirm")
 
-# ── Navigation ───────────────────────────────────────────────────────────────
-SEL_COOKIE_ACCEPT   = "#button--accept-cookies"
-SEL_BUY_EGIFT_BTN   = "#cardForeground a[href*='Buy-E-gift-Cards']"
+# ── Step 0: Navigation ─────────────────────────────────────────────────────────
+SEL_COOKIE_ACCEPT = "#button--accept-cookies"
+SEL_BUY_EGIFT_BTN = "#cardForeground > div > div.bannerButtons.clearfix > div.bannerBtn.btn1.displaySectionYes > a"
 
-# ── eGift form (Bước 1) ──────────────────────────────────────────────────────
-SEL_RECIPIENT_EMAIL = "input[name='giftCardEmail'], input#giftCardEmail"
-SEL_RECIPIENT_NAME  = "input[name='recipientName'], input#recipientName"
-SEL_GREETING_MSG    = "textarea[name='giftMessage'], textarea#giftMessage"
-SEL_SENDER_NAME     = "input[name='senderName'], input#senderName"
-SEL_AMOUNT_INPUT    = "input.denomination-input, input[name='amount']"
-SEL_ADD_TO_CART     = "button.add-to-cart-button, button[data-action='add-to-cart'], input[value*='ADD TO CART']"
-SEL_REVIEW_CHECKOUT = "a.review-checkout-button, a[href*='cart'], button[data-action='review-checkout']"
+# ── Step 1: eGift form ─────────────────────────────────────────────────────────
+SEL_GREETING_MSG         = "#cws_txt_gcMsg"
+SEL_AMOUNT_INPUT         = "#cws_txt_gcBuyAmt"
+SEL_RECIPIENT_NAME       = "#cws_txt_gcBuyTo"
+SEL_RECIPIENT_EMAIL      = "#cws_txt_recipEmail"
+SEL_CONFIRM_RECIP_EMAIL  = "#cws_txt_confRecipEmail"
+SEL_SENDER_NAME          = "#cws_txt_gcBuyFrom"
+SEL_ADD_TO_CART          = "#cws_btn_gcBuyAdd > span"
+SEL_REVIEW_CHECKOUT      = "#cws_btn_gcBuyCheckout"
 
-# ── Cart & Guest Checkout (Bước 2) ───────────────────────────────────────────
-SEL_BEGIN_CHECKOUT  = "button.begin-checkout, a.begin-checkout, a[href*='checkout']"
-SEL_GUEST_HEADING   = "#guestHeading"
-SEL_GUEST_EMAIL     = "#guestEmail, input[name='guestEmail']"
-SEL_GUEST_CONTINUE  = "button#guestContinue, button[data-action='guest-continue']"
+# ── Step 2a: Cart ──────────────────────────────────────────────────────────────
+SEL_BEGIN_CHECKOUT = "#cws_btn_cartCheckout"
 
-# ── Billing / Shipping form (Bước 3) ─────────────────────────────────────────
-SEL_BILLING_FIRST_NAME = "input#firstName, input[name='firstName']"
-SEL_BILLING_LAST_NAME  = "input#lastName, input[name='lastName']"
-SEL_BILLING_ADDRESS    = "input#address1, input[name='address1']"
-SEL_BILLING_CITY       = "input#city, input[name='city']"
-SEL_BILLING_STATE      = "select#state, select[name='state']"
-SEL_BILLING_ZIP        = "input#zipCode, input[name='zipCode']"
-SEL_BILLING_PHONE      = "input#phone, input[name='phone']"
-SEL_BILLING_EMAIL      = "input#email, input[name='email']"
-SEL_BILLING_CONTINUE   = "button.billing-continue, button[data-action='billing-continue']"
+# ── Step 2b: Guest Checkout ────────────────────────────────────────────────────
+SEL_GUEST_EMAIL    = "#cws_txt_guestEmail"
+SEL_GUEST_CONTINUE = "#cws_btn_guestChkout"
 
-# ── Payment / Card fields (Bước 4) ───────────────────────────────────────────
-SEL_CARD_NUMBER       = "input#creditCardNumber, input[name='creditCardNumber']"
-SEL_CARD_EXPIRY_MONTH = "select#expirationMonth, select[name='expirationMonth']"
-SEL_CARD_EXPIRY_YEAR  = "select#expirationYear, select[name='expirationYear']"
-SEL_CARD_CVV          = "input#securityCode, input[name='securityCode']"
-SEL_COMPLETE_PURCHASE = "button.complete-purchase, button[data-action='complete-purchase']"
+# ── Step 4: Payment — Card fields ─────────────────────────────────────────────
+SEL_CARD_NAME         = "#cws_txt_ccName"
+SEL_CARD_NUMBER       = "#cws_txt_ccNum"
+SEL_CARD_EXPIRY_MONTH = "#cws_list_ccExpMon"
+SEL_CARD_EXPIRY_YEAR  = "#cws_list_ccExpYr"
+SEL_CARD_CVV          = "#cws_txt_ccCvv"
 
-# ── Post-submit state detection (Bước 5) ─────────────────────────────────────
+# ── Step 4: Payment — Billing fields ──────────────────────────────────────────
+SEL_BILLING_ADDRESS  = "#cws_txt_billingAddr1"
+SEL_BILLING_COUNTRY  = "#cws_list_billingCountry"
+SEL_BILLING_STATE    = "#cws_list_billingProvince"
+SEL_BILLING_CITY     = "#cws_txt_billingCity"
+SEL_BILLING_ZIP      = "#cws_txt_billingPostal"
+SEL_BILLING_PHONE    = "#cws_txt_billingPhone"
+
+# ── Step 4: Complete Purchase ──────────────────────────────────────────────────
+SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
+
+# ── Step 5: Post-submit state detection ───────────────────────────────────────
 SEL_CONFIRMATION_EL = ".order-confirmation, .confirmation-message"
 SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
@@ -69,11 +83,11 @@ SEL_POPUP_CLOSE_BTN = "button.modal-close, button[aria-label='Close'], .modal bu
 SEL_NEUTRAL_DIV     = "body"
 
 _GREETINGS = [
-    "Happy gifting!",
-    "Enjoy this little treat!",
-    "Thinking of you!",
-    "With love and best wishes!",
-    "Hope this brightens your day!",
+    "Happy Birthday!", "Best wishes!", "Enjoy your gift!",
+    "Thank you for being you", "Thinking of you!",
+    "Have a wonderful day!", "You deserve this!",
+    "With love and appreciation", "Celebrate you!",
+    "Wishing you all the best!",
 ]
 
 
@@ -85,11 +99,6 @@ def _random_greeting() -> str:
 class GivexDriver:
     """Automates the Givex e-gift card purchase flow using CDP/Selenium.
 
-    The driver expects a Selenium ``webdriver`` instance (or compatible mock)
-    to be supplied at construction time.  All page interactions are performed
-    through the ``_driver`` attribute; no direct import of Selenium is
-    required so that unit tests can inject plain mocks.
-
     Args:
         driver: A Selenium WebDriver instance (or test double).
     """
@@ -97,19 +106,13 @@ class GivexDriver:
     def __init__(self, driver: object) -> None:
         self._driver = driver
 
-    # ── Low-level helpers ────────────────────────────────────────────────────
+    # ── Low-level helpers ──────────────────────────────────────────────────────
 
     def find_elements(self, selector: str) -> list:
-        """Return all elements matching *selector* (CSS, comma-separated OK).
+        """Return elements matching *selector* (CSS, comma-separated OK).
 
         Iterates over each comma-separated sub-selector and returns the first
         non-empty match list, falling back to an empty list when none match.
-
-        Args:
-            selector: CSS selector string, may contain comma-separated parts.
-
-        Returns:
-            List of matching WebElement objects (may be empty).
         """
         for part in selector.split(","):
             part = part.strip()
@@ -124,13 +127,8 @@ class GivexDriver:
     def _wait_for_element(self, selector: str, timeout: int = 10) -> bool:
         """Poll until *selector* matches at least one element or *timeout* expires.
 
-        Args:
-            selector: CSS selector to wait for.
-            timeout: Maximum seconds to wait (default 10).
-
         Returns:
-            True if the element appeared within *timeout* seconds, False
-            otherwise.
+            True if found within *timeout* seconds, False otherwise.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -140,11 +138,7 @@ class GivexDriver:
         return False
 
     def _cdp_type_field(self, selector: str, value: str) -> None:
-        """Clear *selector* element and type *value* into it.
-
-        Args:
-            selector: CSS selector for the input/textarea element.
-            value: Text to type.
+        """Clear element and type *value* into it using send_keys.
 
         Raises:
             SelectorTimeoutError: if no matching element is found.
@@ -160,11 +154,7 @@ class GivexDriver:
         el.send_keys(value)
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
-        """Select the option matching *value* in a ``<select>`` element.
-
-        Args:
-            selector: CSS selector for the select element.
-            value: The option value to select.
+        """Select the option matching *value* in a <select> element.
 
         Raises:
             SelectorTimeoutError: if no matching element is found.
@@ -179,9 +169,6 @@ class GivexDriver:
     def bounding_box_click(self, selector: str) -> None:
         """Click the first element matching *selector*.
 
-        Args:
-            selector: CSS selector for the element to click.
-
         Raises:
             SelectorTimeoutError: if no matching element is found.
         """
@@ -190,17 +177,38 @@ class GivexDriver:
             raise SelectorTimeoutError(selector, 0)
         elements[0].click()
 
-    # ── Navigation ───────────────────────────────────────────────────────────
+    def _close_extra_tabs(self) -> None:
+        """Close all browser tabs except the first one."""
+        handles = self._driver.window_handles
+        if len(handles) <= 1:
+            return
+        first = handles[0]
+        for handle in handles[1:]:
+            self._driver.switch_to.window(handle)
+            self._driver.close()
+        self._driver.switch_to.window(first)
+
+    def _hard_reset_state(self) -> None:
+        """Clear cookies, localStorage, and sessionStorage via JavaScript."""
+        self._driver.execute_script(
+            "document.cookie.split(';').forEach(function(c){"
+            "document.cookie=c.replace(/^ +/,'').replace(/=.*/,'=;expires='+new Date().toUTCString()+';path=/');"
+            "});"
+        )
+        self._driver.execute_script("localStorage.clear();")
+        self._driver.execute_script("sessionStorage.clear();")
+
+    # ── Step 0: Navigation ─────────────────────────────────────────────────────
 
     def preflight_geo_check(self) -> None:
         """Navigate to geo-check URL and assert the IP is US-based.
 
         Raises:
-            RuntimeError: if the detected country is not ``"US"``.
+            RuntimeError: if the detected country is not "US".
         """
         import json as _json
 
-        self._driver.get("https://lumtest.com/myip.json")
+        self._driver.get(URL_GEO_CHECK)
         try:
             body = self._driver.find_element("tag name", "body").text
             data = _json.loads(body)
@@ -213,11 +221,12 @@ class GivexDriver:
             )
 
     def navigate_to_egift(self) -> None:
-        """Navigate to the Givex base URL and open the eGift purchase page.
+        """Navigate to base URL, dismiss cookie banner, click Buy eGift Cards.
 
-        Accepts the cookie banner if present, then clicks the Buy eGift link.
+        Then navigate directly to eGift URL and hard-reset browser state.
         """
         self._driver.get(URL_BASE)
+        self._close_extra_tabs()
         # Dismiss cookie banner if present (best-effort)
         if self.find_elements(SEL_COOKIE_ACCEPT):
             try:
@@ -226,105 +235,148 @@ class GivexDriver:
                 pass
         self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10)
         self.bounding_box_click(SEL_BUY_EGIFT_BTN)
+        # Navigate directly to eGift URL and hard-reset state
+        self._driver.get(URL_EGIFT)
+        self._hard_reset_state()
 
-    # ── eGift form (Bước 1) ──────────────────────────────────────────────────
+    # ── Step 1: eGift form ─────────────────────────────────────────────────────
 
     def fill_egift_form(self, task, billing_profile) -> None:
         """Fill all fields on the eGift purchase form.
 
+        Field order matches the page layout:
+          1. Greeting message (random)
+          2. Amount
+          3. Recipient Name (To)
+          4. Recipient Email
+          5. Confirm Recipient Email
+          6. Sender Name (From)
+
         Args:
-            task: WorkerTask with ``recipient_email`` and ``amount``.
-            billing_profile: BillingProfile with ``first_name`` and
-                ``last_name`` (used as recipient/sender name).
+            task: WorkerTask with recipient_email and amount.
+            billing_profile: BillingProfile with first_name and last_name.
         """
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
-        self._cdp_type_field(SEL_AMOUNT_INPUT, str(task.amount))
-        self._cdp_type_field(SEL_RECIPIENT_EMAIL, task.recipient_email)
-        self._cdp_type_field(SEL_RECIPIENT_NAME, full_name)
         self._cdp_type_field(SEL_GREETING_MSG, _random_greeting())
+        self._cdp_type_field(SEL_AMOUNT_INPUT, str(task.amount))
+        self._cdp_type_field(SEL_RECIPIENT_NAME, full_name)
+        self._cdp_type_field(SEL_RECIPIENT_EMAIL, task.recipient_email)
+        self._cdp_type_field(SEL_CONFIRM_RECIP_EMAIL, task.recipient_email)
         self._cdp_type_field(SEL_SENDER_NAME, full_name)
 
     def add_to_cart_and_checkout(self) -> None:
-        """Click Add-to-Cart, wait for Review & Checkout button, then click it."""
+        """Click ADD TO CART, wait for REVIEW & CHECKOUT, then click it."""
         self.bounding_box_click(SEL_ADD_TO_CART)
         found = self._wait_for_element(SEL_REVIEW_CHECKOUT, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 10)
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
 
-    # ── Cart & Guest Checkout (Bước 2) ───────────────────────────────────────
+    # ── Step 2a: Cart ──────────────────────────────────────────────────────────
 
-    def select_guest_checkout(self, guest_email: str) -> None:
-        """Navigate through cart → Begin Checkout → Guest Checkout flow.
-
-        Args:
-            guest_email: Email address to enter in the guest checkout field.
-        """
+    def begin_checkout(self) -> None:
+        """At the cart page, click BEGIN CHECKOUT."""
         found = self._wait_for_element(SEL_BEGIN_CHECKOUT, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_BEGIN_CHECKOUT, 10)
         self.bounding_box_click(SEL_BEGIN_CHECKOUT)
 
-        found = self._wait_for_element(SEL_GUEST_HEADING, timeout=10)
-        if not found:
-            raise SelectorTimeoutError(SEL_GUEST_HEADING, 10)
-        self.bounding_box_click(SEL_GUEST_HEADING)
+    # ── Step 2b: Guest Checkout ────────────────────────────────────────────────
 
-        found = self._wait_for_element(SEL_GUEST_EMAIL, timeout=5)
+    def select_guest_checkout(self, guest_email: str) -> None:
+        """Enter guest email and click CONTINUE to proceed as guest.
+
+        Args:
+            guest_email: Email address to enter in the guest checkout field.
+        """
+        found = self._wait_for_element(SEL_GUEST_EMAIL, timeout=10)
         if not found:
-            raise SelectorTimeoutError(SEL_GUEST_EMAIL, 5)
+            raise SelectorTimeoutError(SEL_GUEST_EMAIL, 10)
         self._cdp_type_field(SEL_GUEST_EMAIL, guest_email)
         self.bounding_box_click(SEL_GUEST_CONTINUE)
 
-    # ── Billing / Shipping form (Bước 3) ─────────────────────────────────────
+    # ── Step 4: Payment ────────────────────────────────────────────────────────
 
-    def fill_billing_form(self, billing_profile) -> None:
-        """Fill all billing/shipping form fields and click Continue.
+    def fill_card(self, card_info) -> None:
+        """Fill credit-card payment fields using 4x4 grouped typing.
+
+        Card number is typed in four groups of four digits with a random
+        inter-group pause (0.6-1.8s) to mimic natural card-entry behaviour.
+        After CVV, hesitation pause (3-5s) before completing.
+
+        Args:
+            card_info: CardInfo with card_number, exp_month, exp_year, cvv.
+        """
+        # Name on card (first + last from billing profile — caller supplies full name as card_info.name if available)
+        card_name = getattr(card_info, "name_on_card", None)
+        if card_name:
+            self._cdp_type_field(SEL_CARD_NAME, card_name)
+
+        # Card number — 4x4 grouped typing
+        card_number = card_info.card_number.replace(" ", "").replace("-", "")
+        groups = [card_number[i:i + 4] for i in range(0, len(card_number), 4)]
+        elements = self.find_elements(SEL_CARD_NUMBER)
+        if not elements:
+            raise SelectorTimeoutError(SEL_CARD_NUMBER, 0)
+        el = elements[0]
+        try:
+            el.clear()
+        except Exception:
+            pass
+        for i, group in enumerate(groups):
+            el.send_keys(group)
+            if i < len(groups) - 1:
+                time.sleep(random.uniform(0.6, 1.8))
+
+        # Expiry month and year
+        self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
+        self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
+
+        # CVV
+        self._cdp_type_field(SEL_CARD_CVV, card_info.cvv)
+
+        # Hesitation: 3-5s before completing purchase
+        time.sleep(random.uniform(3, 5))
+
+    def fill_billing(self, billing_profile) -> None:
+        """Fill all billing address fields on the payment page.
+
+        Fields filled (all on payment page):
+          - Address 1
+          - Country
+          - State/Province
+          - City
+          - ZIP/Postal Code
+          - Phone Number
 
         Args:
             billing_profile: BillingProfile instance with address details.
         """
-        self._cdp_type_field(SEL_BILLING_FIRST_NAME, billing_profile.first_name)
-        self._cdp_type_field(SEL_BILLING_LAST_NAME, billing_profile.last_name)
         self._cdp_type_field(SEL_BILLING_ADDRESS, billing_profile.address)
-        self._cdp_type_field(SEL_BILLING_CITY, billing_profile.city)
+        # Country — select by value (e.g. "US")
+        country = getattr(billing_profile, "country", "US")
+        try:
+            self._cdp_select_option(SEL_BILLING_COUNTRY, country)
+        except Exception:
+            pass
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
+        self._cdp_type_field(SEL_BILLING_CITY, billing_profile.city)
         self._cdp_type_field(SEL_BILLING_ZIP, billing_profile.zip_code)
         if billing_profile.phone:
             self._cdp_type_field(SEL_BILLING_PHONE, billing_profile.phone)
-        if billing_profile.email:
-            self._cdp_type_field(SEL_BILLING_EMAIL, billing_profile.email)
-        self.bounding_box_click(SEL_BILLING_CONTINUE)
 
-    # Keep the old name as an alias so existing callers are not broken.
-    def fill_billing(self, billing_profile) -> None:
-        """Alias for ``fill_billing_form`` (backward compatibility)."""
-        self.fill_billing_form(billing_profile)
-
-    # ── Payment / Card fields (Bước 4) ───────────────────────────────────────
-
-    def fill_card(self, card_info) -> None:
-        """Fill credit-card payment fields.
-
-        Args:
-            card_info: CardInfo with ``card_number``, ``exp_month``,
-                ``exp_year``, and ``cvv``.
-        """
-        self._cdp_type_field(SEL_CARD_NUMBER, card_info.card_number)
-        self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
-        self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
-        self._cdp_type_field(SEL_CARD_CVV, card_info.cvv)
+    # Keep fill_billing_form as alias
+    def fill_billing_form(self, billing_profile) -> None:
+        """Alias for fill_billing (backward compatibility)."""
+        self.fill_billing(billing_profile)
 
     def submit_purchase(self) -> None:
-        """Click the Complete Purchase button."""
+        """Click the COMPLETE PURCHASE button."""
         self.bounding_box_click(SEL_COMPLETE_PURCHASE)
 
     def clear_card_fields(self) -> None:
-        """Clear all card form fields (best-effort)."""
-        for selector in (
-            SEL_CARD_NUMBER,
-            SEL_CARD_CVV,
-        ):
+        """Clear card number and CVV fields (best-effort, no page reload)."""
+        for selector in (SEL_CARD_NUMBER, SEL_CARD_CVV):
             elements = self.find_elements(selector)
             if elements:
                 try:
@@ -332,23 +384,20 @@ class GivexDriver:
                 except Exception:
                     pass
 
-    # ── Post-submit state detection (Bước 5) ─────────────────────────────────
+    # ── Step 5: Post-submit state detection ───────────────────────────────────
 
     def detect_page_state(self) -> str:
-        """Inspect the current page and return the FSM state name.
+        """Inspect current page and return FSM state name.
 
         Detection order:
-        1. ``success``   — URL contains a confirmation fragment, OR
-                           ``.order-confirmation`` element is present.
-        2. ``vbv_3ds``   — A 3-D Secure / Adyen iframe is present.
-        3. ``declined``  — A payment-error element is present, OR page text
-                           contains "declined" / "transaction failed".
-        4. ``ui_lock``   — A loading overlay or spinner is present.
-        5. ``unknown``   — None of the above matched.
+        1. success  — URL contains confirmation fragment OR .order-confirmation present
+        2. vbv_3ds  — 3DS/Adyen iframe present
+        3. declined — payment-error element present OR page text contains "declined"
+        4. ui_lock  — loading overlay/spinner present
+        5. unknown  — none matched
 
         Returns:
-            One of: ``"success"``, ``"vbv_3ds"``, ``"declined"``,
-            ``"ui_lock"``, ``"unknown"``.
+            One of: "success", "vbv_3ds", "declined", "ui_lock", "unknown".
         """
         current_url = ""
         try:
@@ -382,36 +431,37 @@ class GivexDriver:
 
         return "unknown"
 
-    # ── Full-cycle orchestrator ───────────────────────────────────────────────
+    # ── Full-cycle orchestrator ────────────────────────────────────────────────
 
     def run_full_cycle(self, task, billing_profile) -> str:
         """Execute the complete happy-path purchase flow end-to-end.
 
-        Steps:
-        1. Geo pre-flight check (``preflight_geo_check``).
-        2. Navigate to eGift page (``navigate_to_egift``).
-        3. Fill the eGift form (``fill_egift_form``).
-        4. Add to cart and click Review & Checkout
-           (``add_to_cart_and_checkout``).
-        5. Select guest checkout using billing profile email
-           (``select_guest_checkout``).
-        6. Fill billing/shipping form (``fill_billing_form``).
-        7. Fill card payment fields (``fill_card``).
-        8. Submit the purchase (``submit_purchase``).
+        Flow:
+        0. Geo pre-flight check
+        0. Navigate to eGift page (cookie banner + hard reset)
+        1. Fill eGift form (greeting, amount, recipient, confirm email, sender)
+        1. Add to cart → Review & Checkout
+        2a. Begin Checkout (cart page)
+        2b. Guest checkout (email + continue)
+        4. Fill billing (address, country, state, city, zip, phone)
+        4. Fill card (name, number 4x4, expiry, cvv) + hesitation
+        4. Submit purchase (COMPLETE PURCHASE)
+        5. Detect and return page state
 
         Args:
             task: WorkerTask with purchase details.
             billing_profile: BillingProfile with address and email.
 
         Returns:
-            The FSM state string returned by ``detect_page_state()``.
+            FSM state string from detect_page_state().
         """
         self.preflight_geo_check()
         self.navigate_to_egift()
         self.fill_egift_form(task, billing_profile)
         self.add_to_cart_and_checkout()
+        self.begin_checkout()
         self.select_guest_checkout(billing_profile.email)
-        self.fill_billing_form(billing_profile)
+        self.fill_billing(billing_profile)
         self.fill_card(task.primary_card)
         self.submit_purchase()
         return self.detect_page_state()
