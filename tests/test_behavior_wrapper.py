@@ -308,5 +308,161 @@ class StopEventEarlyExitTests(unittest.TestCase):
         self.assertAlmostEqual(result, timeout_arg, places=10)
 
 
+class TestInjectCardEntryDelays(unittest.TestCase):
+    """Tests for inject_card_entry_delays() — Phase 11 BiometricProfile wiring."""
+
+    def _make_bio(self, seed=42):
+        from modules.delay.biometrics import BiometricProfile
+        persona = PersonaProfile(seed)
+        return BiometricProfile(persona)
+
+    def test_returns_19_delays(self):
+        """generate_4x4_pattern() produces 19 values; all must be slept."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        with patch("modules.delay.wrapper.time.sleep"):
+            result = inject_card_entry_delays(bio)
+        self.assertEqual(len(result), 19)
+
+    def test_all_delays_positive(self):
+        """All 19 delays must be positive floats."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        with patch("modules.delay.wrapper.time.sleep"):
+            result = inject_card_entry_delays(bio)
+        for d in result:
+            self.assertGreater(d, 0.0)
+
+    def test_sleep_called_19_times(self):
+        """time.sleep must be called once per keystroke delay."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            inject_card_entry_delays(bio)
+        self.assertEqual(mock_sleep.call_count, 19)
+
+    def test_stop_event_exits_early(self):
+        """When stop_event is pre-set, injection stops after 0 keystrokes."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        stop_event = threading.Event()
+        stop_event.set()
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, stop_event=stop_event)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
+    def test_stop_event_uses_wait(self):
+        """When stop_event is not set, wait() is called instead of sleep()."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        stop_event = threading.Event()  # NOT set
+        with (
+            patch("modules.delay.wrapper.time.sleep") as mock_sleep,
+            patch.object(stop_event, "wait", return_value=False) as mock_wait,
+        ):
+            inject_card_entry_delays(bio, stop_event=stop_event)
+        mock_sleep.assert_not_called()
+        self.assertEqual(mock_wait.call_count, 19)
+        for call in mock_wait.call_args_list:
+            timeout = call.kwargs.get("timeout")
+            if timeout is None and call.args:
+                timeout = call.args[0]
+            self.assertIsNotNone(timeout)
+            self.assertGreater(timeout, 0.0)
+
+    def test_deterministic_same_seed(self):
+        """Same seed must produce identical delay list across two calls."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        from modules.delay.biometrics import BiometricProfile
+        bio1 = BiometricProfile(PersonaProfile(77))
+        bio2 = BiometricProfile(PersonaProfile(77))
+        with patch("modules.delay.wrapper.time.sleep"):
+            r1 = inject_card_entry_delays(bio1)
+            r2 = inject_card_entry_delays(bio2)
+        self.assertEqual(r1, r2)
+
+    def test_does_not_accumulate_in_engine(self):
+        """inject_card_entry_delays must NOT affect DelayEngine accumulator."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        from modules.delay.biometrics import BiometricProfile
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        bio = BiometricProfile(persona)
+        acc_before = engine.get_step_accumulated_delay()
+        with patch("modules.delay.wrapper.time.sleep"):
+            inject_card_entry_delays(bio)
+        acc_after = engine.get_step_accumulated_delay()
+        self.assertEqual(acc_before, acc_after)
+
+    def test_engine_guard_blocks_in_vbv(self):
+        """When engine reports VBV context (not permitted), no delays are injected."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        # Transition to VBV: IDLE → FILLING_FORM → PAYMENT → VBV
+        sm.transition("FILLING_FORM")
+        sm.transition("PAYMENT")
+        sm.transition("VBV")
+        self.assertFalse(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, engine=engine)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
+    def test_engine_guard_blocks_in_critical_section(self):
+        """When critical_section flag is active, no delays are injected."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        sm.transition("FILLING_FORM")
+        sm.set_critical_section(True)
+        self.assertFalse(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, engine=engine)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
+    def test_engine_guard_allows_in_safe_context(self):
+        """When engine reports SAFE context, delays are injected normally."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        sm.transition("FILLING_FORM")
+        self.assertTrue(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep"):
+            result = inject_card_entry_delays(bio, engine=engine)
+        self.assertEqual(len(result), 19)
+
+    def test_engine_guard_blocks_in_post_action(self):
+        """When engine reports POST_ACTION context, no delays are injected."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        # Transition to POST_ACTION: IDLE → FILLING_FORM → PAYMENT → POST_ACTION
+        sm.transition("FILLING_FORM")
+        sm.transition("PAYMENT")
+        sm.transition("POST_ACTION")
+        self.assertFalse(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, engine=engine)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
+    def test_accessible_via_delay_main(self):
+        """inject_card_entry_delays must be importable from modules.delay.main."""
+        from modules.delay.main import inject_card_entry_delays as fn
+        self.assertTrue(callable(fn))
+
+
 if __name__ == "__main__":
     unittest.main()

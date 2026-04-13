@@ -19,6 +19,7 @@ from modules.delay.temporal import DAY_START, DAY_END  # noqa: F401
 from modules.delay.temporal import NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE  # noqa: F401
 from modules.delay.biometrics import BiometricProfile  # noqa: F401
 from modules.delay.wrapper import wrap  # noqa: F401  — Task 10.5
+from modules.delay.wrapper import inject_card_entry_delays  # noqa: F401
 from modules.delay.config import (  # noqa: F401
     validate_config,
     MIN_CLICK_DELAY,
@@ -51,6 +52,7 @@ __all__ = [
     "NIGHT_TYPO_INCREASE_RANGE",
     "BiometricProfile",
     "wrap",
+    "inject_card_entry_delays",
     "validate_config",
     "MIN_CLICK_DELAY",
     "MAX_CLICK_DELAY",
