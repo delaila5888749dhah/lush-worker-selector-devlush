@@ -440,6 +440,10 @@ class GivexDriver:
         Returns:
             The FSM state string returned by ``detect_page_state()``.
         """
+        if billing_profile.email is None:
+            raise ValueError(
+                "billing_profile.email must not be None for guest checkout"
+            )
         self.preflight_geo_check()
         self.navigate_to_egift()
         self.fill_egift_form(task, billing_profile)

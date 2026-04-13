@@ -479,6 +479,25 @@ class TestRunFullCycle(unittest.TestCase):
 
         self.assertEqual(captured["email"], billing.email)
 
+    def test_run_full_cycle_raises_on_none_email(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = BillingProfile(
+            first_name="Jane",
+            last_name="Doe",
+            address="123 Main St",
+            city="Portland",
+            state="OR",
+            zip_code="97201",
+            phone="5035550100",
+            email=None,
+            country="US",
+        )
+
+        with self.assertRaises(ValueError):
+            gd.run_full_cycle(task, billing)
+
 
 class TestDetectPageState(unittest.TestCase):
     """detect_page_state checks URL fragments, elements, and page text."""
