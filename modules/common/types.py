@@ -15,6 +15,7 @@ class CardInfo:
     exp_month: str
     exp_year: str
     cvv: str
+    card_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class BillingProfile:
     zip_code: str
     phone: str | None
     email: str | None
+    country: str = "US"
 
 
 @dataclass(frozen=True)
