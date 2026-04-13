@@ -15,7 +15,7 @@ import time
 
 try:
     from selenium.webdriver.support.ui import Select  # type: ignore[import]
-except ImportError:  # pragma: no cover — tests mock _cdp_select_option
+except ImportError:  # pragma: no cover - tests mock _cdp_select_option
     Select = None  # type: ignore[assignment,misc]
 
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
@@ -163,7 +163,7 @@ class GivexDriver:
         try:
             el.clear()
         except Exception:  # clear() is best-effort; send_keys still runs
-            _log.debug("clear() skipped for selector %r", selector)
+            _log.debug("Element clear() skipped in _cdp_type_field")
         el.send_keys(value)
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
@@ -361,7 +361,7 @@ class GivexDriver:
                 try:
                     elements[0].clear()
                 except Exception:  # field clear is best-effort
-                    _log.debug("clear() skipped for selector %r", selector)
+                    _log.debug("Element clear() skipped in clear_card_fields")
 
     # ── Post-submit state detection (Step 5) ─────────────────────────────────
 
