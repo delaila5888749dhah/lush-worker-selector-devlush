@@ -916,8 +916,9 @@ class CDPExecutorProductionSingletonTests(unittest.TestCase):
     """Test production _cdp_executor singleton: timeout -> recovery -> next call succeeds."""
 
     def setUp(self):
-        with _cdp_metric_lock:
-            self._timeout_before = _cdp_timeout_count
+        import integration.orchestrator as _orch
+        with _orch._cdp_metric_lock:
+            self._timeout_before = _orch._cdp_timeout_count
 
     def test_production_executor_timeout_then_recovery(self):
         """Patch production executor with 2 workers, force 2 timeouts, then verify recovery."""
