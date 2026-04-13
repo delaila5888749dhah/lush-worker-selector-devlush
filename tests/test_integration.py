@@ -29,7 +29,6 @@ from integration.orchestrator import (
     _IDEMPOTENCY_TTL,
     _cdp_call_with_timeout,
     _cdp_metric_lock,
-    _cdp_timeout_count,
     _load_idempotency_store,
     _save_idempotency_store,
     get_cdp_metrics,
