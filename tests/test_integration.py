@@ -29,6 +29,7 @@ from integration.orchestrator import (
     _IDEMPOTENCY_TTL,
     _cdp_call_with_timeout,
     _cdp_metric_lock,
+    _cdp_timeout_count,
     _load_idempotency_store,
     _save_idempotency_store,
     get_cdp_metrics,
@@ -916,9 +917,8 @@ class CDPExecutorProductionSingletonTests(unittest.TestCase):
     """Test production _cdp_executor singleton: timeout -> recovery -> next call succeeds."""
 
     def setUp(self):
-        import integration.orchestrator as _orch
-        with _orch._cdp_metric_lock:
-            self._timeout_before = _orch._cdp_timeout_count
+        with _cdp_metric_lock:
+            self._timeout_before = _cdp_timeout_count
 
     def test_production_executor_timeout_then_recovery(self):
         """Patch production executor with 2 workers, force 2 timeouts, then verify recovery."""
