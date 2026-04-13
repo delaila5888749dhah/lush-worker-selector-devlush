@@ -1,4 +1,11 @@
-"""GivexDriver — Selenium/CDP driver thực cho trang Givex USA."""
+"""GivexDriver — Selenium/CDP driver thực cho trang Givex USA.
+
+.. note::
+    Selectors marked ``[TODO: ...]`` are intentional placeholders that must be
+    replaced with real CSS selectors after inspecting the live page.  This file
+    is the dev-fork stub; do **not** deploy to production until every TODO
+    selector has been resolved via browser DevTools inspection.
+"""
 
 import random
 import time
@@ -21,7 +28,8 @@ SEL_SENDER_NAME     = "[TODO: inspect input[name*='from'] or similar]"
 SEL_GREETING_MSG    = "[TODO: inspect textarea[name*='message'] or similar]"
 SEL_AMOUNT_INPUT    = "[TODO: inspect input[name*='amount'] or select[name*='amount']]"
 
-# Cart actions
+# Cart actions — TODO: fill in after page inspection; reserved for add-to-cart
+# and review-checkout flows (not yet wired to driver methods)
 SEL_ADD_TO_CART     = "[TODO: inspect button[type='submit'] or input[value*='Add to Cart']]"
 SEL_REVIEW_CHECKOUT = "[TODO: inspect a[href*='checkout'] or button containing 'Review']"
 
