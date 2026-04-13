@@ -396,6 +396,68 @@ class TestInjectCardEntryDelays(unittest.TestCase):
         acc_after = engine.get_step_accumulated_delay()
         self.assertEqual(acc_before, acc_after)
 
+    def test_engine_guard_blocks_in_vbv(self):
+        """When engine reports VBV context (not permitted), no delays are injected."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        # Transition to VBV: IDLE → FILLING_FORM → PAYMENT → VBV
+        sm.transition("FILLING_FORM")
+        sm.transition("PAYMENT")
+        sm.transition("VBV")
+        self.assertFalse(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, engine=engine)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
+    def test_engine_guard_blocks_in_critical_section(self):
+        """When critical_section flag is active, no delays are injected."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        sm.transition("FILLING_FORM")
+        sm.set_critical_section(True)
+        self.assertFalse(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, engine=engine)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
+    def test_engine_guard_allows_in_safe_context(self):
+        """When engine reports SAFE context, delays are injected normally."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        sm.transition("FILLING_FORM")
+        self.assertTrue(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep"):
+            result = inject_card_entry_delays(bio, engine=engine)
+        self.assertEqual(len(result), 19)
+
+    def test_engine_guard_blocks_in_post_action(self):
+        """When engine reports POST_ACTION context, no delays are injected."""
+        from modules.delay.wrapper import inject_card_entry_delays
+        bio = self._make_bio()
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        # Transition to POST_ACTION: IDLE → FILLING_FORM → PAYMENT → POST_ACTION
+        sm.transition("FILLING_FORM")
+        sm.transition("PAYMENT")
+        sm.transition("POST_ACTION")
+        self.assertFalse(engine.is_delay_permitted())
+        with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
+            result = inject_card_entry_delays(bio, engine=engine)
+        mock_sleep.assert_not_called()
+        self.assertEqual(result, [])
+
     def test_accessible_via_delay_main(self):
         """inject_card_entry_delays must be importable from modules.delay.main."""
         from modules.delay.main import inject_card_entry_delays as fn

@@ -107,6 +107,7 @@ def inject_step_delay(
 def inject_card_entry_delays(
     bio: BiometricProfile,
     stop_event: threading.Event | None = None,
+    engine: DelayEngine | None = None,
 ) -> list[float]:
     """Inject per-keystroke biometric delays for a 16-digit card number entry.
 
@@ -126,6 +127,12 @@ def inject_card_entry_delays(
         When provided, ``stop_event.wait(timeout=delay)`` is used instead
         of ``time.sleep(delay)`` for each keystroke.  Returns early if the
         event is set between keystrokes.
+    engine : DelayEngine | None
+        When provided, ``engine.is_delay_permitted()`` is checked before
+        injecting any delays.  If the engine reports that delay is not
+        permitted (e.g. VBV, POST_ACTION, or CRITICAL_SECTION context),
+        the function returns ``[]`` immediately without sleeping.  This
+        enforces INV-DELAY-02: no delay injection in critical contexts.
 
     Returns
     -------
@@ -135,9 +142,13 @@ def inject_card_entry_delays(
         ``stop_event`` is set before the loop finishes, the return value
         contains only the delays accumulated before the stop was observed;
         if it is already set before the first iteration, ``[]`` is returned.
+        When ``engine`` is provided and delay is not permitted, ``[]`` is
+        returned without any sleeping.
         Values are NOT accumulated against the step accumulator — they are
         too small to affect the watchdog budget.
     """
+    if engine is not None and not engine.is_delay_permitted():
+        return []
     delays = bio.generate_4x4_pattern()
     slept: list[float] = []
     for delay in delays:
