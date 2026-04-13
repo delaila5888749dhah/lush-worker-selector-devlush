@@ -130,9 +130,13 @@ def inject_card_entry_delays(
     Returns
     -------
     list[float]
-        The list of 19 delay values that were requested (each individually
-        slept).  Values are NOT accumulated against the step accumulator —
-        they are too small to affect the watchdog budget.
+        The delay values processed before completion or early exit. Under
+        normal execution this contains all 19 generated delay values. If
+        ``stop_event`` is set before the loop finishes, the return value
+        contains only the delays accumulated before the stop was observed;
+        if it is already set before the first iteration, ``[]`` is returned.
+        Values are NOT accumulated against the step accumulator — they are
+        too small to affect the watchdog budget.
     """
     delays = bio.generate_4x4_pattern()
     slept: list[float] = []

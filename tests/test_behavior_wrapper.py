@@ -359,11 +359,17 @@ class TestInjectCardEntryDelays(unittest.TestCase):
         stop_event = threading.Event()  # NOT set
         with (
             patch("modules.delay.wrapper.time.sleep") as mock_sleep,
-            patch.object(stop_event, "wait", wraps=stop_event.wait) as mock_wait,
+            patch.object(stop_event, "wait", return_value=False) as mock_wait,
         ):
             inject_card_entry_delays(bio, stop_event=stop_event)
         mock_sleep.assert_not_called()
         self.assertEqual(mock_wait.call_count, 19)
+        for call in mock_wait.call_args_list:
+            timeout = call.kwargs.get("timeout")
+            if timeout is None and call.args:
+                timeout = call.args[0]
+            self.assertIsNotNone(timeout)
+            self.assertGreater(timeout, 0.0)
 
     def test_deterministic_same_seed(self):
         """Same seed must produce identical delay list across two calls."""
