@@ -202,6 +202,10 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
         try:
             result = task_fn(*args, **kwargs)
         finally:
+            _log.debug(
+                "wrap: step_accumulated_delay=%.4fs before reset",
+                engine.get_step_accumulated_delay(),
+            )
             engine.reset_step_accumulator()
             sm.reset()
 

@@ -1,4 +1,29 @@
-"""Structured log sink — thread-safe structured JSON log emission (Ext-4)."""
+"""Structured log sink — thread-safe structured JSON log emission (Ext-4).
+
+Default behavior
+----------------
+``emit()`` serialises the event dict to JSON and logs it at ``DEBUG`` level
+via the standard ``logging`` module. In most production deployments the
+root logger level is ``INFO`` or higher, so **events are silently dropped
+by default**.
+
+Production usage
+----------------
+Call ``register_sink(fn)`` to forward events to your monitoring/alerting
+pipeline (e.g. Datadog, Sentry, a structured log aggregator). Multiple
+sinks can be registered; each receives a shallow copy-safe ``dict``.
+
+Example::
+
+    from modules.observability.log_sink import register_sink
+
+    def forward_to_datadog(event: dict) -> None:
+        statsd.event(event.get("type", "unknown"), str(event))
+
+    register_sink(forward_to_datadog)
+
+Sink failures are caught and logged at WARNING; they do not propagate.
+"""
 import json
 import logging
 import threading
@@ -49,7 +74,7 @@ def emit(event: dict) -> None:
                 _logger.warning("log_sink: default backend failed: %s", exc)
         for fn in sinks:
             try:
-                fn(event)
+                fn(event.copy())
             except Exception as exc:
                 _logger.warning("log_sink: sink %r raised: %s", fn, exc)
     except Exception as exc:

@@ -28,6 +28,14 @@ from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 from modules.watchdog import main as watchdog
 
+# INVARIANT: _WATCHDOG_TIMEOUT MUST satisfy:
+#   _WATCHDOG_TIMEOUT > _CDP_CALL_TIMEOUT + _STEP_BUDGET_TOTAL
+#   i.e. 30 > 15.0 + 10.0 = 25.0  ✓
+# Rationale: a legitimate cycle can take up to _CDP_CALL_TIMEOUT seconds
+# waiting for a CDP call PLUS _STEP_BUDGET_TOTAL seconds of behavioral
+# delay. Setting _WATCHDOG_TIMEOUT below this sum causes the watchdog
+# to fire before the cycle can legitimately complete (false timeout).
+# If you change any of these three values, re-verify this invariant.
 _WATCHDOG_TIMEOUT = 30
 
 _logger = logging.getLogger(__name__)
@@ -459,8 +467,20 @@ def get_cdp_metrics() -> dict:
     Returns:
         dict with keys:
             ``total_timeouts``: cumulative count of caller-side timeouts.
-            ``active_cdp_requests``: current orchestration-level request count.
-                See NOTE on _active_cdp_requests for accuracy limitations.
+                Incremented each time ``future.result(timeout=...)`` raises
+                ``TimeoutError`` inside ``_cdp_call_with_timeout()``.
+            ``active_cdp_requests``: orchestration-level in-flight count.
+                Incremented before ``_cdp_executor.submit()`` and
+                decremented in the ``finally`` block — always on the
+                **caller's** thread.
+
+                .. warning::
+                    After a timeout, the caller's ``finally`` block
+                    decrements this counter immediately, but the underlying
+                    executor thread may still be running the CDP call.
+                    ``active_cdp_requests == 0`` does NOT mean all executor
+                    threads are idle. To detect executor saturation, monitor
+                    ``total_timeouts`` growth rate relative to request volume.
     """
     with _cdp_metric_lock:
         return {

@@ -37,6 +37,20 @@ MAX_CLICK_DELAY: float = _env_float("MAX_CLICK_DELAY", 0.25)
 # CDP_CALL_TIMEOUT reads CDP_CALL_TIMEOUT_SECONDS (no DELAY_ prefix) to stay
 # compatible with integration/orchestrator.py which uses the same env var name.
 CDP_CALL_TIMEOUT: float = float(os.getenv("CDP_CALL_TIMEOUT_SECONDS", "15.0"))
+# Detect operator misconfiguration: DELAY_CDP_CALL_TIMEOUT is NOT the correct
+# env var name for this constant. The correct name is CDP_CALL_TIMEOUT_SECONDS.
+# Emit a warning so operators who follow the DELAY_* pattern for other constants
+# are not silently ignored.
+import warnings as _warnings
+if os.getenv("DELAY_CDP_CALL_TIMEOUT") is not None:
+    _warnings.warn(
+        "DELAY_CDP_CALL_TIMEOUT is set but has no effect. "
+        "Use CDP_CALL_TIMEOUT_SECONDS to override the CDP call timeout. "
+        "The DELAY_* prefix is not used for this constant.",
+        UserWarning,
+        stacklevel=2,
+    )
+del _warnings
 TYPO_RATE_MIN: float = _env_float("TYPO_RATE_MIN", 0.02)
 TYPO_RATE_MAX: float = _env_float("TYPO_RATE_MAX", 0.05)
 NIGHT_PENALTY_MIN: float = _env_float("NIGHT_PENALTY_MIN", 0.15)

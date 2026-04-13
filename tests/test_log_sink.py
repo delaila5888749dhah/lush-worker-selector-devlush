@@ -117,5 +117,31 @@ class TestRegistration(unittest.TestCase):
         self.assertTrue(any("WARNING" in line and "oops" in line for line in cm.output))
 
 
+class TestSinkMutationIsolation(unittest.TestCase):
+    """Regression: mutations by one sink must not be visible to the next."""
+
+    def setUp(self):
+        log_sink.reset()
+
+    def test_sink_mutation_does_not_leak_to_next_sink(self):
+        """Sink A mutates its copy; sink B must see the original payload."""
+        received_b = []
+
+        def sink_a(event):
+            event["injected"] = True
+            event["data"] = {"tampered": True}
+
+        def sink_b(event):
+            received_b.append(dict(event))
+
+        log_sink.register_sink(sink_a)
+        log_sink.register_sink(sink_b)
+        log_sink.emit(_SAMPLE_EVENT)
+
+        self.assertEqual(len(received_b), 1)
+        self.assertNotIn("injected", received_b[0])
+        self.assertEqual(received_b[0]["data"], {"worker_id": "w-1"})
+
+
 if __name__ == "__main__":
     unittest.main()

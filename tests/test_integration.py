@@ -911,5 +911,175 @@ class CDPExecutorBehaviorTests(unittest.TestCase):
         self.assertEqual(errors.count("timeout"), 4)
 
 
+class CDPExecutorProductionSingletonTests(unittest.TestCase):
+    """Test production _cdp_executor singleton: timeout -> recovery -> next call succeeds."""
+
+    def setUp(self):
+        self._timeout_before = get_cdp_metrics()["total_timeouts"]
+
+    def test_production_executor_timeout_then_recovery(self):
+        """Patch production executor with 2 workers, force 2 timeouts, then verify recovery."""
+        import concurrent.futures
+        import threading as _t
+
+        blocker1 = _t.Event()
+        blocker2 = _t.Event()
+        ready1 = _t.Event()
+        ready2 = _t.Event()
+
+        def slow1():
+            ready1.set()
+            blocker1.wait(timeout=10)
+            return "slow1-done"
+
+        def slow2():
+            ready2.set()
+            blocker2.wait(timeout=10)
+            return "slow2-done"
+
+        test_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            with patch("integration.orchestrator._cdp_executor", test_executor):
+                # Fill both executor slots
+                f1 = test_executor.submit(slow1)
+                f2 = test_executor.submit(slow2)
+                self.assertTrue(
+                    ready1.wait(timeout=2),
+                    "First executor worker did not start within timeout",
+                )
+                self.assertTrue(
+                    ready2.wait(timeout=2),
+                    "Second executor worker did not start within timeout",
+                )
+
+                # Both slots busy → calls must timeout
+                with self.assertRaises(SessionFlaggedError):
+                    _cdp_call_with_timeout(lambda: None, timeout=0.05)
+                with self.assertRaises(SessionFlaggedError):
+                    _cdp_call_with_timeout(lambda: None, timeout=0.05)
+
+                # Unblock background tasks → slots freed
+                blocker1.set()
+                blocker2.set()
+                f1.result(timeout=5)
+                f2.result(timeout=5)
+
+                # Executor must recover → subsequent call succeeds
+                result = _cdp_call_with_timeout(lambda: "recovered", timeout=5)
+                self.assertEqual(result, "recovered")
+
+        finally:
+            blocker1.set()
+            blocker2.set()
+            test_executor.shutdown(wait=False)
+
+        metrics_after = get_cdp_metrics()
+        self.assertGreaterEqual(
+            metrics_after["total_timeouts"] - self._timeout_before,
+            2,
+            "total_timeouts must have incremented by at least 2",
+        )
+
+
+class CDPActiveRequestCounterTests(unittest.TestCase):
+    """_active_cdp_requests must not double-decrement after timeout."""
+
+    def test_counter_is_zero_before_call(self):
+        """Baseline: counter starts at 0 when no calls in flight."""
+        self.assertEqual(get_cdp_metrics()["active_cdp_requests"], 0)
+
+    def test_counter_zero_after_timeout_no_double_decrement(self):
+        """
+        Scenario:
+          1. task starts -> counter = 1 (inside _cdp_call_with_timeout)
+          2. timeout fires -> finally block -> counter = 0
+          3. background task completes naturally -> counter STILL 0 (no double-decrement)
+        """
+        import concurrent.futures
+        import threading as _t
+        import time as _time
+
+        blocker = _t.Event()
+        task_finished = _t.Event()
+
+        def slow_fn():
+            blocker.wait(timeout=10)
+            task_finished.set()
+            return "bg-done"
+
+        test_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            with patch("integration.orchestrator._cdp_executor", test_executor):
+                # Counter must be 0 before call
+                self.assertEqual(get_cdp_metrics()["active_cdp_requests"], 0)
+
+                # Call times out
+                with self.assertRaises(SessionFlaggedError):
+                    _cdp_call_with_timeout(slow_fn, timeout=0.05)
+
+                # After timeout + finally: counter must be 0
+                counter_after_timeout = get_cdp_metrics()["active_cdp_requests"]
+                self.assertEqual(
+                    counter_after_timeout, 0,
+                    "active_cdp_requests must be 0 after timeout (decremented in finally)",
+                )
+
+                # Unblock background task and let it finish
+                blocker.set()
+                self.assertTrue(
+                    task_finished.wait(timeout=5),
+                    "background task did not complete within 5 seconds after unblock",
+                )
+                _time.sleep(0.1)  # allow thread cleanup
+
+                # Counter must still be 0 — no double-decrement from background thread
+                counter_after_bg = get_cdp_metrics()["active_cdp_requests"]
+                self.assertEqual(
+                    counter_after_bg, 0,
+                    "active_cdp_requests must remain 0 after background task completes "
+                    "(background thread must NOT decrement counter)",
+                )
+        finally:
+            blocker.set()
+            test_executor.shutdown(wait=False)
+
+
+class WatchdogTimingInvariantTests(unittest.TestCase):
+    """Default _WATCHDOG_TIMEOUT must satisfy the timing invariant at all times."""
+
+    def test_watchdog_timeout_greater_than_cdp_plus_step_budget(self):
+        """
+        Verify: _WATCHDOG_TIMEOUT > _CDP_CALL_TIMEOUT + _STEP_BUDGET_TOTAL
+
+        A legitimate cycle can consume up to _CDP_CALL_TIMEOUT seconds (CDP call)
+        plus _STEP_BUDGET_TOTAL seconds (behavioral delay budget). The watchdog must
+        not fire before this window expires, or it will produce false timeouts.
+
+        Current values: 30 > 15.0 + 10.0 = 25.0
+        """
+        from integration.orchestrator import _WATCHDOG_TIMEOUT, _CDP_CALL_TIMEOUT
+        from modules.delay.config import _STEP_BUDGET_TOTAL
+        self.assertGreater(
+            _WATCHDOG_TIMEOUT,
+            _CDP_CALL_TIMEOUT + _STEP_BUDGET_TOTAL,
+            f"INVARIANT VIOLATED: _WATCHDOG_TIMEOUT({_WATCHDOG_TIMEOUT}) must be > "
+            f"_CDP_CALL_TIMEOUT({_CDP_CALL_TIMEOUT}) + "
+            f"_STEP_BUDGET_TOTAL({_STEP_BUDGET_TOTAL}) = "
+            f"{_CDP_CALL_TIMEOUT + _STEP_BUDGET_TOTAL}. "
+            f"Reducing _WATCHDOG_TIMEOUT below this sum causes false watchdog timeouts.",
+        )
+
+    def test_default_cdp_call_timeout_matches_config(self):
+        """_CDP_CALL_TIMEOUT in orchestrator must match CDP_CALL_TIMEOUT in config."""
+        from integration.orchestrator import _CDP_CALL_TIMEOUT
+        from modules.delay.config import CDP_CALL_TIMEOUT as CONFIG_CDP_TIMEOUT
+        self.assertEqual(
+            _CDP_CALL_TIMEOUT,
+            CONFIG_CDP_TIMEOUT,
+            "orchestrator._CDP_CALL_TIMEOUT must equal config.CDP_CALL_TIMEOUT "
+            "when CDP_CALL_TIMEOUT_SECONDS env var is not set",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
