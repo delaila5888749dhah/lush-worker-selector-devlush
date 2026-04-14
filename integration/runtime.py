@@ -132,7 +132,7 @@ def _worker_fn(worker_id, task_fn, persona):
                     with _lock:
                         if _should_stop_worker(worker_id):
                             break
-                    _safe_sleep(min(1.0, deadline - time.monotonic()))
+                    _safe_sleep(min(1.0, max(0, deadline - time.monotonic())))
                 continue
             with _lock:
                 if _should_stop_worker(worker_id):
@@ -157,9 +157,11 @@ def _worker_fn(worker_id, task_fn, persona):
                 with _lock:
                     _consecutive_billing_failures += 1
                     if _consecutive_billing_failures >= _BILLING_CB_THRESHOLD:
-                        _billing_throttled_until = time.monotonic() + _BILLING_CB_PAUSE
-                        _log_event(worker_id, "critical", "billing_cb_triggered", {"count": _consecutive_billing_failures, "pause_seconds": _BILLING_CB_PAUSE})
-                        _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", _BILLING_CB_PAUSE)
+                        pause_dur = int(_BILLING_CB_PAUSE)
+                        _billing_throttled_until = time.monotonic() + pause_dur
+                        fail_count = _consecutive_billing_failures
+                        _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
+                        _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
                         _consecutive_billing_failures = 0
                     if worker_id in _workers and worker_id not in _stop_requests: _pending_restarts += 1
                 err_data: dict = {"error": _sanitize_error(exc)}
