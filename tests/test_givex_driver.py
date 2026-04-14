@@ -788,9 +788,14 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         gd = GivexDriver(selenium, persona=persona)
         with patch("time.sleep"):
             gd.bounding_box_click("#some-el")
-        cdp_calls = [c for c in selenium.execute_cdp_cmd.call_args_list]
-        self.assertEqual(len(cdp_calls), 3)
-        event_types = [c[0][1]["type"] for c in cdp_calls]
+        # GhostCursor emits mouseMoved (button=none); the click path emits
+        # mouseMoved + mousePressed + mouseReleased (button=left).
+        click_calls = [
+            c for c in selenium.execute_cdp_cmd.call_args_list
+            if c[0][1].get("button") == "left"
+        ]
+        self.assertEqual(len(click_calls), 3)
+        event_types = [c[0][1]["type"] for c in click_calls]
         self.assertEqual(event_types, ["mouseMoved", "mousePressed", "mouseReleased"])
 
     def test_bounding_box_click_offset_within_bounds(self):
@@ -803,18 +808,20 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         gd = GivexDriver(selenium, persona=persona)
         cx = rect["left"] + rect["width"] / 2
         cy = rect["top"] + rect["height"] / 2
-        x_vals, y_vals = [], []
+        click_coords: list[dict] = []
         def capture_cdp(cmd, params):
-            x_vals.append(params["x"])
-            y_vals.append(params["y"])
+            if params.get("button") == "left":
+                click_coords.append(params.copy())
         selenium.execute_cdp_cmd.side_effect = capture_cdp
         with patch("time.sleep"):
             gd.bounding_box_click("#some-el")
-        self.assertTrue(x_vals, "CDP should have been called")
-        self.assertGreaterEqual(x_vals[0], cx - 15)
-        self.assertLessEqual(x_vals[0], cx + 15)
-        self.assertGreaterEqual(y_vals[0], cy - 5)
-        self.assertLessEqual(y_vals[0], cy + 5)
+        self.assertTrue(click_coords, "CDP click events should have been dispatched")
+        x = click_coords[0]["x"]
+        y = click_coords[0]["y"]
+        self.assertGreaterEqual(x, cx - 15)
+        self.assertLessEqual(x, cx + 15)
+        self.assertGreaterEqual(y, cy - 5)
+        self.assertLessEqual(y, cy + 5)
 
     def test_bounding_box_click_falls_back_to_plain_click_when_cdp_fails(self):
         selenium = _make_driver()
@@ -846,16 +853,19 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         selenium.execute_script.return_value = self._rect()
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
-        cdp_calls = []
-        selenium.execute_cdp_cmd.side_effect = lambda cmd, params: cdp_calls.append(params.copy())
+        click_calls: list[dict] = []
+        def capture_cdp(cmd, params):
+            if params.get("button") == "left":
+                click_calls.append(params.copy())
+        selenium.execute_cdp_cmd.side_effect = capture_cdp
         with patch.object(gd._temporal, "get_time_state", return_value="NIGHT"), \
              patch("time.sleep"):
             gd.bounding_box_click("#some-el")
-        self.assertGreater(len(cdp_calls), 0, "CDP should have been called in NIGHT mode")
-        # Coordinates must still land within element bounds (clamped)
+        self.assertGreater(len(click_calls), 0, "CDP click should have been called in NIGHT mode")
+        # Click coordinates must still land within element bounds (clamped)
         rect = self._rect()
-        x = cdp_calls[0]["x"]
-        y = cdp_calls[0]["y"]
+        x = click_calls[0]["x"]
+        y = click_calls[0]["y"]
         self.assertGreaterEqual(x, rect["left"])
         self.assertLessEqual(x, rect["left"] + rect["width"])
         self.assertGreaterEqual(y, rect["top"])
@@ -866,33 +876,32 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
 
 
 class TestGhostMoveTo(unittest.TestCase):
-    """_ghost_move_to generates a Bézier path and moves the mouse along it."""
+    """_ghost_move_to dispatches CDP mouseMoved events via GhostCursor."""
 
-    def test_ghost_move_to_calls_move_by_offset_multiple_times(self):
-        """ActionChains.move_by_offset is called ≥ 4 times when ActionChains is available."""
+    def test_ghost_move_to_dispatches_cdp_mousemoved_multiple_times(self):
+        """GhostCursor dispatches CDP mouseMoved ≥ 4 times when persona is set."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         selenium.execute_script.return_value = {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
-        mock_actions = MagicMock()
-        mock_actions.move_by_offset.return_value = mock_actions
-        mock_actions.perform.return_value = None
-        mock_actions_cls = MagicMock(return_value=mock_actions)
-        with patch("time.sleep"), \
-             patch("modules.cdp.driver._ActionChains", mock_actions_cls):
+        with patch("time.sleep"):
             gd._ghost_move_to("#some-el")
-        self.assertGreaterEqual(mock_actions.move_by_offset.call_count, 4)
+        mousemoved_calls = [
+            c for c in selenium.execute_cdp_cmd.call_args_list
+            if c[0][1].get("type") == "mouseMoved"
+        ]
+        self.assertGreaterEqual(len(mousemoved_calls), 4)
 
-    def test_ghost_move_to_noop_when_action_chains_unavailable(self):
-        """Without ActionChains, _ghost_move_to silently returns (no-op)."""
+    def test_ghost_move_to_noop_when_cursor_unavailable(self):
+        """Without persona (no GhostCursor) and no ActionChains, silently returns."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         selenium.execute_script.return_value = {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
         gd = GivexDriver(selenium)
-        # _ActionChains is None in test environment (selenium not installed)
+        # No persona → _cursor is None; _ActionChains is None in test env
         with patch("time.sleep"):
             gd._ghost_move_to("#some-el")  # Should not raise
 

@@ -20,8 +20,13 @@ except ImportError:  # pragma: no cover - tests mock _cdp_select_option
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
-except ImportError:  # pragma: no cover - tests mock _ghost_move_to
+except ImportError:  # pragma: no cover - only used as fallback in _ghost_move_to
     _ActionChains = None  # type: ignore[assignment,misc]
+
+try:
+    from modules.cdp.mouse import GhostCursor as _GhostCursor
+except ImportError:  # pragma: no cover - defensive; mouse.py is always present
+    _GhostCursor = None  # type: ignore[assignment,misc]
 
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
 
@@ -131,6 +136,11 @@ class GivexDriver:
         else:
             self._sm, self._engine = None, None
             self._temporal, self._bio = None, None
+        self._cursor = (
+            _GhostCursor(driver, self._rnd)
+            if (_GhostCursor is not None and self._rnd is not None)
+            else None
+        )
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 
@@ -261,7 +271,12 @@ class GivexDriver:
         time.sleep(delay)
 
     def _ghost_move_to(self, selector: str) -> None:
-        """Move mouse along a Bézier-like path to the target element."""
+        """Move mouse to the target element via CDP mouseMoved events.
+
+        Uses ``GhostCursor`` (``modules.cdp.mouse``) as the primary
+        dispatch path.  Falls back to ActionChains-based movement only
+        when ``GhostCursor`` is not available (e.g. module import failed).
+        """
         elements = self.find_elements(selector)
         if not elements:
             return
@@ -279,6 +294,13 @@ class GivexDriver:
             _log.debug("_ghost_move_to: getBoundingClientRect skipped")
             return
 
+        click_delay = self._persona.get_click_delay() if self._persona is not None else 0.05
+
+        if self._cursor is not None:
+            self._cursor.move_to(target_x, target_y, click_delay=click_delay)
+            return
+
+        # Fallback: ActionChains-based movement when GhostCursor is unavailable.
         rnd = self._get_rng()
         n_points = int(rnd.uniform(4, 8))
         points = []
@@ -301,10 +323,9 @@ class GivexDriver:
                 prev_x, prev_y = px, py
             actions.perform()
         except Exception:
-            _log.debug("_ghost_move_to: ActionChains not available or failed")
+            _log.debug("_ghost_move_to: ActionChains fallback failed", exc_info=True)
             return
 
-        click_delay = self._persona.get_click_delay() if self._persona is not None else 0.05
         time.sleep(click_delay * len(points))
 
     def bounding_box_click(self, selector: str) -> None:
@@ -363,7 +384,7 @@ class GivexDriver:
                     )
                 return
             except Exception:
-                _log.debug("bounding_box_click: CDP dispatchMouseEvent failed, fallback to .click()")
+                _log.debug("bounding_box_click: CDP dispatchMouseEvent failed, fallback to .click()", exc_info=True)
 
         elements[0].click()
 
