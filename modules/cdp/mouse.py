@@ -15,31 +15,43 @@ _log = logging.getLogger(__name__)
 
 
 def build_path(start, target, rnd, n_points: int):
-    """Generate a Bézier-like waypoint list from *start* to *target*.
+    """Generate a cubic Bézier waypoint list from *start* to *target*.
 
-    Uses linear interpolation with per-point random jitter to simulate
-    natural cursor travel.  The final point is exactly *target*.
+    Computes two randomised control points offset perpendicularly from the
+    straight line so the resulting path has real curvature rather than
+    jittered linear interpolation.  The final point is exactly *target*.
 
     Args:
         start: ``(x, y)`` starting coordinate in viewport pixels.
         target: ``(x, y)`` destination coordinate in viewport pixels.
         rnd: A ``random.Random``-compatible instance for reproducible paths.
-        n_points: Number of intermediate jitter waypoints to insert before
-            the exact target point.
+        n_points: Number of intermediate waypoints before the exact target.
 
     Returns:
         List of ``(x, y)`` tuples with ``n_points + 1`` entries; the last
         entry is exactly *target*.
     """
-    start_x, start_y = start
-    target_x, target_y = target
+    sx, sy = start
+    tx, ty = target
+    dx = tx - sx
+    dy = ty - sy
+    # Perpendicular offset vector (rotate 90°, scaled by curve strength).
+    perp_scale = rnd.uniform(0.15, 0.45)
+    px = -dy * perp_scale
+    py = dx * perp_scale
+    # Cubic Bézier control points.
+    cp1x = sx + dx * rnd.uniform(0.20, 0.40) + px
+    cp1y = sy + dy * rnd.uniform(0.20, 0.40) + py
+    cp2x = sx + dx * rnd.uniform(0.60, 0.80) + px * 0.5
+    cp2y = sy + dy * rnd.uniform(0.60, 0.80) + py * 0.5
     points = []
     for i in range(1, n_points + 1):
         t = i / (n_points + 1)
-        x = start_x + (target_x - start_x) * t + rnd.uniform(-30, 30)
-        y = start_y + (target_y - start_y) * t + rnd.uniform(-20, 20)
+        u = 1.0 - t
+        x = u**3 * sx + 3.0*u**2*t * cp1x + 3.0*u*t**2 * cp2x + t**3 * tx
+        y = u**3 * sy + 3.0*u**2*t * cp1y + 3.0*u*t**2 * cp2y + t**3 * ty
         points.append((x, y))
-    points.append((target_x, target_y))
+    points.append((tx, ty))
     return points
 
 
@@ -112,3 +124,19 @@ class GhostCursor:
             time.sleep(click_delay)
 
         self._x, self._y = target_x, target_y
+
+    def scroll_wheel(self, delta_y: float, *, steps: int = 4) -> None:
+        """Dispatch CDP mouseWheel events in *steps* incremental steps."""
+        if steps < 1:
+            steps = 1
+        step_delta = delta_y / steps
+        for _ in range(steps):
+            try:
+                self._driver.execute_cdp_cmd(
+                    "Input.dispatchMouseEvent",
+                    {"type": "mouseWheel", "x": self._x, "y": self._y,
+                     "deltaX": 0.0, "deltaY": step_delta},
+                )
+            except Exception:
+                _log.debug("GhostCursor.scroll_wheel: CDP skipped", exc_info=True)
+            time.sleep(self._rnd.uniform(0.02, 0.06))

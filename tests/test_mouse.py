@@ -2,11 +2,12 @@
 
 Covers:
 - build_path: determinism under a fixed seed, length, final target point,
-  jitter bounds.
+  Bézier curvature (intermediate points are not on a straight line).
 - GhostCursor.move_to: CDP mouseMoved dispatch per waypoint, position
   tracking after move, graceful skip of failed CDP calls, deterministic
   output under a fixed seed.
 - GhostCursor.position: initial state, updated after move_to.
+- GhostCursor.scroll_wheel: dispatches CDP mouseWheel in incremental steps.
 """
 
 import random
@@ -24,7 +25,7 @@ def _rnd(seed: int = 0) -> random.Random:
 
 
 class TestBuildPath(unittest.TestCase):
-    """build_path returns a deterministic Bézier-like waypoint list."""
+    """build_path returns a deterministic cubic Bézier waypoint list."""
 
     def test_returns_n_plus_one_points(self):
         path = build_path((0.0, 0.0), (200.0, 100.0), _rnd(1), n_points=5)
@@ -44,24 +45,21 @@ class TestBuildPath(unittest.TestCase):
         path_b = build_path((0.0, 0.0), (200.0, 100.0), _rnd(2), n_points=5)
         self.assertNotEqual(path_a[:-1], path_b[:-1])
 
-    def test_intermediate_points_have_jitter(self):
-        """Intermediate waypoints include jitter so they are not on a strict line."""
-        n = 10
-        rnd = _rnd(99)
-        path = build_path((0.0, 0.0), (100.0, 50.0), rnd, n_points=n)
-        intermediate = path[:-1]
-        # At least one intermediate point must deviate from the straight line
-        on_line = all(
-            abs(x - 100.0 * (i + 1) / (n + 1)) < 1e-9
-            and abs(y - 50.0 * (i + 1) / (n + 1)) < 1e-9
-            for i, (x, y) in enumerate(intermediate)
+    def test_intermediate_points_not_on_straight_line(self):
+        """Cubic Bézier: intermediate points should show real curvature."""
+        n = 8
+        path = build_path((0.0, 0.0), (100.0, 0.0), _rnd(99), n_points=n)
+        # For a purely horizontal move, Y coords on a straight line would all be 0.
+        # The Bézier control-point offset means at least one Y coord is non-zero.
+        intermediate_ys = [y for _x, y in path[:-1]]
+        self.assertFalse(
+            all(abs(y) < 1e-9 for y in intermediate_ys),
+            "Expected real Bézier curvature; all intermediate Y coords were 0",
         )
-        self.assertFalse(on_line, "Expected jitter on intermediate points")
 
     def test_non_zero_start_shifts_path(self):
         path_from_zero = build_path((0.0, 0.0), (100.0, 50.0), _rnd(5), n_points=3)
         path_from_offset = build_path((50.0, 25.0), (100.0, 50.0), _rnd(5), n_points=3)
-        # The exact target is the same but intermediate points differ
         self.assertNotEqual(path_from_zero[:-1], path_from_offset[:-1])
 
 
@@ -167,3 +165,62 @@ class TestGhostCursorDispatch(unittest.TestCase):
         self.assertEqual(len(sleep_calls), 5)
         for val in sleep_calls:
             self.assertAlmostEqual(val, 0.07)
+
+
+class TestGhostCursorScrollWheel(unittest.TestCase):
+    """GhostCursor.scroll_wheel dispatches CDP mouseWheel events in steps."""
+
+    def test_dispatches_mouse_wheel_events(self):
+        driver = MagicMock()
+        gc = GhostCursor(driver, _rnd(0))
+        with patch("time.sleep"):
+            gc.scroll_wheel(80.0, steps=4)
+        self.assertEqual(driver.execute_cdp_cmd.call_count, 4)
+        for c in driver.execute_cdp_cmd.call_args_list:
+            self.assertEqual(c[0][0], "Input.dispatchMouseEvent")
+            self.assertEqual(c[0][1]["type"], "mouseWheel")
+
+    def test_delta_split_into_steps(self):
+        driver = MagicMock()
+        dispatched = []
+        driver.execute_cdp_cmd.side_effect = lambda _cmd, p: dispatched.append(p["deltaY"])
+        gc = GhostCursor(driver, _rnd(0))
+        with patch("time.sleep"):
+            gc.scroll_wheel(40.0, steps=4)
+        self.assertEqual(len(dispatched), 4)
+        self.assertAlmostEqual(sum(dispatched), 40.0)
+
+    def test_negative_delta_scrolls_up(self):
+        driver = MagicMock()
+        dispatched = []
+        driver.execute_cdp_cmd.side_effect = lambda _cmd, p: dispatched.append(p["deltaY"])
+        gc = GhostCursor(driver, _rnd(0))
+        with patch("time.sleep"):
+            gc.scroll_wheel(-20.0, steps=2)
+        self.assertTrue(all(d < 0 for d in dispatched))
+
+    def test_uses_current_cursor_position(self):
+        driver = MagicMock()
+        gc = GhostCursor(driver, _rnd(1))
+        gc._x, gc._y = 150.0, 75.0
+        dispatched = []
+        driver.execute_cdp_cmd.side_effect = lambda _cmd, p: dispatched.append((p["x"], p["y"]))
+        with patch("time.sleep"):
+            gc.scroll_wheel(30.0, steps=3)
+        for x, y in dispatched:
+            self.assertEqual(x, 150.0)
+            self.assertEqual(y, 75.0)
+
+    def test_steps_minimum_one(self):
+        driver = MagicMock()
+        gc = GhostCursor(driver, _rnd(0))
+        with patch("time.sleep"):
+            gc.scroll_wheel(10.0, steps=0)
+        self.assertEqual(driver.execute_cdp_cmd.call_count, 1)
+
+    def test_failed_cdp_does_not_raise(self):
+        driver = MagicMock()
+        driver.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
+        gc = GhostCursor(driver, _rnd(0))
+        with patch("time.sleep"):
+            gc.scroll_wheel(20.0, steps=3)  # Should not raise
