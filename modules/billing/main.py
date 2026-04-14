@@ -44,8 +44,27 @@ def _get_max_billing_profiles() -> int:
 _MAX_BILLING_PROFILES = _get_max_billing_profiles()
 
 
+def _get_min_billing_profiles() -> int:
+    raw = os.getenv("MIN_BILLING_PROFILES", "0")
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        _logger.warning("Invalid MIN_BILLING_PROFILES %r; treating as 0.", raw)
+        return 0
+    return max(0, v)
+
+
+_MIN_BILLING_PROFILES = _get_min_billing_profiles()
+
+
 def _pool_dir() -> Path:
-    override = os.getenv("BILLING_POOL_DIR", "").strip()
+    raw = os.environ.get("BILLING_POOL_DIR")
+    if raw is not None and not raw.strip():
+        raise ValueError(
+            "BILLING_POOL_DIR is set but contains only whitespace; "
+            "provide a non-empty directory path."
+        )
+    override = raw.strip() if raw is not None else ""
     if override:
         if "\x00" in override:
             _logger.warning("BILLING_POOL_DIR contains null bytes; using default billing_pool.")
@@ -121,20 +140,37 @@ def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
     """
     pool_dir = _pool_dir()
     profiles: list[BillingProfile] = []
+    n_scanned = n_opened = n_lines = n_accepted = n_rejected = n_skipped = 0
     if pool_dir.is_dir():
         for path in sorted(pool_dir.glob("*.txt")):
+            n_scanned += 1
             if len(profiles) >= _MAX_BILLING_PROFILES:
                 break
             try:
                 with path.open("r", encoding="utf-8") as handle:
+                    n_opened += 1
                     for line in handle:
+                        n_lines += 1
                         if len(profiles) >= _MAX_BILLING_PROFILES:
                             break
                         profile = _parse_profile_line(line)
                         if profile is not None:
+                            n_accepted += 1
                             profiles.append(profile)
-            except OSError:
+                        elif line.strip():
+                            n_rejected += 1
+            except UnicodeDecodeError as exc:
+                n_skipped += 1
+                _logger.warning("Skipping %s: decode error (%s).", path.name, exc)
+            except OSError as exc:
+                n_skipped += 1
+                _logger.warning("Skipping %s: OS error (%s).", path.name, exc)
                 continue
+    _logger.info(
+        "Billing pool load: scanned=%d opened=%d skipped=%d "
+        "lines=%d accepted=%d rejected=%d pool=%d",
+        n_scanned, n_opened, n_skipped, n_lines, n_accepted, n_rejected, len(profiles),
+    )
     # Use a local RNG instance instead of the global random module.
     # This avoids shared global RNG state contention when multiple threads
     # call _read_profiles_from_disk() concurrently during cold-start.
@@ -213,6 +249,11 @@ def select_profile(zip_code: str | int | None = None) -> BillingProfile:
             raise CycleExhaustedError(
                 f"No billing profiles available in billing pool directory '{pool_dir}' "
                 f"(exists={exists})"
+            )
+        if _MIN_BILLING_PROFILES > 0 and len(_profiles) < _MIN_BILLING_PROFILES:
+            raise CycleExhaustedError(
+                f"Billing pool has {len(_profiles)} profiles, "
+                f"below minimum threshold {_MIN_BILLING_PROFILES}."
             )
 
         index = _find_matching_index(normalized_zip)
