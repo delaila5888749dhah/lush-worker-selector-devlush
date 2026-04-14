@@ -73,7 +73,7 @@ class _BitBrowserMockHandler(BaseHTTPRequestHandler):
             return
         self._write_json(404, {"error": "not found"})
 
-    def log_message(self, fmt, *args):  # pylint: disable=unused-argument
+    def log_message(self, _fmt, *args):  # pylint: disable=unused-argument
         return
 
 

@@ -666,6 +666,8 @@ def get_trace_id():
 def get_worker_browser_profile(worker_id: str) -> str | None:
     """Return registered browser profile id for the worker, if any."""
     return cdp.get_browser_profile(worker_id)
+
+
 def reset():
     """Reset all runtime state. Intended for testing."""
     global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until
