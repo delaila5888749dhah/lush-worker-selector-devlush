@@ -20,6 +20,21 @@ except ImportError:  # pragma: no cover - tests mock _cdp_select_option
 
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
 
+try:
+    from modules.delay.persona import PersonaProfile as _PersonaProfile  # type: ignore
+    from modules.delay.biometrics import BiometricProfile as _BiometricProfile  # type: ignore
+    from modules.delay.temporal import TemporalModel as _TemporalModel  # type: ignore
+    from modules.delay.state import BehaviorStateMachine as _BehaviorStateMachine  # type: ignore
+    from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
+    from modules.delay.wrapper import inject_card_entry_delays as _inject_card_entry_delays  # type: ignore
+except ImportError:
+    _PersonaProfile = None  # type: ignore[assignment]
+    _BiometricProfile = None  # type: ignore[assignment]
+    _TemporalModel = None  # type: ignore[assignment]
+    _BehaviorStateMachine = None  # type: ignore[assignment]
+    _DelayEngine = None  # type: ignore[assignment]
+    _inject_card_entry_delays = None  # type: ignore[assignment]
+
 _log = logging.getLogger(__name__)
 
 # ── URL constants ─────────────────────────────────────────────────────────
@@ -100,10 +115,26 @@ class GivexDriver:
 
     Args:
         driver: A Selenium WebDriver instance (or test double).
+        persona: Optional PersonaProfile for behaviour simulation.  When
+            ``None`` (default) the driver operates in legacy mode using
+            ``secrets``-based randomness and no delay injection — all 36
+            existing tests rely on this default.
     """
 
-    def __init__(self, driver: object) -> None:
+    def __init__(self, driver: object, persona=None) -> None:
         self._driver = driver
+        self._persona = persona
+        self._rnd = persona._rnd if persona is not None else None
+        if persona is not None and _BehaviorStateMachine is not None:
+            self._sm = _BehaviorStateMachine()
+            self._engine = _DelayEngine(persona, self._sm)
+            self._temporal = _TemporalModel(persona)
+            self._bio = _BiometricProfile(persona)
+        else:
+            self._sm = None
+            self._engine = None
+            self._temporal = None
+            self._bio = None
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 
@@ -211,8 +242,81 @@ class GivexDriver:
             raise SelectorTimeoutError(selector, 0)
         Select(elements[0]).select_by_value(value)
 
+    def _smooth_scroll_to(self, selector: str) -> None:
+        """Scroll element into view with smooth behavior (Blueprint §4 line 65)."""
+        elements = self.find_elements(selector)
+        if not elements:
+            return
+        try:
+            self._driver.execute_script(
+                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                elements[0],
+            )
+        except Exception:
+            _log.debug("_smooth_scroll_to: execute_script skipped")
+        delay = self._persona.get_click_delay() if self._persona is not None else 0.15
+        time.sleep(delay)
+
+    def _ghost_move_to(self, selector: str) -> None:
+        """Move mouse along a Bézier curve to the target element (Blueprint §3 line 51, §9 line 470).
+
+        Uses ActionChains.move_by_offset to simulate ghost-cursor movement.
+        Falls back to a no-op if ActionChains is unavailable (e.g. in unit tests).
+        """
+        elements = self.find_elements(selector)
+        if not elements:
+            return
+        try:
+            rect = self._driver.execute_script(
+                "var r=arguments[0].getBoundingClientRect();"
+                "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                elements[0],
+            )
+            if not rect:
+                return
+            target_x = rect["left"] + rect["width"] / 2
+            target_y = rect["top"] + rect["height"] / 2
+        except Exception:
+            _log.debug("_ghost_move_to: getBoundingClientRect skipped")
+            return
+
+        rnd = self._rnd
+        if rnd is None:
+            import random as _random  # noqa: PLC0415
+            rnd = _random.SystemRandom()
+
+        n_points = int(rnd.uniform(4, 8)) if hasattr(rnd, "uniform") else 5
+        points = []
+        for i in range(1, n_points + 1):
+            t = i / (n_points + 1)
+            cx = target_x * t + rnd.uniform(-30, 30)
+            cy = target_y * t + rnd.uniform(-20, 20)
+            points.append((cx, cy))
+        points.append((target_x, target_y))
+
+        try:
+            from selenium.webdriver.common.action_chains import ActionChains  # type: ignore  # noqa: PLC0415
+            actions = ActionChains(self._driver)
+            prev_x, prev_y = 0.0, 0.0
+            for px, py in points:
+                dx = px - prev_x
+                dy = py - prev_y
+                actions.move_by_offset(int(dx), int(dy))
+                prev_x, prev_y = px, py
+            actions.perform()
+        except Exception:
+            _log.debug("_ghost_move_to: ActionChains not available or failed")
+            return
+
+        click_delay = self._persona.get_click_delay() if self._persona is not None else 0.05
+        time.sleep(click_delay * len(points))
+
     def bounding_box_click(self, selector: str) -> None:
-        """Click the first element matching *selector*.
+        """Click element with random bounding-box offset x±15 y±5 (Blueprint §4 line 95, §9 line 471).
+
+        Uses getBoundingClientRect + Input.dispatchMouseEvent for absolute-coordinate
+        click with persona-seeded random offset.  Falls back to plain .click() if
+        CDP or ActionChains are unavailable.
 
         Args:
             selector: CSS selector for the element to click.
@@ -223,7 +327,108 @@ class GivexDriver:
         elements = self.find_elements(selector)
         if not elements:
             raise SelectorTimeoutError(selector, 0)
+
+        self._ghost_move_to(selector)
+
+        try:
+            rect = self._driver.execute_script(
+                "var r=arguments[0].getBoundingClientRect();"
+                "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                elements[0],
+            )
+        except Exception:
+            rect = None
+
+        if rect and self._rnd is not None:
+            rnd = self._rnd
+            night_factor = 1.0
+            if self._temporal is not None:
+                try:
+                    if self._temporal.get_time_state(0) == "NIGHT":
+                        night_factor = 1.0 + self._persona.night_penalty_factor
+                except Exception:
+                    pass
+            ox = rnd.uniform(-15, 15) * night_factor
+            oy = rnd.uniform(-5, 5) * night_factor
+            ox = max(-15.0, min(15.0, ox))
+            oy = max(-5.0, min(5.0, oy))
+            abs_x = rect["left"] + rect["width"] / 2 + ox
+            abs_y = rect["top"] + rect["height"] / 2 + oy
+            try:
+                for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+                    self._driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                        "type": event_type,
+                        "x": abs_x,
+                        "y": abs_y,
+                        "button": "left",
+                        "clickCount": 1,
+                    })
+                return
+            except Exception:
+                _log.debug("bounding_box_click: CDP dispatchMouseEvent failed, fallback to .click()")
+
         elements[0].click()
+
+    def cdp_click_absolute(self, x: float, y: float) -> None:
+        """Send absolute-coordinate CDP click (Blueprint §6 lines 253-255).
+
+        Used for VBV/3DS iframe interaction where element coordinates must be
+        relative to the viewport rather than the iframe context.
+
+        Args:
+            x: Absolute viewport x coordinate.
+            y: Absolute viewport y coordinate.
+        """
+        for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+            self._driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1,
+            })
+
+    def _hesitate_before_submit(self) -> None:
+        """Hover mouse around COMPLETE PURCHASE for 3-5s before clicking (Blueprint §5 line 216, §9 lines 483-485).
+
+        Uses persona hesitation_pattern for delay duration.
+        Clamp: min 3.0s, max 5.0s (Blueprint §8.6).
+        CRITICAL_SECTION check: no delay injected if engine says not permitted.
+        """
+        if self._engine is not None and not self._engine.is_delay_permitted():
+            return
+
+        if self._persona is not None:
+            raw = self._persona.get_hesitation_delay()
+        else:
+            import random as _r  # noqa: PLC0415
+            raw = _r.uniform(3.0, 5.0)
+
+        delay = max(3.0, min(raw, 5.0))
+
+        elements = self.find_elements(SEL_COMPLETE_PURCHASE)
+        if elements:
+            try:
+                rect = self._driver.execute_script(
+                    "var r=arguments[0].getBoundingClientRect();"
+                    "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                    elements[0],
+                )
+                if rect:
+                    from selenium.webdriver.common.action_chains import ActionChains  # type: ignore  # noqa: PLC0415
+                    actions = ActionChains(self._driver)
+                    rnd = self._rnd
+                    if rnd is None:
+                        import random as _r2  # noqa: PLC0415
+                        rnd = _r2.SystemRandom()
+                    for _ in range(4):
+                        actions.move_by_offset(int(rnd.uniform(-8, 8)), int(rnd.uniform(-3, 3)))
+                    actions.perform()
+            except Exception:
+                _log.debug("_hesitate_before_submit: hover failed, still sleeping")
+
+        _log.debug("_hesitate_before_submit: sleeping %.3fs", delay)
+        time.sleep(delay)
 
     # ── Navigation ──────────────────────────────────────────────────────────
 
@@ -272,6 +477,9 @@ class GivexDriver:
             billing_profile: BillingProfile with ``first_name`` and
                 ``last_name`` (used as recipient/sender name).
         """
+        if self._sm is not None:
+            self._sm.transition("FILLING_FORM")
+        self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         self._cdp_type_field(SEL_GREETING_MSG, _random_greeting())
         self._cdp_type_field(SEL_AMOUNT_INPUT, str(task.amount))
@@ -344,9 +552,13 @@ class GivexDriver:
                 ``exp_month``, ``exp_year``, and ``cvv``.
             billing_profile: BillingProfile with address details.
         """
+        if self._sm is not None:
+            self._sm.transition("PAYMENT")
         # Card section
         self._cdp_type_field(SEL_CARD_NAME, card_info.card_name)
         self._cdp_type_field(SEL_CARD_NUMBER, card_info.card_number)
+        if self._bio is not None and _inject_card_entry_delays is not None:
+            _inject_card_entry_delays(self._bio, engine=self._engine)
         self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
         self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
         self._cdp_type_field(SEL_CARD_CVV, card_info.cvv)
@@ -393,7 +605,8 @@ class GivexDriver:
         )
 
     def submit_purchase(self) -> None:
-        """Click the Complete Purchase button."""
+        """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5)."""
+        self._hesitate_before_submit()
         self.bounding_box_click(SEL_COMPLETE_PURCHASE)
 
     def clear_card_fields(self) -> None:
@@ -483,6 +696,8 @@ class GivexDriver:
             raise ValueError(
                 "billing_profile.email must not be None for guest checkout"
             )
+        if self._persona is not None:
+            _log.debug("run_full_cycle: persona_type=%s", self._persona.persona_type)
         self.preflight_geo_check()
         self.navigate_to_egift()
         self.fill_egift_form(task, billing_profile)
