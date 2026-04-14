@@ -122,19 +122,25 @@ class DelayEngine:
 
         Delay is **not** permitted when the state machine is in a critical
         context (VBV, POST_ACTION, or Phase-9 CRITICAL_SECTION) or when
-        the step accumulator has reached *MAX_STEP_DELAY*.
+        the step accumulator has reached the effective ceiling
+        ``MAX_STEP_DELAY - WATCHDOG_HEADROOM``.
         """
         if not self._state_machine.is_safe_for_delay():
             return False
         with self._lock:
-            return self._step_accumulated < MAX_STEP_DELAY
+            return self._step_accumulated < (MAX_STEP_DELAY - WATCHDOG_HEADROOM)
 
     # ── internal ─────────────────────────────────────────────────
 
     def _accumulate(self, delay: float) -> float:
-        """Clamp *delay* against remaining step headroom and record it."""
+        """Clamp *delay* against remaining step headroom and record it.
+
+        The effective ceiling is ``MAX_STEP_DELAY - WATCHDOG_HEADROOM`` so
+        that at least *WATCHDOG_HEADROOM* seconds of buffer are always
+        reserved for the watchdog timer.
+        """
         with self._lock:
-            headroom = MAX_STEP_DELAY - self._step_accumulated
+            headroom = (MAX_STEP_DELAY - WATCHDOG_HEADROOM) - self._step_accumulated
             if headroom <= 0:
                 return 0.0
             actual = min(delay, headroom)
