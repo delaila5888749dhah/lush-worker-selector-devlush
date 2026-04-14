@@ -731,10 +731,10 @@ class TestSmoothScrollTo(unittest.TestCase):
         gd = GivexDriver(selenium)
         with patch("time.sleep"):
             gd._smooth_scroll_to(SEL_GREETING_MSG)
-        selenium.execute_script.assert_called_once()
-        script_arg = selenium.execute_script.call_args[0][0]
-        self.assertIn("scrollIntoView", script_arg)
-        self.assertIn("behavior: 'smooth'", script_arg)
+        self.assertGreaterEqual(selenium.execute_script.call_count, 1)
+        first_script = selenium.execute_script.call_args_list[0][0][0]
+        self.assertIn("scrollIntoView", first_script)
+        self.assertIn("behavior: 'smooth'", first_script)
 
     def test_smooth_scroll_to_noop_when_element_missing(self):
         selenium = _make_driver()
@@ -768,6 +768,21 @@ class TestSmoothScrollTo(unittest.TestCase):
             gd._smooth_scroll_to(SEL_GREETING_MSG)
         self.assertTrue(sleep_calls)
         self.assertAlmostEqual(sleep_calls[-1], 0.15)
+
+    def test_smooth_scroll_to_includes_correction_step(self):
+        """_smooth_scroll_to emits a scrollBy correction after scrollIntoView."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        gd = GivexDriver(selenium)
+        with patch("time.sleep"):
+            gd._smooth_scroll_to(SEL_GREETING_MSG)
+        all_scripts = [c[0][0] for c in selenium.execute_script.call_args_list]
+        scrollby_scripts = [s for s in all_scripts if "scrollBy" in s]
+        self.assertGreaterEqual(
+            len(scrollby_scripts), 1,
+            "expected at least one scrollBy correction call",
+        )
 
 
 # ── TestBoundingBoxClickCoordinates ─────────────────────────────────────────
@@ -987,6 +1002,69 @@ class TestHesitateBeforeSubmit(unittest.TestCase):
         val = sleep_vals[-1]
         self.assertGreaterEqual(val, 3.0)
         self.assertLessEqual(val, 5.0)
+
+
+# ── TestHesitateScrollBehavior ───────────────────────────────────────────────
+
+
+class TestHesitateScrollBehavior(unittest.TestCase):
+    """_hesitate_before_submit includes light scroll when button is visible."""
+
+    def _rect(self):
+        return {"left": 400.0, "top": 600.0, "width": 120.0, "height": 40.0}
+
+    def test_hesitate_performs_scroll_down_and_up_when_button_visible(self):
+        """Scroll-down and scroll-up are dispatched during the hesitation window."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = self._rect()
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        sleep_vals = []
+        with patch("time.sleep", side_effect=lambda d: sleep_vals.append(d)):
+            gd._hesitate_before_submit()
+        scrollby_calls = [
+            c for c in selenium.execute_script.call_args_list
+            if "scrollBy" in str(c[0][0])
+        ]
+        self.assertGreaterEqual(
+            len(scrollby_calls), 2,
+            "expected at least scroll-down and scroll-up scrollBy calls",
+        )
+        # Timing clamp is still respected.
+        self.assertGreaterEqual(sleep_vals[-1], 3.0)
+        self.assertLessEqual(sleep_vals[-1], 5.0)
+
+    def test_hesitate_scroll_skipped_when_no_button_found(self):
+        """When no button element is found, no scrollBy is emitted."""
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("time.sleep"):
+            gd._hesitate_before_submit()
+        scrollby_calls = [
+            c for c in selenium.execute_script.call_args_list
+            if "scrollBy" in str(c[0][0])
+        ]
+        self.assertEqual(len(scrollby_calls), 0)
+
+    def test_hesitate_scroll_skipped_when_rect_is_falsy(self):
+        """When getBoundingClientRect returns falsy, no scrollBy is emitted."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = None
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("time.sleep"):
+            gd._hesitate_before_submit()
+        scrollby_calls = [
+            c for c in selenium.execute_script.call_args_list
+            if "scrollBy" in str(c[0][0])
+        ]
+        self.assertEqual(len(scrollby_calls), 0)
 
 
 # ── TestCdpClickAbsolute ─────────────────────────────────────────────────────

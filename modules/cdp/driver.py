@@ -256,7 +256,7 @@ class GivexDriver:
         Select(elements[0]).select_by_value(value)
 
     def _smooth_scroll_to(self, selector: str) -> None:
-        """Scroll an element into view smoothly."""
+        """Scroll an element into view with a smooth pass and micro-correction."""
         elements = self.find_elements(selector)
         if not elements:
             return
@@ -265,6 +265,10 @@ class GivexDriver:
                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
                 elements[0],
             )
+            # Wheel-style micro-correction: a small upward nudge (~8 px) mimics
+            # the natural overshoot correction a user makes after a smooth scroll
+            # settles near the target element.
+            self._driver.execute_script("window.scrollBy(0, -8);")
         except Exception:
             _log.debug("_smooth_scroll_to: execute_script skipped")
         delay = self._persona.get_click_delay() if self._persona is not None else 0.15
@@ -397,7 +401,7 @@ class GivexDriver:
             )
 
     def _hesitate_before_submit(self) -> None:
-        """Hover briefly around COMPLETE PURCHASE before clicking."""
+        """Hover and lightly scroll around COMPLETE PURCHASE before clicking."""
         if self._engine is not None and not self._engine.is_delay_permitted():
             return
 
@@ -417,13 +421,22 @@ class GivexDriver:
                     elements[0],
                 )
                 if rect:
-                    if _ActionChains is None:
-                        raise RuntimeError("ActionChains unavailable")
-                    actions = _ActionChains(self._driver)
                     rnd = self._get_rng()
-                    for _ in range(4):
-                        actions.move_by_offset(int(rnd.uniform(-8, 8)), int(rnd.uniform(-3, 3)))
-                    actions.perform()
+                    # Light scroll down toward the button area.
+                    self._driver.execute_script(
+                        "window.scrollBy(0, arguments[0]);",
+                        int(rnd.uniform(15, 30)),
+                    )
+                    if _ActionChains is not None:
+                        actions = _ActionChains(self._driver)
+                        for _ in range(4):
+                            actions.move_by_offset(int(rnd.uniform(-8, 8)), int(rnd.uniform(-3, 3)))
+                        actions.perform()
+                    # Light scroll back up to restore position.
+                    self._driver.execute_script(
+                        "window.scrollBy(0, arguments[0]);",
+                        int(rnd.uniform(-30, -15)),
+                    )
             except Exception:
                 _log.debug("_hesitate_before_submit: hover failed, still sleeping")
 
