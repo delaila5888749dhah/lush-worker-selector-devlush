@@ -1304,3 +1304,165 @@ class TestVerifyDeployment(RuntimeResetMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Billing Circuit Breaker ──────────────────────────────────────
+
+
+class TestBillingCircuitBreaker(RuntimeResetMixin, unittest.TestCase):
+    """Billing-specific circuit breaker: pause after consecutive CycleExhaustedError."""
+
+    def test_billing_cb_triggers_after_threshold(self):
+        """After _BILLING_CB_THRESHOLD consecutive billing failures, throttle is active."""
+        from modules.common.exceptions import CycleExhaustedError
+
+        runtime._state = "RUNNING"
+        original_threshold = runtime._BILLING_CB_THRESHOLD
+        original_pause = runtime._BILLING_CB_PAUSE
+        try:
+            runtime._BILLING_CB_THRESHOLD = 2
+            runtime._BILLING_CB_PAUSE = 60
+
+            call_count = {"n": 0}
+
+            def billing_fail(_):
+                call_count["n"] += 1
+                raise CycleExhaustedError("pool empty")
+
+            # Launch 2 workers that fail with CycleExhaustedError
+            wid1 = start_worker(billing_fail)
+            self.assertTrue(
+                self._poll_until(lambda: wid1 not in get_active_workers()),
+            )
+            wid2 = start_worker(billing_fail)
+            self.assertTrue(
+                self._poll_until(lambda: wid2 not in get_active_workers()),
+            )
+            # After 2 billing failures, circuit breaker should be throttled
+            with runtime._lock:
+                throttled = runtime._is_billing_throttled()
+            self.assertTrue(throttled, "billing circuit breaker should be active after threshold failures")
+        finally:
+            runtime._BILLING_CB_THRESHOLD = original_threshold
+            runtime._BILLING_CB_PAUSE = original_pause
+            runtime._state = "INIT"
+
+    def test_billing_cb_status_exposed(self):
+        """get_status() exposes billing_throttled and consecutive_billing_failures."""
+        runtime._state = "RUNNING"
+        try:
+            with runtime._lock:
+                runtime._billing_throttled_until = time.monotonic() + 60
+                runtime._consecutive_billing_failures = 2
+            status = get_status()
+            self.assertTrue(status["billing_throttled"])
+            self.assertEqual(status["consecutive_billing_failures"], 2)
+        finally:
+            runtime._state = "INIT"
+
+    def test_billing_cb_worker_pauses_during_throttle(self):
+        """Worker waits during billing throttle instead of executing task."""
+        from modules.common.exceptions import CycleExhaustedError
+
+        runtime._state = "RUNNING"
+        original_pause = runtime._BILLING_CB_PAUSE
+        try:
+            runtime._BILLING_CB_PAUSE = 300  # long pause
+            with runtime._lock:
+                runtime._billing_throttled_until = time.monotonic() + 300
+
+            executed = threading.Event()
+
+            def should_not_run(_):
+                executed.set()
+
+            wid = start_worker(should_not_run)
+            # Give worker time to enter its loop; it should NOT execute the task
+            time.sleep(0.5)
+            self.assertFalse(executed.is_set(), "worker should NOT execute task during billing throttle")
+            # Stop the worker
+            stop_worker(wid, timeout=WORKER_BLOCK_TIMEOUT)
+            self.assertTrue(
+                self._poll_until(lambda: wid not in get_active_workers()),
+            )
+        finally:
+            runtime._BILLING_CB_PAUSE = original_pause
+            runtime._state = "INIT"
+
+    def test_non_billing_failure_does_not_trigger_billing_cb(self):
+        """Non-billing failures do not increment billing circuit breaker counter."""
+        runtime._state = "RUNNING"
+        original_threshold = runtime._BILLING_CB_THRESHOLD
+        try:
+            runtime._BILLING_CB_THRESHOLD = 2
+
+            def generic_fail(_):
+                raise RuntimeError("generic error")
+
+            wid1 = start_worker(generic_fail)
+            self.assertTrue(
+                self._poll_until(lambda: wid1 not in get_active_workers()),
+            )
+            wid2 = start_worker(generic_fail)
+            self.assertTrue(
+                self._poll_until(lambda: wid2 not in get_active_workers()),
+            )
+            with runtime._lock:
+                throttled = runtime._is_billing_throttled()
+            self.assertFalse(throttled, "billing CB must not trigger for non-billing failures")
+            with runtime._lock:
+                self.assertEqual(runtime._consecutive_billing_failures, 0)
+        finally:
+            runtime._BILLING_CB_THRESHOLD = original_threshold
+            runtime._state = "INIT"
+
+    def test_billing_cb_resets_on_success(self):
+        """Successful task execution resets billing failure counter."""
+        runtime._state = "RUNNING"
+        original_threshold = runtime._BILLING_CB_THRESHOLD
+        try:
+            runtime._BILLING_CB_THRESHOLD = 5  # high threshold so it won't trigger
+
+            # Directly set billing failures to simulate prior failures
+            with runtime._lock:
+                runtime._consecutive_billing_failures = 2
+
+            # Now a success should reset the counter
+            success_done = threading.Event()
+
+            def success_task(_):
+                success_done.set()
+
+            wid = start_worker(success_task)
+            self.assertTrue(success_done.wait(timeout=2))
+            stop_worker(wid, timeout=WORKER_BLOCK_TIMEOUT)
+            self.assertTrue(self._poll_until(lambda: wid not in get_active_workers()))
+            with runtime._lock:
+                self.assertEqual(runtime._consecutive_billing_failures, 0)
+        finally:
+            runtime._BILLING_CB_THRESHOLD = original_threshold
+            runtime._state = "INIT"
+
+    def test_billing_cb_configurable_threshold(self):
+        """Circuit breaker respects configured threshold value."""
+        from modules.common.exceptions import CycleExhaustedError
+
+        runtime._state = "RUNNING"
+        original_threshold = runtime._BILLING_CB_THRESHOLD
+        original_pause = runtime._BILLING_CB_PAUSE
+        try:
+            runtime._BILLING_CB_THRESHOLD = 1  # trigger after just 1 failure
+            runtime._BILLING_CB_PAUSE = 30
+
+            def billing_fail(_):
+                raise CycleExhaustedError("pool empty")
+
+            wid = start_worker(billing_fail)
+            self.assertTrue(self._poll_until(lambda: wid not in get_active_workers()))
+            with runtime._lock:
+                throttled = runtime._is_billing_throttled()
+            self.assertTrue(throttled, "billing CB should trigger after 1 failure when threshold=1")
+        finally:
+            runtime._BILLING_CB_THRESHOLD = original_threshold
+            runtime._BILLING_CB_PAUSE = original_pause
+            runtime._state = "INIT"

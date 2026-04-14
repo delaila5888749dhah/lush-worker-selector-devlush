@@ -2,6 +2,7 @@
 import atexit
 from datetime import datetime, timezone
 import logging
+import os
 import re
 import signal
 import threading
@@ -17,6 +18,7 @@ from modules.observability import log_sink
 from modules.rollout import main as rollout
 from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
+from modules.common.exceptions import CycleExhaustedError
 _logger = logging.getLogger(__name__)
 ALLOWED_STATES = {"INIT", "RUNNING", "STOPPING", "STOPPED"}
 ALLOWED_WORKER_STATES = {"IDLE", "IN_CYCLE", "CRITICAL_SECTION", "SAFE_POINT"}
@@ -50,6 +52,14 @@ _MAX_RESTART_BACKOFF = 60
 _restart_delay: float = 0
 _loop_error_count = 0
 _MAX_LOOP_ERRORS = 10
+# ── Billing-specific circuit breaker ──────────────────────────────
+_BILLING_CB_THRESHOLD = max(1, int(os.environ.get("BILLING_CB_THRESHOLD", "3")))
+_BILLING_CB_PAUSE = max(1, int(os.environ.get("BILLING_CB_PAUSE", "120")))
+_consecutive_billing_failures = 0
+_billing_throttled_until: float = 0.0
+def _is_billing_throttled() -> bool:
+    """Return True if billing circuit breaker is active (must hold _lock)."""
+    return time.monotonic() < _billing_throttled_until
 def _should_stop_worker(worker_id):
     t = _workers.get(worker_id)
     if t is not None and t is not threading.current_thread():
@@ -94,7 +104,7 @@ def _transition_worker_state_locked(worker_id, new_state):
         raise ValueError(f"Invalid worker state transition: {current} -> {new_state} for {worker_id}")
     _worker_states[worker_id] = new_state
 def _worker_fn(worker_id, task_fn, persona):
-    global _pending_restarts, _restart_delay
+    global _pending_restarts, _restart_delay, _consecutive_billing_failures, _billing_throttled_until
     with _lock:
         delay_enabled = _behavior_delay_enabled
     if delay_enabled and persona is not None:
@@ -113,6 +123,20 @@ def _worker_fn(worker_id, task_fn, persona):
             with _lock:
                 if _should_stop_worker(worker_id):
                     break
+                billing_paused = _is_billing_throttled()
+                pause_remaining = (_billing_throttled_until - time.monotonic()) if billing_paused else 0
+            if pause_remaining > 0:
+                _log_event(worker_id, "throttled", "billing_cb_wait", {"pause_seconds": round(pause_remaining, 1)})
+                deadline = time.monotonic() + pause_remaining
+                while time.monotonic() < deadline:
+                    with _lock:
+                        if _should_stop_worker(worker_id):
+                            break
+                    _safe_sleep(min(1.0, max(0, deadline - time.monotonic())))
+                continue
+            with _lock:
+                if _should_stop_worker(worker_id):
+                    break
                 _transition_worker_state_locked(worker_id, "IN_CYCLE")
             try:
                 wrapped_task(worker_id)
@@ -123,6 +147,29 @@ def _worker_fn(worker_id, task_fn, persona):
                     _logger.warning("monitor.record_success() failed for %s", worker_id, exc_info=True)
                 with _lock:
                     _restart_delay = 0
+                    _consecutive_billing_failures = 0
+            except CycleExhaustedError as exc:
+                persona_type_tag = persona.persona_type if persona is not None else None
+                try:
+                    monitor.record_error(persona_type=persona_type_tag)
+                except Exception:
+                    _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
+                with _lock:
+                    _consecutive_billing_failures += 1
+                    if _consecutive_billing_failures >= _BILLING_CB_THRESHOLD:
+                        pause_dur = int(_BILLING_CB_PAUSE)
+                        fail_count = _consecutive_billing_failures
+                        _billing_throttled_until = time.monotonic() + pause_dur
+                        _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
+                        _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
+                        _consecutive_billing_failures = 0
+                    if worker_id in _workers and worker_id not in _stop_requests: _pending_restarts += 1
+                err_data: dict = {"error": _sanitize_error(exc)}
+                if persona_type_tag is not None:
+                    err_data["persona_type"] = persona_type_tag
+                    err_data["persona_seed"] = persona._seed
+                _log_event(worker_id, "error", "billing_failure", err_data)
+                break
             except Exception as exc:
                 persona_type_tag = persona.persona_type if persona is not None else None
                 try:
@@ -470,7 +517,7 @@ def get_status():
     with _lock:
         with _trace_lock:
             tid = _trace_id
-        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid}
+        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid, "billing_throttled": _is_billing_throttled(), "consecutive_billing_failures": _consecutive_billing_failures}
 def get_deployment_status():
     """Return a comprehensive production deployment health snapshot.
 
@@ -566,13 +613,14 @@ def get_trace_id():
     with _trace_lock: return _trace_id
 def reset():
     """Reset all runtime state. Intended for testing."""
-    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay
+    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until
     stop(timeout=2)
     with _lock:
         _state = "INIT"; _loop_thread = None; _workers = {}; _worker_states = {}; _worker_counter = 0
         _consecutive_rollbacks = 0; _pending_restarts = 0; _stop_requests.clear()
         _behavior_delay_enabled = False
         _loop_error_count = 0; _restart_delay = 0
+        _consecutive_billing_failures = 0; _billing_throttled_until = 0.0
     with _trace_lock:
         _trace_id = None
     _stop_event.clear()
