@@ -286,6 +286,20 @@ class TestTypeValueEngineIntegration(unittest.TestCase):
         self.assertAlmostEqual(slept[0], 0.08, places=4)
         self.assertAlmostEqual(slept[1], 0.0, places=4)
 
+    def test_engine_not_permitted_skips_all_delays(self):
+        """When engine.is_delay_permitted() is False, all sleeps are 0.0."""
+        drv = _mock_driver()
+        el = MagicMock()
+        eng = self._make_engine()
+        eng.is_delay_permitted.return_value = False
+        slept = []
+        with patch("time.sleep", side_effect=slept.append):
+            type_value(drv, el, "abc", _rnd(), typo_rate=0.0, engine=eng)
+        # All sleeps should be 0.0 since delay is not permitted
+        self.assertTrue(all(d == 0.0 for d in slept))
+        # accumulate_delay should NOT be called in a non-permitted context
+        eng.accumulate_delay.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
