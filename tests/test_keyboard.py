@@ -7,6 +7,7 @@ Covers:
 """
 
 import random
+import string
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -416,7 +417,6 @@ class TestCDPModifiersAndIsKeypad(unittest.TestCase):
 
     def test_all_printable_ascii_produce_string_code(self):
         """type_value on all printable ASCII never crashes; code is always str."""
-        import string
         drv = _mock_driver()
         el = MagicMock()
         with patch("time.sleep"):
