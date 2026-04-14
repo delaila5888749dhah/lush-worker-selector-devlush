@@ -159,7 +159,7 @@ def _worker_fn(worker_id, task_fn, persona):
                     if _consecutive_billing_failures >= _BILLING_CB_THRESHOLD:
                         _billing_throttled_until = time.monotonic() + _BILLING_CB_PAUSE
                         _log_event(worker_id, "critical", "billing_cb_triggered", {"count": _consecutive_billing_failures, "pause_seconds": _BILLING_CB_PAUSE})
-                        _logger.error("Billing circuit breaker: %d consecutive failures. Pausing billing for %ds.", _consecutive_billing_failures, _BILLING_CB_PAUSE)
+                        _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", _BILLING_CB_PAUSE)
                         _consecutive_billing_failures = 0
                     if worker_id in _workers and worker_id not in _stop_requests: _pending_restarts += 1
                 err_data: dict = {"error": _sanitize_error(exc)}
