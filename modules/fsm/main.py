@@ -94,6 +94,7 @@ def _legacy_warn(fn):
     @functools.wraps(fn)
     def _wrapper(*args, **kwargs):
         stack = inspect.stack()
+        # stack[0]=_wrapper, stack[1]=decorated fn call, stack[2]=actual caller
         frame = stack[2] if len(stack) > 2 else stack[-1]
         caller_info = f"{frame.filename}:{frame.lineno} in {frame.function}"
         _logger.warning(

@@ -1,4 +1,3 @@
-import logging
 import threading
 import unittest
 
@@ -224,6 +223,10 @@ class FSMLegacyWarnTests(unittest.TestCase):
     def test_transition_to_emits_warning(self):
         with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
             add_new_state("success")
+        self.assertTrue(
+            any("add_new_state" in msg for msg in log_ctx.output),
+            "Expected WARNING for add_new_state",
+        )
         with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
             transition_to("success")
         self.assertTrue(
