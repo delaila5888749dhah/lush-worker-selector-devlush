@@ -18,6 +18,11 @@ try:
 except ImportError:  # pragma: no cover - tests mock _cdp_select_option
     Select = None  # type: ignore[assignment,misc]
 
+try:
+    from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
+except ImportError:  # pragma: no cover - tests mock _ghost_move_to / _hesitate_before_submit
+    _ActionChains = None  # type: ignore[assignment,misc]
+
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
 
 try:
@@ -285,7 +290,7 @@ class GivexDriver:
             import random as _random  # noqa: PLC0415
             rnd = _random.SystemRandom()
 
-        n_points = int(rnd.uniform(4, 8)) if hasattr(rnd, "uniform") else 5
+        n_points = int(rnd.uniform(4, 8))
         points = []
         for i in range(1, n_points + 1):
             t = i / (n_points + 1)
@@ -295,8 +300,9 @@ class GivexDriver:
         points.append((target_x, target_y))
 
         try:
-            from selenium.webdriver.common.action_chains import ActionChains  # type: ignore  # noqa: PLC0415
-            actions = ActionChains(self._driver)
+            if _ActionChains is None:
+                return
+            actions = _ActionChains(self._driver)
             prev_x, prev_y = 0.0, 0.0
             for px, py in points:
                 dx = px - prev_x
@@ -345,15 +351,18 @@ class GivexDriver:
             if self._temporal is not None:
                 try:
                     if self._temporal.get_time_state(0) == "NIGHT":
-                        night_factor = 1.0 + self._persona.night_penalty_factor
+                        night_factor = 1.0 + getattr(self._persona, "night_penalty_factor", 0.0)
                 except Exception:
                     pass
             ox = rnd.uniform(-15, 15) * night_factor
             oy = rnd.uniform(-5, 5) * night_factor
             ox = max(-15.0, min(15.0, ox))
             oy = max(-5.0, min(5.0, oy))
-            abs_x = rect["left"] + rect["width"] / 2 + ox
-            abs_y = rect["top"] + rect["height"] / 2 + oy
+            center_x = rect["left"] + rect["width"] / 2
+            center_y = rect["top"] + rect["height"] / 2
+            # Clamp final coordinates to element bounds
+            abs_x = max(rect["left"], min(center_x + ox, rect["left"] + rect["width"]))
+            abs_y = max(rect["top"], min(center_y + oy, rect["top"] + rect["height"]))
             try:
                 for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
                     self._driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
@@ -415,8 +424,9 @@ class GivexDriver:
                     elements[0],
                 )
                 if rect:
-                    from selenium.webdriver.common.action_chains import ActionChains  # type: ignore  # noqa: PLC0415
-                    actions = ActionChains(self._driver)
+                    if _ActionChains is None:
+                        raise RuntimeError("ActionChains unavailable")
+                    actions = _ActionChains(self._driver)
                     rnd = self._rnd
                     if rnd is None:
                         import random as _r2  # noqa: PLC0415

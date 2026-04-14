@@ -749,7 +749,7 @@ class TestSmoothScrollTo(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         persona = _make_persona(42)
         expected_delay = persona.get_click_delay()
-        # Reset persona so get_click_delay returns same value
+        # Create fresh persona with same seed to get deterministic delay value
         persona2 = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona2)
         sleep_calls = []
@@ -880,24 +880,21 @@ class TestGhostMoveTo(unittest.TestCase):
         mock_actions.move_by_offset.return_value = mock_actions
         mock_actions.perform.return_value = None
         mock_actions_cls = MagicMock(return_value=mock_actions)
-        # Patch at the location where _ghost_move_to imports ActionChains
         with patch("time.sleep"), \
-             patch.dict("sys.modules", {"selenium": MagicMock(), "selenium.webdriver": MagicMock(),
-                                        "selenium.webdriver.common": MagicMock(),
-                                        "selenium.webdriver.common.action_chains": MagicMock(ActionChains=mock_actions_cls)}):
+             patch("modules.cdp.driver._ActionChains", mock_actions_cls):
             gd._ghost_move_to("#some-el")
         self.assertGreaterEqual(mock_actions.move_by_offset.call_count, 4)
 
-    def test_ghost_move_to_calls_move_by_offset_without_selenium(self):
-        """Without selenium, _ghost_move_to silently returns (no-op)."""
+    def test_ghost_move_to_noop_when_action_chains_unavailable(self):
+        """Without ActionChains, _ghost_move_to silently returns (no-op)."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         selenium.execute_script.return_value = {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
         gd = GivexDriver(selenium)
-        # Should not raise even though ActionChains is unavailable
+        # _ActionChains is None in test environment (selenium not installed)
         with patch("time.sleep"):
-            gd._ghost_move_to("#some-el")
+            gd._ghost_move_to("#some-el")  # Should not raise
 
     def test_ghost_move_to_noop_when_element_missing(self):
         selenium = _make_driver()
