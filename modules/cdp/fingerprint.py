@@ -79,7 +79,7 @@ class BitBrowserClient:
                 timeout=10,
             )
             response.raise_for_status()
-        except Exception as exc:  # pragma: no cover
+        except requests.exceptions.RequestException as exc:
             _logger.warning("BitBrowser close_profile failed for %s: %s", profile_id, exc)
 
     def delete_profile(self, profile_id: str) -> None:
@@ -91,7 +91,7 @@ class BitBrowserClient:
                 timeout=10,
             )
             response.raise_for_status()
-        except Exception as exc:  # pragma: no cover
+        except requests.exceptions.RequestException as exc:
             _logger.warning("BitBrowser delete_profile failed for %s: %s", profile_id, exc)
 
     def is_available(self) -> bool:
@@ -123,16 +123,16 @@ class BitBrowserSession:
         self._profile_id = profile_id
         return profile_id, webdriver_url
 
-    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+    def __exit__(self, _exc_type, _exc_value, _exc_traceback) -> bool:
         if self._profile_id is None:
             return False
         try:
             self._client.close_profile(self._profile_id)
-        except Exception:  # pragma: no cover
+        except requests.exceptions.RequestException:  # pragma: no cover
             pass
         try:
             self._client.delete_profile(self._profile_id)
-        except Exception:  # pragma: no cover
+        except requests.exceptions.RequestException:  # pragma: no cover
             pass
         return False
 

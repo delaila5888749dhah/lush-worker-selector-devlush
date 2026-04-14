@@ -7,12 +7,15 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import MagicMock, patch
 
+import requests
 from modules.cdp.fingerprint import (
     BitBrowserClient,
     BitBrowserSession,
     get_bitbrowser_client,
 )
+import modules.cdp.main as cdp
 from modules.cdp.main import get_browser_profile, register_browser_profile
+from integration import runtime
 
 
 class _BitBrowserMockHandler(BaseHTTPRequestHandler):
@@ -73,7 +76,7 @@ class _BitBrowserMockHandler(BaseHTTPRequestHandler):
             return
         self._write_json(404, {"error": "not found"})
 
-    def log_message(self, _fmt, *args):  # pylint: disable=unused-argument
+    def log_message(self, _format, *_args):  # pylint: disable=unused-argument
         return
 
 
@@ -133,9 +136,26 @@ class BitBrowserSessionTests(unittest.TestCase):
         fake_client = MagicMock()
         fake_client.create_profile.return_value = "profile-x"
         fake_client.launch_profile.return_value = {"webdriver": "ws://127.0.0.1:9222/x"}
-        fake_client.close_profile.side_effect = RuntimeError("close failed")
-        fake_client.delete_profile.side_effect = RuntimeError("delete failed")
+        fake_client.close_profile.side_effect = requests.exceptions.RequestException("close failed")
+        fake_client.delete_profile.side_effect = requests.exceptions.RequestException("delete failed")
 
         with BitBrowserSession(fake_client) as (profile_id, webdriver_url):
             self.assertEqual(profile_id, "profile-x")
             self.assertEqual(webdriver_url, "ws://127.0.0.1:9222/x")
+
+
+class RuntimeBrowserProfileAccessorTests(unittest.TestCase):
+    def setUp(self):
+        with cdp._registry_lock:
+            cdp._bitbrowser_registry.clear()
+
+    def tearDown(self):
+        with cdp._registry_lock:
+            cdp._bitbrowser_registry.clear()
+
+    def test_runtime_returns_registered_profile(self):
+        register_browser_profile("worker-a", "profile-a")
+        self.assertEqual(runtime.get_worker_browser_profile("worker-a"), "profile-a")
+
+    def test_runtime_returns_none_for_unregistered_worker(self):
+        self.assertIsNone(runtime.get_worker_browser_profile("worker-missing"))
