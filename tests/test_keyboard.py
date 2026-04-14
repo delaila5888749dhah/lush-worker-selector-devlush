@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from modules.cdp.keyboard import (
-    adjacent_char, type_value, _ADJACENT, _BACKSPACE, _MAX_TYPO_RATE, _FIELD_TYPO_CAP,
+    adjacent_char, type_value, _ADJACENT, _MAX_TYPO_RATE, _FIELD_TYPO_CAP,
 )
 
 
