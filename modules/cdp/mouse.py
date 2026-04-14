@@ -77,12 +77,9 @@ class GhostCursor:
     """
 
     def __init__(
-        self,
-        driver: object,
-        rnd,
-        viewport_width: int = 1280,
-        viewport_height: int = 720,
-    ) -> None:
+            self, driver: object, rnd,
+            viewport_width: int = 1280,
+            viewport_height: int = 720) -> None:
         self._driver = driver
         self._rnd = rnd
         self._x: float = self._rnd.uniform(viewport_width * 0.1, viewport_width * 0.9)
@@ -99,7 +96,7 @@ class GhostCursor:
         target_y: float,
         *,
         n_points=None,  # type: int | None
-        click_delay: float | None = None,
+        click_delay=None,  # type: float | None
     ) -> None:
         """Move cursor to ``(target_x, target_y)`` via CDP mouseMoved events.
 
