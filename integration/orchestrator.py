@@ -532,7 +532,10 @@ def _emit_billing_audit_event(
     """
     try:
         requested_zip = None if zip_code is None else str(zip_code)
-        selection_method = "zip_match" if requested_zip and requested_zip.strip() else "round_robin"
+        # Preserve the raw requested zip for tracing, but treat blank/whitespace
+        # input as "no zip" when determining the selection strategy.
+        has_requested_zip = bool(requested_zip and requested_zip.strip())
+        selection_method = "zip_match" if has_requested_zip else "round_robin"
         event = {
             "event_type": "billing_selection",
             "worker_id": worker_id,
