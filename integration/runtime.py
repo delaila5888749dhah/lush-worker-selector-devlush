@@ -460,6 +460,9 @@ def start(task_fn, interval=None):
         if interval <= 0: interval = _MIN_LOOP_INTERVAL
     except TypeError:
         interval = _MIN_LOOP_INTERVAL
+    with _lock:
+        if _state not in ("INIT", "STOPPED"):
+            return False
     _ensure_rollout_configured()
     try:
         _validate_billing_pool_preflight()

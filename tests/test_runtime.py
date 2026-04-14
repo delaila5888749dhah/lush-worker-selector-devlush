@@ -1569,3 +1569,13 @@ class TestBillingPoolPreflightValidation(RuntimeResetMixin, unittest.TestCase):
                 start(lambda _: None, interval=0.05)
         self.assertNotEqual(runtime.get_state(), "RUNNING")
         self.assertIn(runtime.get_state(), ("INIT", "STOPPED"))
+
+    def test_start_returns_false_when_already_running(self):
+        """start() must preserve its False return when runtime is already running."""
+        self.assertTrue(start(lambda _: None, interval=0.05))
+        missing = Path("/tmp/_nonexistent_billing_pool_dir_xyz")
+        try:
+            with patch.object(billing, "_pool_dir", return_value=missing):
+                self.assertFalse(start(lambda _: None, interval=0.05))
+        finally:
+            stop()
