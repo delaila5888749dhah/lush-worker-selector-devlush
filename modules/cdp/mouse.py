@@ -9,6 +9,7 @@ layer so that both are independently testable and reusable.
 """
 
 import logging
+import math
 import time
 
 _log = logging.getLogger(__name__)
@@ -36,7 +37,13 @@ def build_path(start, target, rnd, n_points: int):
     dx = tx - sx
     dy = ty - sy
     # Perpendicular offset vector (rotate 90°, scaled by curve strength).
-    perp_scale = rnd.uniform(0.15, 0.45)
+    if hasattr(rnd, "getstate") and hasattr(rnd, "setstate"):
+        state = rnd.getstate()
+        _sign = 1 if rnd.random() > 0.5 else -1
+        rnd.setstate(state)
+    else:
+        _sign = 1 if rnd.random() > 0.5 else -1
+    perp_scale = _sign * rnd.uniform(0.15, 0.45)
     px = -dy * perp_scale
     py = dx * perp_scale
     # Cubic Bézier control points.
@@ -69,11 +76,17 @@ class GhostCursor:
             generation.  Deterministic output requires a seeded instance.
     """
 
-    def __init__(self, driver: object, rnd) -> None:
+    def __init__(
+        self,
+        driver: object,
+        rnd,
+        viewport_width: int = 1280,
+        viewport_height: int = 720,
+    ) -> None:
         self._driver = driver
         self._rnd = rnd
-        self._x: float = 0.0
-        self._y: float = 0.0
+        self._x: float = self._rnd.uniform(viewport_width * 0.1, viewport_width * 0.9)
+        self._y: float = self._rnd.uniform(viewport_height * 0.1, viewport_height * 0.9)
 
     @property
     def position(self):
@@ -86,7 +99,7 @@ class GhostCursor:
         target_y: float,
         *,
         n_points=None,  # type: int | None
-        click_delay: float = 0.05,
+        click_delay: float | None = None,
     ) -> None:
         """Move cursor to ``(target_x, target_y)`` via CDP mouseMoved events.
 
@@ -100,10 +113,20 @@ class GhostCursor:
             target_y: Destination Y coordinate in viewport pixels.
             n_points: Intermediate waypoints to generate.  Defaults to a
                 random integer in ``[4, 8]``.
-            click_delay: Per-waypoint sleep in seconds.
+            click_delay: Per-waypoint sleep in seconds. If ``None``, delay is
+                dynamically scaled by movement distance.
         """
         if n_points is None:
             n_points = self._rnd.randint(4, 8)
+        if click_delay is None:
+            base_dist = math.hypot(target_x - self._x, target_y - self._y)
+            if hasattr(self._rnd, "getstate") and hasattr(self._rnd, "setstate"):
+                state = self._rnd.getstate()
+                jitter = self._rnd.uniform(0.8, 1.2)
+                self._rnd.setstate(state)
+            else:
+                jitter = self._rnd.uniform(0.8, 1.2)
+            click_delay = max(0.01, min(0.12, base_dist / 5000.0)) * jitter
 
         path = build_path((self._x, self._y), (target_x, target_y), self._rnd, n_points)
 
