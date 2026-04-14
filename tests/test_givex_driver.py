@@ -366,14 +366,17 @@ class TestFillPaymentAndBilling(unittest.TestCase):
              patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
 
-        # Card name, number, and CVV are typed (per-character for card fields).
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        sent_flat = "".join(v for v in sent_values if len(v) == 1)
-        self.assertIn(task.primary_card.card_name, sent_flat)
-        self.assertIn(task.primary_card.card_number, sent_flat)
-        self.assertIn(task.primary_card.cvv, sent_flat)
+        # Card fields go through CDP dispatchKeyEvent; collect "text" params.
+        cdp_chars = "".join(
+            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
+            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
+        )
+        self.assertIn(task.primary_card.card_name, cdp_chars)
+        self.assertIn(task.primary_card.card_number, cdp_chars)
+        self.assertIn(task.primary_card.cvv, cdp_chars)
 
         # Billing text fields (typed as whole string via _cdp_type_field).
+        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
         self.assertIn(billing.address, sent_values)
         self.assertIn(billing.city, sent_values)
         self.assertIn(billing.zip_code, sent_values)
@@ -387,7 +390,7 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         self.assertEqual(select_calls[SEL_BILLING_STATE], billing.state)
 
     def test_fill_payment_and_billing_sends_card_name(self):
-        """Verify card_name characters are sent to SEL_CARD_NAME."""
+        """Verify card_name characters are dispatched via CDP key events."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -399,9 +402,11 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         with patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
 
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        sent_flat = "".join(v for v in sent_values if len(v) == 1)
-        self.assertIn("Jane Doe", sent_flat)
+        cdp_chars = "".join(
+            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
+            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
+        )
+        self.assertIn("Jane Doe", cdp_chars)
 
     def test_fill_payment_and_billing_selects_country(self):
         """Verify _cdp_select_option is called with SEL_BILLING_COUNTRY and billing_profile.country."""
@@ -1172,9 +1177,10 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
 
 
 class TestFillPaymentBiometrics(unittest.TestCase):
-    """fill_payment_and_billing injects card-entry biometric delays when bio is available."""
+    """fill_payment_and_billing uses field-aware realistic typing for card fields."""
 
-    def test_fill_payment_calls_inject_card_entry_delays_when_bio_available(self):
+    def test_fill_payment_uses_realistic_type_for_card_fields(self):
+        """Card fields use _realistic_type_field with field_kind; no separate delay injection."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -1182,10 +1188,17 @@ class TestFillPaymentBiometrics(unittest.TestCase):
         gd = GivexDriver(selenium, persona=persona)
         task = _make_task()
         billing = _make_billing()
-        with patch.object(gd, "_cdp_select_option"), \
-             patch("modules.cdp.driver._inject_card_entry_delays") as mock_inject:
+        field_kinds = []
+        original = gd._realistic_type_field
+        def spy(sel, val, **kw):
+            field_kinds.append(kw.get("field_kind", "text"))
+            original(sel, val, **kw)
+        with patch.object(gd, "_realistic_type_field", side_effect=spy), \
+             patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
-        mock_inject.assert_called_once_with(gd._bio, engine=gd._engine)
+        self.assertIn("name", field_kinds)
+        self.assertIn("card_number", field_kinds)
+        self.assertIn("cvv", field_kinds)
 
     def test_fill_payment_with_persona_transitions_payment_state(self):
         selenium = _make_driver()
@@ -1197,8 +1210,7 @@ class TestFillPaymentBiometrics(unittest.TestCase):
         gd._sm.transition("FILLING_FORM")
         task = _make_task()
         billing = _make_billing()
-        with patch.object(gd, "_cdp_select_option"), \
-             patch("modules.cdp.driver._inject_card_entry_delays"):
+        with patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
             with patch.object(gd._sm, "transition") as mock_transition:
                 gd.fill_payment_and_billing(task.primary_card, billing)
         mock_transition.assert_any_call("PAYMENT")
@@ -1210,10 +1222,8 @@ class TestFillPaymentBiometrics(unittest.TestCase):
         gd = GivexDriver(selenium)
         task = _make_task()
         billing = _make_billing()
-        with patch.object(gd, "_cdp_select_option"), \
-             patch("modules.cdp.driver._inject_card_entry_delays") as mock_inject:
+        with patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
-        mock_inject.assert_not_called()
 
 
 # ── TestStrictMode ───────────────────────────────────────────────────────────
@@ -1277,10 +1287,10 @@ class TestStrictMode(unittest.TestCase):
 
 
 class TestRealisticTypeField(unittest.TestCase):
-    """_realistic_type_field dispatches per-character via keyboard module."""
+    """_realistic_type_field dispatches via CDP key events through keyboard module."""
 
     def test_realistic_type_uses_keyboard_module_when_available(self):
-        """_realistic_type_field calls keyboard.type_value when module is present."""
+        """_realistic_type_field calls keyboard.type_value with driver arg."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -1289,12 +1299,13 @@ class TestRealisticTypeField(unittest.TestCase):
         with patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 4, "typos_injected": 0,
-                                    "corrections_made": 0, "mode": "per_char"}
+                                    "corrections_made": 0, "mode": "cdp_key"}
             gd._realistic_type_field("#some-field", "test")
         mock_tv.assert_called_once()
-        _call_el, _call_val = mock_tv.call_args[0][0], mock_tv.call_args[0][1]
-        self.assertEqual(_call_el, element)
-        self.assertEqual(_call_val, "test")
+        # First positional arg is the driver, second is the element.
+        self.assertEqual(mock_tv.call_args[0][0], selenium)
+        self.assertEqual(mock_tv.call_args[0][1], element)
+        self.assertEqual(mock_tv.call_args[0][2], "test")
 
     def test_realistic_type_falls_back_when_keyboard_unavailable(self):
         """When _type_value is None, falls back to _cdp_type_field."""
@@ -1314,6 +1325,20 @@ class TestRealisticTypeField(unittest.TestCase):
         with self.assertRaises(SelectorTimeoutError):
             gd._realistic_type_field("#missing", "x")
 
+    def test_realistic_type_passes_field_kind(self):
+        """field_kind is forwarded to type_value."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("modules.cdp.driver._type_value") as mock_tv, \
+             patch("time.sleep"):
+            mock_tv.return_value = {"typed_chars": 3, "typos_injected": 0,
+                                    "corrections_made": 0, "mode": "cdp_key"}
+            gd._realistic_type_field("#cvv", "123", field_kind="cvv")
+        self.assertEqual(mock_tv.call_args[1]["field_kind"], "cvv")
+
     def test_realistic_type_uses_burst_delays_for_card_number(self):
         """With use_burst=True and 16-char value, uses 4x4 delay pattern."""
         selenium = _make_driver()
@@ -1324,11 +1349,10 @@ class TestRealisticTypeField(unittest.TestCase):
         with patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 16, "typos_injected": 0,
-                                    "corrections_made": 0, "mode": "per_char"}
+                                    "corrections_made": 0, "mode": "cdp_key"}
             gd._realistic_type_field("#card", "4111111111111111", use_burst=True)
         kwargs = mock_tv.call_args[1]
         delays = kwargs.get("delays")
-        # 4x4 pattern produces 19 delay values (16 chars + 3 group pauses).
         self.assertIsNotNone(delays)
         self.assertEqual(len(delays), 19)
 
@@ -1341,9 +1365,9 @@ class TestRealisticTypeField(unittest.TestCase):
         persona.typo_rate = 0.02
         gd = GivexDriver(selenium, persona=persona)
         received_typo_rate = []
-        def capture_tv(el, val, rnd, **kw):
+        def capture_tv(drv, el, val, rnd, **kw):
             received_typo_rate.append(kw.get("typo_rate", 0.0))
-            return {"typed_chars": 1, "typos_injected": 0, "corrections_made": 0, "mode": "per_char"}
+            return {"typed_chars": 1, "typos_injected": 0, "corrections_made": 0, "mode": "cdp_key"}
         with patch("modules.cdp.driver._type_value", side_effect=capture_tv), \
              patch.object(gd._temporal, "get_night_typo_increase", return_value=0.015), \
              patch("time.sleep"):
