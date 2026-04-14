@@ -226,6 +226,7 @@ class TestFillEgiftForm(unittest.TestCase):
         self.assertEqual(sender_calls[0].args[1], "Jane Doe")
 
     def test_fill_egift_form_uses_type_value_not_send_keys(self):
+        """fill_egift_form dispatches via _type_value, never via send_keys."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -1163,9 +1164,10 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
         with patch.object(gd, "_smooth_scroll_to", side_effect=lambda s: call_log.append(("scroll", s))), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch("time.sleep"):
-            def tracking_type(sel, val, **kw):
+            def tracking_type(sel, _val, **_kw):  # pylint: disable=unused-argument
+                """Spy that records selector to call_log."""
                 call_log.append(("type", sel))
-            gd._realistic_type_field = tracking_type
+            gd._realistic_type_field = tracking_type  # pylint: disable=protected-access
             gd.fill_egift_form(_make_task(), _make_billing())
 
         self.assertGreater(len(call_log), 1)
