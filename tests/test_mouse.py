@@ -116,7 +116,7 @@ class TestGhostCursorDispatch(unittest.TestCase):
         self.assertEqual(params["y"], 150.0)
 
     def test_deterministic_waypoints_under_fixed_seed(self):
-        def capture_coords(rnd_seed: int) -> list[tuple[float, float]]:
+        def get_dispatched_coordinates(rnd_seed: int) -> list[tuple[float, float]]:
             driver = MagicMock()
             coords: list[tuple[float, float]] = []
             driver.execute_cdp_cmd.side_effect = lambda cmd, p: coords.append((p["x"], p["y"]))
@@ -125,8 +125,8 @@ class TestGhostCursorDispatch(unittest.TestCase):
                 gc.move_to(200.0, 100.0, n_points=5)
             return coords
 
-        self.assertEqual(capture_coords(42), capture_coords(42))
-        self.assertNotEqual(capture_coords(1), capture_coords(2))
+        self.assertEqual(get_dispatched_coordinates(42), get_dispatched_coordinates(42))
+        self.assertNotEqual(get_dispatched_coordinates(1), get_dispatched_coordinates(2))
 
     def test_failed_cdp_call_does_not_raise(self):
         driver = MagicMock()

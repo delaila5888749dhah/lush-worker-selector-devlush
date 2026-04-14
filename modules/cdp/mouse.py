@@ -101,7 +101,7 @@ class GhostCursor:
             click_delay: Per-waypoint sleep in seconds.
         """
         if n_points is None:
-            n_points = int(self._rnd.uniform(4, 8))
+            n_points = self._rnd.randint(4, 8)
 
         path = build_path(self._x, self._y, target_x, target_y, self._rnd, n_points)
 

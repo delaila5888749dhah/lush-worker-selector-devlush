@@ -302,7 +302,7 @@ class GivexDriver:
 
         # Fallback: ActionChains-based movement when GhostCursor is unavailable.
         rnd = self._get_rng()
-        n_points = int(rnd.uniform(4, 8))
+        n_points = rnd.randint(4, 8)
         points = []
         for i in range(1, n_points + 1):
             t = i / (n_points + 1)
