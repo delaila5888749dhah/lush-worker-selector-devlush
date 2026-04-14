@@ -3,7 +3,12 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from modules.delay.main import PersonaProfile, wrap
+from modules.delay.main import (
+    PersonaProfile,
+    wrap,
+    MAX_STEP_DELAY,
+    WATCHDOG_HEADROOM,
+)
 from modules.delay.state import BehaviorStateMachine
 from modules.delay.engine import DelayEngine
 from modules.delay.temporal import TemporalModel
@@ -189,12 +194,18 @@ class TestInjectStepDelay(unittest.TestCase):
 
     def test_accumulator_headroom_caps_requested_delay(self):
         engine, temporal, _ = self._make_engine_and_temporal()
-        engine.accumulate_delay(6.8)
+        effective_ceiling = MAX_STEP_DELAY - WATCHDOG_HEADROOM
+        remaining_headroom = 0.2
+        engine.accumulate_delay(effective_ceiling - remaining_headroom)
         with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
             result = inject_step_delay(engine, temporal, "typing")
         mock_sleep.assert_called_once()
-        self.assertAlmostEqual(result, 0.2, places=10)
-        self.assertAlmostEqual(engine.get_step_accumulated_delay(), 7.0, places=10)
+        self.assertAlmostEqual(result, remaining_headroom, places=10)
+        self.assertAlmostEqual(
+            engine.get_step_accumulated_delay(),
+            effective_ceiling,
+            places=10,
+        )
 
 
 class TestWrapInjectsBothDelayTypes(unittest.TestCase):
