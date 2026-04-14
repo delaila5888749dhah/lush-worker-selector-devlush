@@ -90,19 +90,19 @@ def cleanup_worker(worker_id: str) -> None:
 # ── Legacy global API (backward compat) ────────────────────────
 
 
-def _legacy_warn(fn):
-    @functools.wraps(fn)
+def _legacy_warn(func):
+    @functools.wraps(func)
     def _wrapper(*args, **kwargs):
         stack = inspect.stack()
-        # stack[0]=_wrapper, stack[1]=decorated fn call, stack[2]=actual caller
+        # stack[0]=_wrapper, stack[1]=decorated func call, stack[2]=actual caller
         frame = stack[2] if len(stack) > 2 else stack[-1]
         caller_info = f"{frame.filename}:{frame.lineno} in {frame.function}"
         _logger.warning(
             "FSM legacy global API '%s' called — use per-worker API instead. Caller: %s",
-            fn.__name__,
+            func.__name__,
             caller_info,
         )
-        return fn(*args, **kwargs)
+        return func(*args, **kwargs)
     return _wrapper
 
 

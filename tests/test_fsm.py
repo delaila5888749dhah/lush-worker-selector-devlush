@@ -1,3 +1,5 @@
+import logging
+import logging.handlers
 import threading
 import unittest
 
@@ -221,6 +223,7 @@ class FSMLegacyWarnTests(unittest.TestCase):
             reset_states()
 
     def test_transition_to_emits_warning(self):
+        """Legacy transition_to() must emit a deprecation WARNING."""
         with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
             add_new_state("success")
         self.assertTrue(
@@ -235,6 +238,7 @@ class FSMLegacyWarnTests(unittest.TestCase):
         )
 
     def test_reset_states_does_not_raise_only_warns(self):
+        """Legacy reset_states() must warn but not raise."""
         with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
             reset_states()
         self.assertTrue(
@@ -243,9 +247,18 @@ class FSMLegacyWarnTests(unittest.TestCase):
         )
 
     def test_initialize_for_worker_no_warning(self):
-        with self.assertNoLogs("modules.fsm.main", level="WARNING"):
+        """Per-worker initialize_for_worker() must not emit any WARNING."""
+        logger = logging.getLogger("modules.fsm.main")
+        handler = logging.handlers.MemoryHandler(capacity=100)
+        handler.setLevel(logging.WARNING)
+        logger.addHandler(handler)
+        try:
             initialize_for_worker("w1")
-        cleanup_worker("w1")
+            handler.flush()
+            self.assertEqual(handler.buffer, [], "Per-worker API should not emit warnings")
+        finally:
+            logger.removeHandler(handler)
+            cleanup_worker("w1")
 
 
 if __name__ == "__main__":
