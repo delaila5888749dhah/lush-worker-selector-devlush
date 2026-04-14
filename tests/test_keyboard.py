@@ -7,11 +7,13 @@ Covers:
 """
 
 import random
+import string
 import unittest
 from unittest.mock import MagicMock, patch
 
 from modules.cdp.keyboard import (
     adjacent_char, type_value, _ADJACENT, _MAX_TYPO_RATE, _FIELD_TYPO_CAP,
+    _DOM_CODE_MAP, _VK_MAP, _SHIFT_REQUIRED,
 )
 
 
@@ -299,6 +301,145 @@ class TestTypeValueEngineIntegration(unittest.TestCase):
         self.assertTrue(all(d == 0.0 for d in slept))
         # accumulate_delay should NOT be called in a non-permitted context
         eng.accumulate_delay.assert_not_called()
+
+
+class TestCDPKeyEventCodeField(unittest.TestCase):
+    """_dispatch() sets correct 'code' field in CDP Input.dispatchKeyEvent."""
+
+    def _cdp_events(self, ch):
+        """Type a single character and return list of CDP event dicts dispatched."""
+        drv = _mock_driver()
+        el = MagicMock()
+        with patch("time.sleep"):
+            type_value(drv, el, ch, _rnd(), typo_rate=0.0)
+        return [call[0][1] for call in drv.execute_cdp_cmd.call_args_list
+                if call[0][0] == "Input.dispatchKeyEvent"]
+
+    def test_code_not_empty_for_lowercase_letters(self):
+        for ch in "abcdefghijklmnopqrstuvwxyz":
+            for event in self._cdp_events(ch):
+                self.assertNotEqual(event["code"], "", f"code empty for '{ch}'")
+
+    def test_code_not_empty_for_uppercase_letters(self):
+        for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            for event in self._cdp_events(ch):
+                self.assertNotEqual(event["code"], "", f"code empty for '{ch}'")
+
+    def test_code_not_empty_for_digits(self):
+        for ch in "0123456789":
+            for event in self._cdp_events(ch):
+                self.assertNotEqual(event["code"], "", f"code empty for '{ch}'")
+
+    def test_code_not_empty_for_special_chars(self):
+        for ch in "!@#$%^&*()":
+            for event in self._cdp_events(ch):
+                self.assertNotEqual(event["code"], "", f"code empty for '{ch}'")
+
+    def test_letter_code_matches_key_prefix(self):
+        for ch in "aA":
+            for event in self._cdp_events(ch):
+                self.assertEqual(event["code"], "KeyA")
+
+    def test_digit_code_matches_digit_prefix(self):
+        for event in self._cdp_events('1'):
+            self.assertEqual(event["code"], "Digit1")
+
+    def test_space_code(self):
+        for event in self._cdp_events(' '):
+            self.assertEqual(event["code"], "Space")
+
+    def test_period_code(self):
+        for event in self._cdp_events('.'):
+            self.assertEqual(event["code"], "Period")
+
+
+class TestCDPWindowsVirtualKeyCode(unittest.TestCase):
+    """_dispatch() sends correct windowsVirtualKeyCode for each character."""
+
+    def _vk(self, ch):
+        drv = _mock_driver()
+        el = MagicMock()
+        with patch("time.sleep"):
+            type_value(drv, el, ch, _rnd(), typo_rate=0.0)
+        events = [call[0][1] for call in drv.execute_cdp_cmd.call_args_list
+                  if call[0][0] == "Input.dispatchKeyEvent"]
+        return events[0]["windowsVirtualKeyCode"] if events else None
+
+    def test_vk_bang_is_49(self):
+        self.assertEqual(self._vk('!'), 49)
+
+    def test_vk_at_is_50(self):
+        self.assertEqual(self._vk('@'), 50)
+
+    def test_vk_uppercase_A_is_65(self):
+        self.assertEqual(self._vk('A'), 65)
+
+    def test_vk_lowercase_a_is_65(self):
+        self.assertEqual(self._vk('a'), 65)
+
+    def test_vk_digit_1_is_49(self):
+        self.assertEqual(self._vk('1'), 49)
+
+    def test_vk_underscore_is_189(self):
+        self.assertEqual(self._vk('_'), 189)
+
+    def test_vk_plus_is_187(self):
+        self.assertEqual(self._vk('+'), 187)
+
+
+class TestCDPModifiersAndIsKeypad(unittest.TestCase):
+    """_dispatch() sets modifiers=8 for shifted chars, 0 for normal; isKeypad=False."""
+
+    def _event(self, ch):
+        drv = _mock_driver()
+        el = MagicMock()
+        with patch("time.sleep"):
+            type_value(drv, el, ch, _rnd(), typo_rate=0.0)
+        events = [call[0][1] for call in drv.execute_cdp_cmd.call_args_list
+                  if call[0][0] == "Input.dispatchKeyEvent"]
+        return events[0] if events else {}
+
+    def test_shift_modifier_for_exclamation(self):
+        self.assertEqual(self._event('!')["modifiers"], 8)
+
+    def test_shift_modifier_for_uppercase(self):
+        self.assertEqual(self._event('A')["modifiers"], 8)
+
+    def test_no_shift_for_lowercase(self):
+        self.assertEqual(self._event('a')["modifiers"], 0)
+
+    def test_no_shift_for_digit(self):
+        self.assertEqual(self._event('5')["modifiers"], 0)
+
+    def test_iskeypad_false(self):
+        self.assertFalse(self._event('a')["isKeypad"])
+        self.assertFalse(self._event('1')["isKeypad"])
+
+    def test_all_printable_ascii_produce_string_code(self):
+        """type_value on all printable ASCII never crashes; code is always str."""
+        drv = _mock_driver()
+        el = MagicMock()
+        with patch("time.sleep"):
+            type_value(drv, el, string.printable, _rnd(), typo_rate=0.0)
+        for call in drv.execute_cdp_cmd.call_args_list:
+            if call[0][0] == "Input.dispatchKeyEvent":
+                self.assertIsInstance(call[0][1]["code"], str)
+
+
+class TestFieldTypoCapAmount(unittest.TestCase):
+    """amount field type cap is 0.0 — never inject typos."""
+
+    def test_amount_has_zero_typo_cap(self):
+        self.assertEqual(_FIELD_TYPO_CAP.get("amount"), 0.0)
+
+    def test_amount_field_no_typos_at_high_rate(self):
+        drv = _mock_driver()
+        el = MagicMock()
+        with patch("time.sleep"):
+            result = type_value(drv, el, "99.99", _rnd(), typo_rate=1.0,
+                                field_kind="amount")
+        self.assertEqual(result["typos_injected"], 0)
+        self.assertAlmostEqual(result["eff_typo_rate"], 0.0)
 
 
 if __name__ == "__main__":

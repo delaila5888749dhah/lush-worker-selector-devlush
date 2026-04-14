@@ -1,9 +1,39 @@
+from __future__ import annotations
 import logging
 import time
+from typing import Dict, Set
 _log = logging.getLogger(__name__)
 _ADJACENT = {'a':'sqwz','b':'vghn','c':'xdfv','d':'erfcs','e':'rdsw','f':'rtgvd','g':'tyhbf','h':'yujng','i':'uojk','j':'uikmh','k':'iolmj','l':'opk','m':'nkj','n':'bhjm','o':'iplk','p':'ol','q':'wa','r':'etdf','s':'wedaz','t':'ryfg','u':'yhij','v':'cfgb','w':'qase','x':'zsdc','y':'tugi','z':'asx','0':'9','1':'2','2':'13','3':'24','4':'35','5':'46','6':'57','7':'68','8':'79','9':'80'}
 _BACKSPACE, _MAX_TYPO_RATE = '\b', 0.06
-_FIELD_TYPO_CAP = {"card_number": 0.02, "cvv": 0.0, "name": 0.04, "text": 0.05}
+_FIELD_TYPO_CAP = {"card_number": 0.02, "cvv": 0.0, "name": 0.04, "text": 0.05, "amount": 0.0}
+_DOM_CODE_MAP: Dict[str, str] = {
+    **{c: f"Key{c.upper()}" for c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+    **{str(d): f"Digit{d}" for d in range(10)},
+    ' ': 'Space', '\b': 'Backspace', '\n': 'Enter', '\t': 'Tab',
+    '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+    '\\': 'Backslash', ';': 'Semicolon', "'": 'Quote', ',': 'Comma',
+    '.': 'Period', '/': 'Slash', '`': 'Backquote',
+    '_': 'Minus', '+': 'Equal', '{': 'BracketLeft', '}': 'BracketRight',
+    '|': 'Backslash', ':': 'Semicolon', '"': 'Quote', '<': 'Comma',
+    '>': 'Period', '?': 'Slash', '~': 'Backquote',
+    '!': 'Digit1', '@': 'Digit2', '#': 'Digit3', '$': 'Digit4',
+    '%': 'Digit5', '^': 'Digit6', '&': 'Digit7', '*': 'Digit8',
+    '(': 'Digit9', ')': 'Digit0',
+}
+_VK_MAP: Dict[str, int] = {
+    **{c: ord(c.upper()) for c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+    **{str(d): ord(str(d)) for d in range(10)},
+    '!': 49, '@': 50, '#': 51, '$': 52, '%': 53, '^': 54,
+    '&': 55, '*': 56, '(': 57, ')': 48,
+    '_': 189, '+': 187, '{': 219, '}': 221, '|': 220,
+    ':': 186, '"': 222, '<': 188, '>': 190, '?': 191, '~': 192,
+    '-': 189, '=': 187, '[': 219, ']': 221, '\\': 220,
+    ';': 186, "'": 222, ',': 188, '.': 190, '/': 191, '`': 192,
+    ' ': 32, '\b': 8, '\n': 13, '\t': 9,
+}
+_SHIFT_REQUIRED: Set[str] = set(
+    '!@#$%^&*()_+{}|:"<>?~ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+)
 
 def adjacent_char(c, rnd):
     n = _ADJACENT.get(c.lower(), "")
@@ -11,9 +41,17 @@ def adjacent_char(c, rnd):
 
 def _dispatch(drv, el, ch, strict):
     try:
+        vk = _VK_MAP.get(ch, ord(ch))
+        mod = 8 if ch in _SHIFT_REQUIRED else 0
+        code = _DOM_CODE_MAP.get(
+            ch, f"Key{ch.upper()}" if ch.isalpha() else "",
+        )
         for t in ("keyDown", "keyUp"):
-            drv.execute_cdp_cmd("Input.dispatchKeyEvent",
-                                {"type": t, "text": ch, "key": ch, "code": "", "windowsVirtualKeyCode": ord(ch)})
+            drv.execute_cdp_cmd("Input.dispatchKeyEvent", {
+                "type": t, "text": ch, "key": ch, "code": code,
+                "windowsVirtualKeyCode": vk, "modifiers": mod,
+                "isKeypad": False,
+            })
         return True
     except Exception:
         _log.debug("keyboard: CDP dispatch skipped, trying send_keys", exc_info=True)
