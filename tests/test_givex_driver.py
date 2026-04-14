@@ -238,7 +238,7 @@ class TestFillEgiftForm(unittest.TestCase):
                                     "corrections_made": 0, "mode": "cdp_key"}
             gd.fill_egift_form(_make_task(), _make_billing())
 
-        self.assertGreaterEqual(mock_tv.call_count, 5)
+        self.assertEqual(mock_tv.call_count, 6)
         element.send_keys.assert_not_called()
 
 
