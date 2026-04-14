@@ -18,7 +18,23 @@ try:
 except ImportError:  # pragma: no cover - tests mock _cdp_select_option
     Select = None  # type: ignore[assignment,misc]
 
+try:
+    from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
+except ImportError:  # pragma: no cover - tests mock _ghost_move_to
+    _ActionChains = None  # type: ignore[assignment,misc]
+
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
+
+try:
+    from modules.delay.biometrics import BiometricProfile as _BiometricProfile  # type: ignore
+    from modules.delay.temporal import TemporalModel as _TemporalModel  # type: ignore
+    from modules.delay.state import BehaviorStateMachine as _BehaviorStateMachine  # type: ignore
+    from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
+    from modules.delay.wrapper import inject_card_entry_delays as _inject_card_entry_delays  # type: ignore
+except ImportError:
+    _BiometricProfile = _TemporalModel = None
+    _BehaviorStateMachine = _DelayEngine = None
+    _inject_card_entry_delays = None
 
 _log = logging.getLogger(__name__)
 
@@ -100,12 +116,30 @@ class GivexDriver:
 
     Args:
         driver: A Selenium WebDriver instance (or test double).
+        persona: Optional behavior profile; ``None`` preserves legacy mode.
     """
 
-    def __init__(self, driver: object) -> None:
+    def __init__(self, driver: object, persona=None) -> None:
         self._driver = driver
+        self._persona = persona
+        self._rnd = persona._rnd if persona is not None else None
+        if persona is not None and _BehaviorStateMachine is not None:
+            self._sm = _BehaviorStateMachine()
+            self._engine = _DelayEngine(persona, self._sm)
+            self._temporal = _TemporalModel(persona)
+            self._bio = _BiometricProfile(persona)
+        else:
+            self._sm, self._engine = None, None
+            self._temporal, self._bio = None, None
 
     # ── Low-level helpers ────────────────────────────────────────────────────
+
+    def _get_rng(self):
+        """Return the persona RNG or a SystemRandom fallback."""
+        if self._rnd is not None:
+            return self._rnd
+        import random as _random  # noqa: PLC0415
+        return _random.SystemRandom()
 
     def find_elements(self, selector: str) -> list:
         """Return all elements matching *selector* (CSS, comma-separated OK).
@@ -211,8 +245,70 @@ class GivexDriver:
             raise SelectorTimeoutError(selector, 0)
         Select(elements[0]).select_by_value(value)
 
+    def _smooth_scroll_to(self, selector: str) -> None:
+        """Scroll an element into view smoothly."""
+        elements = self.find_elements(selector)
+        if not elements:
+            return
+        try:
+            self._driver.execute_script(
+                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
+                elements[0],
+            )
+        except Exception:
+            _log.debug("_smooth_scroll_to: execute_script skipped")
+        delay = self._persona.get_click_delay() if self._persona is not None else 0.15
+        time.sleep(delay)
+
+    def _ghost_move_to(self, selector: str) -> None:
+        """Move mouse along a Bézier-like path to the target element."""
+        elements = self.find_elements(selector)
+        if not elements:
+            return
+        try:
+            rect = self._driver.execute_script(
+                "var r=arguments[0].getBoundingClientRect();"
+                "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                elements[0],
+            )
+            if not rect:
+                return
+            target_x = rect["left"] + rect["width"] / 2
+            target_y = rect["top"] + rect["height"] / 2
+        except Exception:
+            _log.debug("_ghost_move_to: getBoundingClientRect skipped")
+            return
+
+        rnd = self._get_rng()
+        n_points = int(rnd.uniform(4, 8))
+        points = []
+        for i in range(1, n_points + 1):
+            t = i / (n_points + 1)
+            cx = target_x * t + rnd.uniform(-30, 30)
+            cy = target_y * t + rnd.uniform(-20, 20)
+            points.append((cx, cy))
+        points.append((target_x, target_y))
+
+        try:
+            if _ActionChains is None:
+                return
+            actions = _ActionChains(self._driver)
+            prev_x, prev_y = 0.0, 0.0
+            for px, py in points:
+                dx = px - prev_x
+                dy = py - prev_y
+                actions.move_by_offset(int(dx), int(dy))
+                prev_x, prev_y = px, py
+            actions.perform()
+        except Exception:
+            _log.debug("_ghost_move_to: ActionChains not available or failed")
+            return
+
+        click_delay = self._persona.get_click_delay() if self._persona is not None else 0.05
+        time.sleep(click_delay * len(points))
+
     def bounding_box_click(self, selector: str) -> None:
-        """Click the first element matching *selector*.
+        """Click using randomized bounding-box coordinates, with safe fallbacks.
 
         Args:
             selector: CSS selector for the element to click.
@@ -223,7 +319,95 @@ class GivexDriver:
         elements = self.find_elements(selector)
         if not elements:
             raise SelectorTimeoutError(selector, 0)
+
+        self._ghost_move_to(selector)
+
+        try:
+            rect = self._driver.execute_script(
+                "var r=arguments[0].getBoundingClientRect();"
+                "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                elements[0],
+            )
+        except Exception:
+            _log.debug("bounding_box_click: getBoundingClientRect failed, using plain click", exc_info=True)
+            rect = None
+
+        if rect and self._rnd is not None:
+            rnd = self._rnd
+            night_factor = 1.0
+            if self._temporal is not None:
+                try:
+                    if self._temporal.get_time_state(0) == "NIGHT":
+                        night_factor = 1.0 + getattr(self._persona, "night_penalty_factor", 0.0)
+                except Exception:
+                    _log.debug("bounding_box_click: unable to read temporal state; using default night_factor")
+            ox = rnd.uniform(-15, 15) * night_factor
+            oy = rnd.uniform(-5, 5) * night_factor
+            ox = max(-15.0, min(15.0, ox))
+            oy = max(-5.0, min(5.0, oy))
+            center_x = rect["left"] + rect["width"] / 2
+            center_y = rect["top"] + rect["height"] / 2
+            abs_x = max(rect["left"], min(center_x + ox, rect["left"] + rect["width"]))
+            abs_y = max(rect["top"], min(center_y + oy, rect["top"] + rect["height"]))
+            try:
+                for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+                    self._driver.execute_cdp_cmd(
+                        "Input.dispatchMouseEvent",
+                        {
+                            "type": event_type,
+                            "x": abs_x,
+                            "y": abs_y,
+                            "button": "left",
+                            "clickCount": 1,
+                        },
+                    )
+                return
+            except Exception:
+                _log.debug("bounding_box_click: CDP dispatchMouseEvent failed, fallback to .click()")
+
         elements[0].click()
+
+    def cdp_click_absolute(self, x: float, y: float) -> None:
+        """Send an absolute-coordinate CDP click."""
+        for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+            self._driver.execute_cdp_cmd(
+                "Input.dispatchMouseEvent",
+                {"type": event_type, "x": x, "y": y, "button": "left", "clickCount": 1},
+            )
+
+    def _hesitate_before_submit(self) -> None:
+        """Hover briefly around COMPLETE PURCHASE before clicking."""
+        if self._engine is not None and not self._engine.is_delay_permitted():
+            return
+
+        if self._persona is not None:
+            raw = self._persona.get_hesitation_delay()
+        else:
+            raw = self._get_rng().uniform(3.0, 5.0)
+
+        delay = max(3.0, min(raw, 5.0))
+
+        elements = self.find_elements(SEL_COMPLETE_PURCHASE)
+        if elements:
+            try:
+                rect = self._driver.execute_script(
+                    "var r=arguments[0].getBoundingClientRect();"
+                    "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                    elements[0],
+                )
+                if rect:
+                    if _ActionChains is None:
+                        raise RuntimeError("ActionChains unavailable")
+                    actions = _ActionChains(self._driver)
+                    rnd = self._get_rng()
+                    for _ in range(4):
+                        actions.move_by_offset(int(rnd.uniform(-8, 8)), int(rnd.uniform(-3, 3)))
+                    actions.perform()
+            except Exception:
+                _log.debug("_hesitate_before_submit: hover failed, still sleeping")
+
+        _log.debug("_hesitate_before_submit: sleeping %.3fs", delay)
+        time.sleep(delay)
 
     # ── Navigation ──────────────────────────────────────────────────────────
 
@@ -272,6 +456,9 @@ class GivexDriver:
             billing_profile: BillingProfile with ``first_name`` and
                 ``last_name`` (used as recipient/sender name).
         """
+        if self._sm is not None:
+            self._sm.transition("FILLING_FORM")
+        self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         self._cdp_type_field(SEL_GREETING_MSG, _random_greeting())
         self._cdp_type_field(SEL_AMOUNT_INPUT, str(task.amount))
@@ -344,9 +531,13 @@ class GivexDriver:
                 ``exp_month``, ``exp_year``, and ``cvv``.
             billing_profile: BillingProfile with address details.
         """
+        if self._sm is not None:
+            self._sm.transition("PAYMENT")
         # Card section
         self._cdp_type_field(SEL_CARD_NAME, card_info.card_name)
         self._cdp_type_field(SEL_CARD_NUMBER, card_info.card_number)
+        if self._bio is not None and _inject_card_entry_delays is not None:
+            _inject_card_entry_delays(self._bio, engine=self._engine)
         self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
         self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
         self._cdp_type_field(SEL_CARD_CVV, card_info.cvv)
@@ -393,7 +584,8 @@ class GivexDriver:
         )
 
     def submit_purchase(self) -> None:
-        """Click the Complete Purchase button."""
+        """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5)."""
+        self._hesitate_before_submit()
         self.bounding_box_click(SEL_COMPLETE_PURCHASE)
 
     def clear_card_fields(self) -> None:
@@ -483,6 +675,8 @@ class GivexDriver:
             raise ValueError(
                 "billing_profile.email must not be None for guest checkout"
             )
+        if self._persona is not None:
+            _log.debug("run_full_cycle: persona_type=%s", self._persona.persona_type)
         self.preflight_geo_check()
         self.navigate_to_egift()
         self.fill_egift_form(task, billing_profile)

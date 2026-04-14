@@ -243,6 +243,36 @@ def iter_import_targets(node):
         yield ImportTarget(name=node.module, is_wildcard=False)
 
 
+def _collect_guarded_import_ids(tree: ast.AST) -> set:
+    """Return IDs of Import/ImportFrom nodes inside try/except ImportError blocks.
+
+    These represent optional/graceful-degradation imports.  They are allowed
+    to cross module boundaries because the importing module degrades safely
+    when the dependency is absent (the except block typically assigns None).
+    """
+    guarded: set = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        has_import_error_guard = any(
+            isinstance(h, ast.ExceptHandler) and (
+                h.type is None
+                or (
+                    isinstance(h.type, ast.Name)
+                    and h.type.id in ("ImportError", "Exception")
+                )
+            )
+            for h in node.handlers
+        )
+        if not has_import_error_guard:
+            continue
+        for stmt in node.body:
+            for child in ast.walk(stmt):
+                if isinstance(child, (ast.Import, ast.ImportFrom)):
+                    guarded.add(id(child))
+    return guarded
+
+
 def check_import_statements(
     current_module,
     current_package,
@@ -252,8 +282,11 @@ def check_import_statements(
     errors,
     repo_root,
 ):
+    guarded_import_ids = _collect_guarded_import_ids(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
+            if id(node) in guarded_import_ids:
+                continue
             for alias in node.names:
                 # Block spec imports from modules/
                 if alias.name == "spec" or alias.name.startswith("spec."):
@@ -266,6 +299,8 @@ def check_import_statements(
                     rel_path = os.path.relpath(file_path, repo_root)
                     errors.append((rel_path, node.lineno, f"imports {alias.name}"))
         elif isinstance(node, ast.ImportFrom):
+            if id(node) in guarded_import_ids:
+                continue
             if node.level > 0:
                 targets = resolve_relative_targets(current_package, node)
                 for target in targets:

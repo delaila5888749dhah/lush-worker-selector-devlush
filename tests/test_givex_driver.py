@@ -709,5 +709,414 @@ class TestPreflightGeoCheck(unittest.TestCase):
         selenium.get.assert_called_once_with(URL_GEO_CHECK)
 
 
+# ── Helpers for persona-aware tests ─────────────────────────────────────────
+
+
+def _make_persona(seed: int = 42):
+    """Build a real PersonaProfile with fixed seed for deterministic tests."""
+    from modules.delay.persona import PersonaProfile  # noqa: PLC0415
+    return PersonaProfile(seed)
+
+
+# ── TestSmoothScrollTo ──────────────────────────────────────────────────────
+
+
+class TestSmoothScrollTo(unittest.TestCase):
+    """_smooth_scroll_to scrolls into view and uses persona delay."""
+
+    def test_smooth_scroll_to_calls_execute_script_with_scrollIntoView(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        gd = GivexDriver(selenium)
+        with patch("time.sleep"):
+            gd._smooth_scroll_to(SEL_GREETING_MSG)
+        selenium.execute_script.assert_called_once()
+        script_arg = selenium.execute_script.call_args[0][0]
+        self.assertIn("scrollIntoView", script_arg)
+        self.assertIn("behavior: 'smooth'", script_arg)
+
+    def test_smooth_scroll_to_noop_when_element_missing(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        gd = GivexDriver(selenium)
+        gd._smooth_scroll_to(SEL_GREETING_MSG)
+        selenium.execute_script.assert_not_called()
+
+    def test_smooth_scroll_to_uses_persona_click_delay(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = _make_persona(42)
+        expected_delay = persona.get_click_delay()
+        # Create fresh persona with same seed to get deterministic delay value
+        persona2 = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona2)
+        sleep_calls = []
+        with patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
+            gd._smooth_scroll_to(SEL_GREETING_MSG)
+        self.assertTrue(sleep_calls)
+        self.assertAlmostEqual(sleep_calls[-1], expected_delay, places=10)
+
+    def test_smooth_scroll_to_uses_default_delay_without_persona(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        gd = GivexDriver(selenium)
+        sleep_calls = []
+        with patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
+            gd._smooth_scroll_to(SEL_GREETING_MSG)
+        self.assertTrue(sleep_calls)
+        self.assertAlmostEqual(sleep_calls[-1], 0.15)
+
+
+# ── TestBoundingBoxClickCoordinates ─────────────────────────────────────────
+
+
+class TestBoundingBoxClickCoordinates(unittest.TestCase):
+    """bounding_box_click uses CDP dispatchMouseEvent with persona offset."""
+
+    def _rect(self):
+        return {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
+
+    def test_bounding_box_click_uses_cdp_dispatchMouseEvent(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = self._rect()
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("time.sleep"):
+            gd.bounding_box_click("#some-el")
+        cdp_calls = [c for c in selenium.execute_cdp_cmd.call_args_list]
+        self.assertEqual(len(cdp_calls), 3)
+        event_types = [c[0][1]["type"] for c in cdp_calls]
+        self.assertEqual(event_types, ["mouseMoved", "mousePressed", "mouseReleased"])
+
+    def test_bounding_box_click_offset_within_bounds(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        rect = self._rect()
+        selenium.execute_script.return_value = rect
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        cx = rect["left"] + rect["width"] / 2
+        cy = rect["top"] + rect["height"] / 2
+        x_vals, y_vals = [], []
+        def capture_cdp(cmd, params):
+            x_vals.append(params["x"])
+            y_vals.append(params["y"])
+        selenium.execute_cdp_cmd.side_effect = capture_cdp
+        with patch("time.sleep"):
+            gd.bounding_box_click("#some-el")
+        self.assertTrue(x_vals, "CDP should have been called")
+        self.assertGreaterEqual(x_vals[0], cx - 15)
+        self.assertLessEqual(x_vals[0], cx + 15)
+        self.assertGreaterEqual(y_vals[0], cy - 5)
+        self.assertLessEqual(y_vals[0], cy + 5)
+
+    def test_bounding_box_click_falls_back_to_plain_click_when_cdp_fails(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = self._rect()
+        selenium.execute_cdp_cmd.side_effect = RuntimeError("CDP unavailable")
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("time.sleep"):
+            gd.bounding_box_click("#some-el")
+        element.click.assert_called_once()
+
+    def test_bounding_box_click_falls_back_when_no_rect(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.side_effect = RuntimeError("script error")
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("time.sleep"):
+            gd.bounding_box_click("#some-el")
+        element.click.assert_called_once()
+
+    def test_bounding_box_click_night_mode_widens_offset(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = self._rect()
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        cdp_calls = []
+        selenium.execute_cdp_cmd.side_effect = lambda cmd, params: cdp_calls.append(params.copy())
+        with patch.object(gd._temporal, "get_time_state", return_value="NIGHT"), \
+             patch("time.sleep"):
+            gd.bounding_box_click("#some-el")
+        self.assertGreater(len(cdp_calls), 0, "CDP should have been called in NIGHT mode")
+        # Coordinates must still land within element bounds (clamped)
+        rect = self._rect()
+        x = cdp_calls[0]["x"]
+        y = cdp_calls[0]["y"]
+        self.assertGreaterEqual(x, rect["left"])
+        self.assertLessEqual(x, rect["left"] + rect["width"])
+        self.assertGreaterEqual(y, rect["top"])
+        self.assertLessEqual(y, rect["top"] + rect["height"])
+
+
+# ── TestGhostMoveTo ──────────────────────────────────────────────────────────
+
+
+class TestGhostMoveTo(unittest.TestCase):
+    """_ghost_move_to generates a Bézier path and moves the mouse along it."""
+
+    def test_ghost_move_to_calls_move_by_offset_multiple_times(self):
+        """ActionChains.move_by_offset is called ≥ 4 times when ActionChains is available."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        mock_actions = MagicMock()
+        mock_actions.move_by_offset.return_value = mock_actions
+        mock_actions.perform.return_value = None
+        mock_actions_cls = MagicMock(return_value=mock_actions)
+        with patch("time.sleep"), \
+             patch("modules.cdp.driver._ActionChains", mock_actions_cls):
+            gd._ghost_move_to("#some-el")
+        self.assertGreaterEqual(mock_actions.move_by_offset.call_count, 4)
+
+    def test_ghost_move_to_noop_when_action_chains_unavailable(self):
+        """Without ActionChains, _ghost_move_to silently returns (no-op)."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.return_value = {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
+        gd = GivexDriver(selenium)
+        # _ActionChains is None in test environment (selenium not installed)
+        with patch("time.sleep"):
+            gd._ghost_move_to("#some-el")  # Should not raise
+
+    def test_ghost_move_to_noop_when_element_missing(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        gd = GivexDriver(selenium)
+        gd._ghost_move_to("#missing")
+        selenium.execute_script.assert_not_called()
+
+    def test_ghost_move_to_noop_when_execute_script_fails(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        selenium.execute_script.side_effect = RuntimeError("script error")
+        gd = GivexDriver(selenium)
+        # Should not raise
+        gd._ghost_move_to("#some-el")
+
+
+# ── TestHesitateBeforeSubmit ─────────────────────────────────────────────────
+
+
+class TestHesitateBeforeSubmit(unittest.TestCase):
+    """_hesitate_before_submit sleeps 3-5s with hard clamps."""
+
+    def test_hesitate_sleeps_between_3_and_5_seconds(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        sleep_vals = []
+        with patch("time.sleep", side_effect=lambda d: sleep_vals.append(d)):
+            gd._hesitate_before_submit()
+        self.assertTrue(sleep_vals, "time.sleep should have been called")
+        val = sleep_vals[-1]
+        self.assertGreaterEqual(val, 3.0)
+        self.assertLessEqual(val, 5.0)
+
+    def test_hesitate_clamps_to_5_seconds_max(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        persona = _make_persona(42)
+        persona.get_hesitation_delay = MagicMock(return_value=999.0)
+        gd = GivexDriver(selenium, persona=persona)
+        sleep_vals = []
+        with patch("time.sleep", side_effect=lambda d: sleep_vals.append(d)):
+            gd._hesitate_before_submit()
+        self.assertAlmostEqual(sleep_vals[-1], 5.0)
+
+    def test_hesitate_clamps_to_3_seconds_min(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        persona = _make_persona(42)
+        persona.get_hesitation_delay = MagicMock(return_value=0.1)
+        gd = GivexDriver(selenium, persona=persona)
+        sleep_vals = []
+        with patch("time.sleep", side_effect=lambda d: sleep_vals.append(d)):
+            gd._hesitate_before_submit()
+        self.assertAlmostEqual(sleep_vals[-1], 3.0)
+
+    def test_hesitate_skips_when_engine_not_permitted(self):
+        selenium = _make_driver()
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        gd._engine.is_delay_permitted = MagicMock(return_value=False)
+        with patch("time.sleep") as mock_sleep:
+            gd._hesitate_before_submit()
+        mock_sleep.assert_not_called()
+
+    def test_hesitate_without_persona_uses_random_in_range(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = []
+        gd = GivexDriver(selenium)
+        sleep_vals = []
+        with patch("time.sleep", side_effect=lambda d: sleep_vals.append(d)):
+            gd._hesitate_before_submit()
+        self.assertTrue(sleep_vals)
+        val = sleep_vals[-1]
+        self.assertGreaterEqual(val, 3.0)
+        self.assertLessEqual(val, 5.0)
+
+
+# ── TestCdpClickAbsolute ─────────────────────────────────────────────────────
+
+
+class TestCdpClickAbsolute(unittest.TestCase):
+    """cdp_click_absolute sends three CDP mouse events at exact coordinates."""
+
+    def test_cdp_click_absolute_sends_three_mouse_events(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.cdp_click_absolute(100.0, 200.0)
+        self.assertEqual(selenium.execute_cdp_cmd.call_count, 3)
+
+    def test_cdp_click_absolute_passes_correct_coordinates(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.cdp_click_absolute(123.5, 456.7)
+        calls = selenium.execute_cdp_cmd.call_args_list
+        event_types = [c[0][1]["type"] for c in calls]
+        self.assertEqual(event_types, ["mouseMoved", "mousePressed", "mouseReleased"])
+        for c in calls:
+            params = c[0][1]
+            self.assertAlmostEqual(params["x"], 123.5)
+            self.assertAlmostEqual(params["y"], 456.7)
+            self.assertEqual(params["button"], "left")
+            self.assertEqual(params["clickCount"], 1)
+
+
+# ── TestSubmitPurchaseHesitates ──────────────────────────────────────────────
+
+
+class TestSubmitPurchaseHesitates(unittest.TestCase):
+    """submit_purchase calls _hesitate_before_submit before bounding_box_click."""
+
+    def test_submit_purchase_calls_hesitate_before_click(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        call_log = []
+        with patch.object(gd, "_hesitate_before_submit", side_effect=lambda: call_log.append("hesitate")), \
+             patch.object(gd, "bounding_box_click", side_effect=lambda s: call_log.append("click")):
+            gd.submit_purchase()
+        self.assertEqual(call_log, ["hesitate", "click"])
+
+    def test_submit_purchase_exception_from_hesitate_propagates(self):
+        """If _hesitate_before_submit raises, the exception propagates (bounding_box_click not called)."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_hesitate_before_submit", side_effect=RuntimeError("boom")), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            with self.assertRaises(RuntimeError):
+                gd.submit_purchase()
+        mock_click.assert_not_called()
+
+
+# ── TestFillEgiftFormScrolls ─────────────────────────────────────────────────
+
+
+class TestFillEgiftFormScrolls(unittest.TestCase):
+    """fill_egift_form calls _smooth_scroll_to before any field typing."""
+
+    def test_fill_egift_form_calls_smooth_scroll_first(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        gd = GivexDriver(selenium)
+        call_log = []
+
+        with patch.object(gd, "_smooth_scroll_to", side_effect=lambda s: call_log.append(("scroll", s))), \
+             patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch("time.sleep"):
+            original_type = gd._cdp_type_field
+            def tracking_type(sel, val):
+                call_log.append(("type", sel))
+                original_type(sel, val)
+            gd._cdp_type_field = tracking_type
+            gd.fill_egift_form(_make_task(), _make_billing())
+
+        self.assertGreater(len(call_log), 1)
+        self.assertEqual(call_log[0], ("scroll", SEL_GREETING_MSG))
+        type_entries = [e for e in call_log if e[0] == "type"]
+        self.assertTrue(type_entries, "send_keys calls expected after scroll")
+
+    def test_fill_egift_form_with_persona_transitions_state(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch.object(gd._sm, "transition") as mock_transition, \
+             patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch("time.sleep"):
+            gd.fill_egift_form(_make_task(), _make_billing())
+        mock_transition.assert_any_call("FILLING_FORM")
+
+
+# ── TestFillPaymentBiometrics ────────────────────────────────────────────────
+
+
+class TestFillPaymentBiometrics(unittest.TestCase):
+    """fill_payment_and_billing injects card-entry biometric delays when bio is available."""
+
+    def test_fill_payment_calls_inject_card_entry_delays_when_bio_available(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        task = _make_task()
+        billing = _make_billing()
+        with patch.object(gd, "_cdp_select_option"), \
+             patch("modules.cdp.driver._inject_card_entry_delays") as mock_inject:
+            gd.fill_payment_and_billing(task.primary_card, billing)
+        mock_inject.assert_called_once_with(gd._bio, engine=gd._engine)
+
+    def test_fill_payment_with_persona_transitions_payment_state(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        # Transition to FILLING_FORM first so PAYMENT is a valid next state
+        gd._sm.transition("FILLING_FORM")
+        task = _make_task()
+        billing = _make_billing()
+        with patch.object(gd, "_cdp_select_option"), \
+             patch("modules.cdp.driver._inject_card_entry_delays"):
+            with patch.object(gd._sm, "transition") as mock_transition:
+                gd.fill_payment_and_billing(task.primary_card, billing)
+        mock_transition.assert_any_call("PAYMENT")
+
+    def test_fill_payment_no_biometrics_without_persona(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = _make_billing()
+        with patch.object(gd, "_cdp_select_option"), \
+             patch("modules.cdp.driver._inject_card_entry_delays") as mock_inject:
+            gd.fill_payment_and_billing(task.primary_card, billing)
+        mock_inject.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
