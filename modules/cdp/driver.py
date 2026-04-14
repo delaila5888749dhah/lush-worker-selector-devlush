@@ -120,7 +120,7 @@ class GivexDriver:
 
     Args:
         driver: A Selenium WebDriver instance (or test double).
-        persona: Optional PersonaProfile for behaviour simulation.  When
+        persona: Optional PersonaProfile for behavior simulation.  When
             ``None`` (default) the driver operates in legacy mode using
             ``secrets``-based randomness and no delay injection — all 36
             existing tests rely on this default.
@@ -142,6 +142,13 @@ class GivexDriver:
             self._bio = None
 
     # ── Low-level helpers ────────────────────────────────────────────────────
+
+    def _get_rng(self):
+        """Return the persona random generator, or a new SystemRandom if unavailable."""
+        if self._rnd is not None:
+            return self._rnd
+        import random as _random  # noqa: PLC0415
+        return _random.SystemRandom()
 
     def find_elements(self, selector: str) -> list:
         """Return all elements matching *selector* (CSS, comma-separated OK).
@@ -285,10 +292,7 @@ class GivexDriver:
             _log.debug("_ghost_move_to: getBoundingClientRect skipped")
             return
 
-        rnd = self._rnd
-        if rnd is None:
-            import random as _random  # noqa: PLC0415
-            rnd = _random.SystemRandom()
+        rnd = self._get_rng()
 
         n_points = int(rnd.uniform(4, 8))
         points = []
@@ -410,8 +414,7 @@ class GivexDriver:
         if self._persona is not None:
             raw = self._persona.get_hesitation_delay()
         else:
-            import random as _r  # noqa: PLC0415
-            raw = _r.uniform(3.0, 5.0)
+            raw = self._get_rng().uniform(3.0, 5.0)
 
         delay = max(3.0, min(raw, 5.0))
 
@@ -427,10 +430,7 @@ class GivexDriver:
                     if _ActionChains is None:
                         raise RuntimeError("ActionChains unavailable")
                     actions = _ActionChains(self._driver)
-                    rnd = self._rnd
-                    if rnd is None:
-                        import random as _r2  # noqa: PLC0415
-                        rnd = _r2.SystemRandom()
+                    rnd = self._get_rng()
                     for _ in range(4):
                         actions.move_by_offset(int(rnd.uniform(-8, 8)), int(rnd.uniform(-3, 3)))
                     actions.perform()
