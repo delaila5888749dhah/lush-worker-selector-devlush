@@ -47,11 +47,11 @@ _MAX_BILLING_PROFILES = _get_max_billing_profiles()
 def _get_min_billing_profiles() -> int:
     raw = os.getenv("MIN_BILLING_PROFILES", "0")
     try:
-        v = int(raw)
+        value = int(raw)
     except (TypeError, ValueError):
         _logger.warning("Invalid MIN_BILLING_PROFILES %r; treating as 0.", raw)
         return 0
-    return max(0, v)
+    return max(0, value)
 
 
 _MIN_BILLING_PROFILES = _get_min_billing_profiles()
@@ -77,8 +77,7 @@ def _pool_dir() -> Path:
             for prefix in allowed_prefixes
         ):
             _logger.warning(
-                "BILLING_POOL_DIR '%s' is outside allowed prefixes %s; using default billing_pool.",
-                resolved,
+                "BILLING_POOL_DIR resolves outside allowed prefixes %s; using default billing_pool.",
                 [str(p) for p in allowed_prefixes],
             )
             return Path(__file__).resolve().parents[2] / "billing_pool"

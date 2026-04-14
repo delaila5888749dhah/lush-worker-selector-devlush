@@ -140,28 +140,28 @@ class BillingHardeningTests(unittest.TestCase):
         """Non-UTF8 .txt files are skipped; valid files still load; warning is logged."""
         with tempfile.TemporaryDirectory() as tmpdir:
             bad = os.path.join(tmpdir, "bad.txt")
-            with open(bad, "wb") as fh:
-                fh.write(b"First\xff|Last|1 St|City|NY|10001|2125550001|a@e.com\n")
+            with open(bad, "wb") as handle:
+                handle.write(b"First\xff|Last|1 St|City|NY|10001|2125550001|a@e.com\n")
             good = os.path.join(tmpdir, "good.txt")
-            with open(good, "w", encoding="utf-8") as fh:
-                fh.write("Alice|Smith|2 St|City|NY|10002|2125550002|b@e.com\n")
+            with open(good, "w", encoding="utf-8") as handle:
+                handle.write("Alice|Smith|2 St|City|NY|10002|2125550002|b@e.com\n")
             with patch.dict(os.environ, {"BILLING_POOL_DIR": tmpdir}):
-                with self.assertLogs("modules.billing.main", level="WARNING") as cm:
+                with self.assertLogs("modules.billing.main", level="WARNING") as logs:
                     result = billing._read_profiles_from_disk()
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0].first_name, "Alice")
-            self.assertTrue(any("bad.txt" in m for m in cm.output))
+            self.assertTrue(any("bad.txt" in m for m in logs.output))
 
     def test_non_utf8_file_skipped_counter_in_summary_log(self):
         """Load summary log shows skipped=1 when one file has a decode error."""
         with tempfile.TemporaryDirectory() as tmpdir:
             bad = os.path.join(tmpdir, "bad.txt")
-            with open(bad, "wb") as fh:
-                fh.write(b"\xff\xfe bad data\n")
+            with open(bad, "wb") as handle:
+                handle.write(b"\xff\xfe bad data\n")
             with patch.dict(os.environ, {"BILLING_POOL_DIR": tmpdir}):
-                with self.assertLogs("modules.billing.main", level="INFO") as cm:
+                with self.assertLogs("modules.billing.main", level="INFO") as logs:
                     billing._read_profiles_from_disk()
-            summary = next((m for m in cm.output if "scanned=" in m), None)
+            summary = next((m for m in logs.output if "scanned=" in m), None)
             self.assertIsNotNone(summary, "Expected a load summary log line")
             self.assertIn("skipped=1", summary)
 
@@ -226,13 +226,13 @@ class BillingHardeningTests(unittest.TestCase):
         """_read_profiles_from_disk always emits a load-summary INFO log."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "pool.txt")
-            with open(path, "w") as fh:
-                fh.write("Alice|Smith|1 St|City|NY|10001|2125550001|a@e.com\n")
-                fh.write("bad-line-no-pipes\n")
+            with open(path, "w") as handle:
+                handle.write("Alice|Smith|1 St|City|NY|10001|2125550001|a@e.com\n")
+                handle.write("bad-line-no-pipes\n")
             with patch.dict(os.environ, {"BILLING_POOL_DIR": tmpdir}):
-                with self.assertLogs("modules.billing.main", level="INFO") as cm:
+                with self.assertLogs("modules.billing.main", level="INFO") as logs:
                     billing._read_profiles_from_disk()
-        summary = next((m for m in cm.output if "scanned=" in m), None)
+        summary = next((m for m in logs.output if "scanned=" in m), None)
         self.assertIsNotNone(summary, "Expected load summary log")
         self.assertIn("accepted=1", summary)
         self.assertIn("rejected=1", summary)
