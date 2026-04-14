@@ -266,7 +266,8 @@ def select_profile(zip_code: str | int | None = None) -> BillingProfile:
             return profile
 
         profile = _profiles[index]
+        del _profiles[index]
         if profile.phone is None or profile.email is None:
             profile = _fill_missing(profile)
-            _profiles[index] = profile
+        _profiles.append(profile)
         return profile
