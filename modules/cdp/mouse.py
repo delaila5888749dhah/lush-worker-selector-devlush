@@ -77,7 +77,9 @@ class GhostCursor:
     """
 
     def __init__(
-            self, driver: object, rnd,
+            self,
+            driver: object,
+            rnd,
             viewport_width: int = 1280,
             viewport_height: int = 720) -> None:
         self._driver = driver
