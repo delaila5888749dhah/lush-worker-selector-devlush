@@ -24,6 +24,7 @@ from modules.cdp.main import (
     detect_page_state,
     fill_card,
     fill_billing,
+    fill_payment_and_billing,
     clear_card_fields,
 )
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
@@ -257,6 +258,38 @@ class FillBillingTests(unittest.TestCase):
     def test_raises_runtime_error_without_driver(self):
         with self.assertRaises(RuntimeError):
             fill_billing(MagicMock(), "unregistered")
+
+
+# ---------------------------------------------------------------------------
+# fill_payment_and_billing() delegation tests
+# ---------------------------------------------------------------------------
+
+class FillPaymentAndBillingTests(unittest.TestCase):
+    """Tests for fill_payment_and_billing() delegation to the registered driver."""
+
+    def setUp(self):
+        """Register a mock driver for worker 'w1'."""
+        _reset_cdp()
+        self.driver = MagicMock()
+        register_driver("w1", self.driver)
+
+    def tearDown(self):
+        """Clear internal registries after each test."""
+        _reset_cdp()
+
+    def test_delegates_to_driver(self):
+        """fill_payment_and_billing() forwards card_info and billing_profile to the driver."""
+        card_info = MagicMock()
+        billing_profile = MagicMock()
+        fill_payment_and_billing(card_info, billing_profile, "w1")
+        self.driver.fill_payment_and_billing.assert_called_once_with(
+            card_info, billing_profile
+        )
+
+    def test_raises_runtime_error_without_driver(self):
+        """RuntimeError raised when no driver is registered for the worker."""
+        with self.assertRaises(RuntimeError):
+            fill_payment_and_billing(MagicMock(), MagicMock(), "unregistered")
 
 
 # ---------------------------------------------------------------------------

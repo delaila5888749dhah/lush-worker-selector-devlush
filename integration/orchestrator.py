@@ -523,8 +523,12 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     profile = billing.select_profile(zip_code)
     watchdog.enable_network_monitor(worker_id)
     try:
-        _cdp_call_with_timeout(cdp.fill_billing, profile, worker_id=worker_id)
-        _cdp_call_with_timeout(cdp.fill_card, task.primary_card, worker_id=worker_id)
+        _cdp_call_with_timeout(
+            cdp.fill_payment_and_billing,
+            task.primary_card,
+            profile,
+            worker_id=worker_id,
+        )
         # Payment-submitted checkpoint: persist task_id before waiting for total.
         # If the process crashes here, the submitted state records that payment was sent.
         _task_id = getattr(task, "task_id", None)

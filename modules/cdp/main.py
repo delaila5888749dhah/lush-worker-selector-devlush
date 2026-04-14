@@ -156,6 +156,25 @@ def fill_billing(billing_profile, worker_id: str) -> None:
     _get_driver(worker_id).fill_billing(billing_profile)
 
 
+def fill_payment_and_billing(card_info, billing_profile, worker_id: str) -> None:
+    """Fill both card payment and billing fields in a single call.
+
+    Delegates to ``GivexDriver.fill_payment_and_billing(card_info,
+    billing_profile)``.  This is the preferred API; the separate
+    ``fill_card`` / ``fill_billing`` helpers are kept for backward
+    compatibility only.
+
+    Args:
+        card_info: CardInfo instance with card number, expiry, and CVV.
+        billing_profile: BillingProfile instance with address and contact info.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).fill_payment_and_billing(card_info, billing_profile)
+
+
 def clear_card_fields(worker_id: str) -> None:
     """Clear card form fields via the registered driver.
 

@@ -153,8 +153,26 @@ class RunPaymentStepTests(unittest.TestCase):
         mock_billing.select_profile.assert_called_once_with("90210")
 
 
+    def test_fill_payment_and_billing_called_with_card_and_profile(self):
+        """run_payment_step() must use the new single-call API, not fill_card()."""
+        task = _make_task()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            profile = MagicMock()
+            mock_billing.select_profile.return_value = profile
+            mock_watchdog.wait_for_total.return_value = 25.0
+            mock_fsm.get_current_state_for_worker.return_value = None
+            run_payment_step(task)
+        mock_cdp.fill_payment_and_billing.assert_called_once_with(
+            task.primary_card, profile, worker_id="default"
+        )
 
-    def test_fill_card_called_with_primary_card(self):
+    def test_fill_card_not_called_during_payment_step(self):
+        """Deprecated fill_card() must never be called by run_payment_step()."""
         task = _make_task()
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -166,7 +184,7 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 25.0
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task)
-        mock_cdp.fill_card.assert_called_once_with(task.primary_card, worker_id="default")
+        mock_cdp.fill_card.assert_not_called()
 
     def test_raises_session_flagged_on_watchdog_timeout(self):
         with (
