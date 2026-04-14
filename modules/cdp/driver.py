@@ -32,8 +32,9 @@ try:
     from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
     from modules.delay.wrapper import inject_card_entry_delays as _inject_card_entry_delays  # type: ignore
 except ImportError:
-    (_BiometricProfile, _TemporalModel, _BehaviorStateMachine,
-     _DelayEngine, _inject_card_entry_delays) = (None, None, None, None, None)
+    _BiometricProfile = _TemporalModel = None
+    _BehaviorStateMachine = _DelayEngine = None
+    _inject_card_entry_delays = None
 
 _log = logging.getLogger(__name__)
 
@@ -352,8 +353,13 @@ class GivexDriver:
                 for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
                     self._driver.execute_cdp_cmd(
                         "Input.dispatchMouseEvent",
-                        {"type": event_type, "x": abs_x, "y": abs_y,
-                         "button": "left", "clickCount": 1},
+                        {
+                            "type": event_type,
+                            "x": abs_x,
+                            "y": abs_y,
+                            "button": "left",
+                            "clickCount": 1,
+                        },
                     )
                 return
             except Exception:
