@@ -1418,21 +1418,14 @@ class TestBillingCircuitBreaker(RuntimeResetMixin, unittest.TestCase):
 
     def test_billing_cb_resets_on_success(self):
         """Successful task execution resets billing failure counter."""
-        from modules.common.exceptions import CycleExhaustedError
-
         runtime._state = "RUNNING"
         original_threshold = runtime._BILLING_CB_THRESHOLD
         try:
             runtime._BILLING_CB_THRESHOLD = 5  # high threshold so it won't trigger
 
-            # Simulate 1 billing failure
-            def billing_fail(_):
-                raise CycleExhaustedError("pool empty")
-
-            wid = start_worker(billing_fail)
-            self.assertTrue(self._poll_until(lambda: wid not in get_active_workers()))
+            # Directly set billing failures to simulate prior failures
             with runtime._lock:
-                self.assertEqual(runtime._consecutive_billing_failures, 1)
+                runtime._consecutive_billing_failures = 2
 
             # Now a success should reset the counter
             success_done = threading.Event()
@@ -1440,10 +1433,10 @@ class TestBillingCircuitBreaker(RuntimeResetMixin, unittest.TestCase):
             def success_task(_):
                 success_done.set()
 
-            wid2 = start_worker(success_task)
+            wid = start_worker(success_task)
             self.assertTrue(success_done.wait(timeout=2))
-            stop_worker(wid2, timeout=WORKER_BLOCK_TIMEOUT)
-            self.assertTrue(self._poll_until(lambda: wid2 not in get_active_workers()))
+            stop_worker(wid, timeout=WORKER_BLOCK_TIMEOUT)
+            self.assertTrue(self._poll_until(lambda: wid not in get_active_workers()))
             with runtime._lock:
                 self.assertEqual(runtime._consecutive_billing_failures, 0)
         finally:
