@@ -11,7 +11,7 @@ import threading
 from modules.common.exceptions import InvalidStateError, InvalidTransitionError
 from modules.common.types import State
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
 

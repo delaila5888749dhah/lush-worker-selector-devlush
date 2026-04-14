@@ -1,3 +1,5 @@
+"""Unit tests for the FSM module and legacy warning behavior."""
+
 import logging
 import logging.handlers
 import threading
