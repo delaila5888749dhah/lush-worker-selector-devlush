@@ -279,6 +279,7 @@ class ZipAffinityTests(unittest.TestCase):
         results = [None] * num_threads
 
         def worker(idx):
+            """Run one synchronized same-zip selection."""
             barrier.wait()
             results[idx] = billing.select_profile("10001").first_name
 
@@ -289,7 +290,11 @@ class ZipAffinityTests(unittest.TestCase):
             thread.join(timeout=5)
         self.assertFalse(any(t.is_alive() for t in threads), "Some threads timed out")
 
-        self.assertEqual(len(set(results)), num_threads, f"Expected {num_threads} distinct profiles, got {results}")
+        self.assertEqual(
+            len(set(results)),
+            num_threads,
+            f"Expected {num_threads} distinct profiles, got {results}",
+        )
 
     def test_non_zip_round_robin_unaffected(self):
         """Non-zip round-robin still works correctly after zip-affinity fix."""
