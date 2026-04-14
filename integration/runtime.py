@@ -676,7 +676,7 @@ def reset():
     behavior.reset()
     rollout.reset()
     monitor.reset()
-    fsm.reset_states()
+    fsm.reset_states()  # intentional: legacy global reset for test isolation
     fsm.reset_registry()
     metrics_exporter.reset()
     log_sink.reset()

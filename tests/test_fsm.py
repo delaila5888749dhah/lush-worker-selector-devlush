@@ -1,3 +1,7 @@
+"""Unit tests for the FSM module and legacy warning behavior."""
+
+import logging
+import logging.handlers
 import threading
 import unittest
 
@@ -212,6 +216,52 @@ class FSMConcurrentInitializationTests(unittest.TestCase):
             self.assertEqual(s.name, state_name)
             # Re-initialize before the next iteration so we always start fresh.
             initialize_for_worker(worker_id)
+
+class FSMLegacyWarnTests(unittest.TestCase):
+    """Verify _legacy_warn decorator emits warnings for global API calls."""
+
+    def setUp(self):
+        with self.assertLogs("modules.fsm.main", level="WARNING"):
+            reset_states()
+
+    def test_transition_to_emits_warning(self):
+        """Legacy transition_to() must emit a deprecation WARNING."""
+        with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
+            add_new_state("success")
+        self.assertTrue(
+            any("add_new_state" in msg for msg in log_ctx.output),
+            "Expected WARNING for add_new_state",
+        )
+        with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
+            transition_to("success")
+        self.assertTrue(
+            any("transition_to" in msg for msg in log_ctx.output),
+            "Expected WARNING for transition_to",
+        )
+
+    def test_reset_states_does_not_raise_only_warns(self):
+        """Legacy reset_states() must warn but not raise."""
+        with self.assertLogs("modules.fsm.main", level="WARNING") as log_ctx:
+            reset_states()
+        self.assertTrue(
+            any("reset_states" in msg for msg in log_ctx.output),
+            "Expected WARNING for reset_states",
+        )
+
+    def test_initialize_for_worker_no_warning(self):
+        """Per-worker initialize_for_worker() must not emit any WARNING."""
+        logger = logging.getLogger("modules.fsm.main")
+        handler = logging.handlers.MemoryHandler(capacity=100)
+        handler.setLevel(logging.WARNING)
+        logger.addHandler(handler)
+        try:
+            initialize_for_worker("w1")
+            handler.flush()
+            self.assertEqual(handler.buffer, [], "Per-worker API should not emit warnings")
+        finally:
+            logger.removeHandler(handler)
+            cleanup_worker("w1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,17 @@
+"""FSM module — finite state machine for worker payment flows.
+
+Legacy global API is deprecated. Use `initialize_for_worker()`, `transition_for_worker()`,
+`get_current_state_for_worker()`, `cleanup_worker()` for production multi-worker usage.
+"""
+import functools
+import inspect
+import logging
 import threading
 
 from modules.common.exceptions import InvalidStateError, InvalidTransitionError
 from modules.common.types import State
+
+_logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
 
@@ -80,6 +90,23 @@ def cleanup_worker(worker_id: str) -> None:
 # ── Legacy global API (backward compat) ────────────────────────
 
 
+def _legacy_warn(func):
+    @functools.wraps(func)
+    def _wrapper(*args, **kwargs):
+        stack = inspect.stack()
+        # stack[0]=_wrapper, stack[1]=decorated func call, stack[2]=actual caller
+        frame = stack[2] if len(stack) > 2 else stack[-1]
+        caller_info = f"{frame.filename}:{frame.lineno} in {frame.function}"
+        _logger.warning(
+            "FSM legacy global API '%s' called — use per-worker API instead. Caller: %s",
+            func.__name__,
+            caller_info,
+        )
+        return func(*args, **kwargs)
+    return _wrapper
+
+
+@_legacy_warn
 def add_new_state(state_name):
     if state_name not in ALLOWED_STATES:
         raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
@@ -91,11 +118,13 @@ def add_new_state(state_name):
         return state
 
 
+@_legacy_warn
 def get_current_state():
     with _states_lock:
         return _current_state
 
 
+@_legacy_warn
 def transition_to(target_state):
     global _current_state
     if target_state not in ALLOWED_STATES:
@@ -107,6 +136,7 @@ def transition_to(target_state):
         return _current_state
 
 
+@_legacy_warn
 def reset_states():
     global _current_state
     with _states_lock:
