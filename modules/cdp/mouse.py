@@ -14,7 +14,7 @@ import time
 _log = logging.getLogger(__name__)
 
 
-def build_path(start, target, rnd, n_points):
+def build_path(start, target, rnd, n_points: int):
     """Generate a Bézier-like waypoint list from *start* to *target*.
 
     Uses linear interpolation with per-point random jitter to simulate
@@ -73,7 +73,7 @@ class GhostCursor:
         target_x: float,
         target_y: float,
         *,
-        n_points=None,
+        n_points=None,  # type: int | None
         click_delay: float = 0.05,
     ) -> None:
         """Move cursor to ``(target_x, target_y)`` via CDP mouseMoved events.

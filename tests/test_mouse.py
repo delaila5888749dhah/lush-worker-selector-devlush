@@ -116,7 +116,7 @@ class TestGhostCursorDispatch(unittest.TestCase):
         self.assertEqual(params["y"], 150.0)
 
     def test_deterministic_waypoints_under_fixed_seed(self):
-        def get_dispatched_coordinates(rnd_seed):
+        def get_dispatched_coordinates(rnd_seed: int):
             driver = MagicMock()
             coords = []
             driver.execute_cdp_cmd.side_effect = lambda _cmd, p: coords.append((p["x"], p["y"]))
