@@ -25,7 +25,7 @@ def _dispatch(drv, el, ch, strict):
         return False
 
 def type_value(driver, element, value, rnd, *, typo_rate=0.0, delays=None,
-               strict=False, field_kind="text"):
+               strict=False, field_kind="text", engine=None):
     eff = min(typo_rate, _FIELD_TYPO_CAP.get(field_kind, _MAX_TYPO_RATE), _MAX_TYPO_RATE)
     res = {"typed_chars": 0, "typos_injected": 0, "corrections_made": 0,
            "mode": "cdp_key", "field_kind": field_kind, "eff_typo_rate": eff}
@@ -40,11 +40,11 @@ def type_value(driver, element, value, rnd, *, typo_rate=0.0, delays=None,
             if w != ch:
                 if _dispatch(driver, element, w, strict):
                     res["typos_injected"] += 1
-                time.sleep(max(0.08, d * 1.5))
+                _h = max(0.08, d * 1.5)
+                time.sleep(engine.accumulate_delay(_h) if engine else _h)
                 if _dispatch(driver, element, _BACKSPACE, strict):
                     res["corrections_made"] += 1
         if _dispatch(driver, element, ch, strict):
             res["typed_chars"] += 1
-        if d > 0:
-            time.sleep(d)
+        if d > 0: time.sleep(engine.accumulate_delay(d) if engine else d)
     return res

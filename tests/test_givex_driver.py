@@ -1420,5 +1420,39 @@ class TestHesitationDistribution(unittest.TestCase):
         self.assertGreater(len(wheel_calls), 0)
 
 
+class TestRealisticTypeFieldPassesEngine(unittest.TestCase):
+    """_realistic_type_field forwards the delay engine to type_value."""
+
+    def test_engine_kwarg_passed_to_type_value(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = _make_persona(42)
+        gd = GivexDriver(selenium, persona=persona)
+        with patch("modules.cdp.driver._type_value") as mock_tv, \
+             patch("time.sleep"):
+            mock_tv.return_value = {"typed_chars": 3, "typos_injected": 0,
+                                    "corrections_made": 0, "mode": "cdp_key"}
+            gd._realistic_type_field("#field", "abc")
+        kwargs = mock_tv.call_args[1]
+        self.assertIn("engine", kwargs)
+        self.assertIs(kwargs["engine"], gd._engine)
+
+    def test_engine_none_when_no_persona(self):
+        """Without persona, engine is None and still passed through."""
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        gd = GivexDriver(selenium)
+        with patch("modules.cdp.driver._type_value") as mock_tv, \
+             patch("time.sleep"):
+            mock_tv.return_value = {"typed_chars": 3, "typos_injected": 0,
+                                    "corrections_made": 0, "mode": "cdp_key"}
+            gd._realistic_type_field("#field", "abc")
+        kwargs = mock_tv.call_args[1]
+        self.assertIn("engine", kwargs)
+        self.assertIsNone(kwargs["engine"])
+
+
 if __name__ == "__main__":
     unittest.main()

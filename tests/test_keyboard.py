@@ -211,5 +211,81 @@ class TestTypeValueStrictMode(unittest.TestCase):
                 type_value(drv, el, "x", _rnd(), strict=False)
 
 
+class TestTypeValueEngineIntegration(unittest.TestCase):
+    """type_value routes delays through engine.accumulate_delay when provided."""
+
+    def _make_engine(self, headroom=7.0):
+        """Return a mock engine with configurable headroom."""
+        eng = MagicMock()
+        remaining = [headroom]
+        def _accum(d):
+            actual = min(d, max(0.0, remaining[0]))
+            remaining[0] -= actual
+            return actual
+        eng.accumulate_delay.side_effect = _accum
+        eng.is_delay_permitted.return_value = True
+        return eng
+
+    def test_engine_accumulates_per_char_delay(self):
+        """Per-character delays are routed through engine.accumulate_delay."""
+        drv = _mock_driver()
+        el = MagicMock()
+        eng = self._make_engine()
+        with patch("time.sleep"):
+            type_value(drv, el, "abc", _rnd(), typo_rate=0.0, engine=eng)
+        # 3 chars × 1 accumulate_delay call each = 3 calls
+        self.assertEqual(eng.accumulate_delay.call_count, 3)
+
+    def test_engine_accumulates_typo_hesitation(self):
+        """Typo hesitation delay also goes through engine.accumulate_delay."""
+        drv = _mock_driver()
+        el = MagicMock()
+        eng = self._make_engine()
+        rnd = _rnd(0)
+        rnd.random = lambda: 0.0  # Force typo on every char
+        with patch("time.sleep"):
+            type_value(drv, el, "a", rnd, typo_rate=1.0,
+                       field_kind="text", engine=eng)
+        # Typo hesitation + per-char delay = at least 2 calls
+        self.assertGreaterEqual(eng.accumulate_delay.call_count, 2)
+
+    def test_engine_headroom_exhausted_stops_sleeping(self):
+        """When engine headroom is exhausted, sleeps receive 0.0."""
+        drv = _mock_driver()
+        el = MagicMock()
+        eng = self._make_engine(headroom=0.0)  # No headroom at all
+        slept = []
+        with patch("time.sleep", side_effect=slept.append):
+            type_value(drv, el, "abc", _rnd(), typo_rate=0.0, engine=eng)
+        # All sleeps should be 0.0 since engine returns 0.0
+        self.assertTrue(all(d == 0.0 for d in slept))
+
+    def test_no_engine_uses_raw_delays(self):
+        """Without engine, delays are used directly (backward compatible)."""
+        drv = _mock_driver()
+        el = MagicMock()
+        delays = [0.1, 0.2]
+        slept = []
+        with patch("time.sleep", side_effect=slept.append):
+            type_value(drv, el, "ab", _rnd(), typo_rate=0.0,
+                       delays=delays, engine=None)
+        self.assertIn(0.1, slept)
+        self.assertIn(0.2, slept)
+
+    def test_engine_partial_headroom_clamps_delay(self):
+        """Engine with limited headroom clamps delay to remaining budget."""
+        drv = _mock_driver()
+        el = MagicMock()
+        eng = self._make_engine(headroom=0.08)  # Only 0.08s left
+        delays = [0.1, 0.1]  # Each requests 0.1s
+        slept = []
+        with patch("time.sleep", side_effect=slept.append):
+            type_value(drv, el, "ab", _rnd(), typo_rate=0.0,
+                       delays=delays, engine=eng)
+        # First gets 0.08 (clamped), second gets 0.0 (exhausted)
+        self.assertAlmostEqual(slept[0], 0.08, places=4)
+        self.assertAlmostEqual(slept[1], 0.0, places=4)
+
+
 if __name__ == "__main__":
     unittest.main()

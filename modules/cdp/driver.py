@@ -248,7 +248,7 @@ class GivexDriver:
         if self._persona and self._temporal:
             tr += self._temporal.get_night_typo_increase()
         dl = (self._bio.generate_4x4_pattern() if self._bio and use_burst and len(val) >= 16 else self._bio.generate_burst_pattern(len(val)) if self._bio else None)
-        _type_value(self._driver, els[0], val, self._get_rng(), typo_rate=tr, delays=dl, strict=self._strict, field_kind=field_kind)
+        _type_value(self._driver, els[0], val, self._get_rng(), typo_rate=tr, delays=dl, strict=self._strict, field_kind=field_kind, engine=self._engine)
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """Select the option matching *value* in a ``<select>`` element.
