@@ -93,12 +93,12 @@ class GhostCursor:
         return self._x, self._y
 
     def move_to(
-        self,
-        target_x: float,
-        target_y: float,
-        *,
-        n_points=None,  # type: int | None
-        click_delay=None,  # type: float | None
+            self,
+            target_x: float,
+            target_y: float,
+            *,
+            n_points=None,  # type: int | None
+            click_delay=None,  # type: float | None
     ) -> None:
         """Move cursor to ``(target_x, target_y)`` via CDP mouseMoved events.
 
