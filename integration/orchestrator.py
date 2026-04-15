@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
+from modules.common.exceptions import SessionFlaggedError
 from modules.billing import main as billing
 from modules.cdp import main as cdp
 from modules.delay.config import CDP_CALL_TIMEOUT as _CDP_CALL_TIMEOUT_CONFIG
@@ -89,6 +90,15 @@ def _get_trace_id() -> str:
             exc_info=True,
         )
         return "no-trace"
+
+
+def _get_consecutive_failures(worker_id: str) -> int:
+    """Return autoscaler consecutive failure count, or -1 if unavailable."""
+    try:
+        from modules.rollout.autoscaler import get_autoscaler
+        return get_autoscaler().get_consecutive_failures(worker_id)
+    except Exception:
+        return -1
 
 # TTL-based idempotency cache with in-flight tracking.
 _IDEMPOTENCY_TTL = 3600  # 1 hour
@@ -428,8 +438,6 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
             seconds, or if the executor is unavailable (e.g. after shutdown).
     """
     global _cdp_timeout_count, _active_cdp_requests
-    from modules.common.exceptions import SessionFlaggedError
-
     fn_name = getattr(fn, "__name__", repr(fn))
 
     with _cdp_metric_lock:
@@ -740,6 +748,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         RuntimeError: if no CDP driver has been registered.
     """
     task_id = getattr(task, "task_id", None)
+    success = False
     if task_id is not None:
         if _get_idempotency_store().is_duplicate(task_id):
             _logger.warning(
@@ -752,10 +761,32 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         initialize_cycle(worker_id)
         state, total = run_payment_step(task, zip_code, worker_id=worker_id)
         action = handle_outcome(state, task.order_queue, worker_id=worker_id)
+        success = True
+        try:
+            from modules.rollout.autoscaler import get_autoscaler
+            get_autoscaler().record_success(worker_id)
+        except Exception:
+            _logger.debug("autoscaler.record_success skipped", exc_info=True)
         if task_id is not None:
             _get_idempotency_store().mark_completed(task_id)
         return action, state, total
+    except SessionFlaggedError as exc:
+        _logger.error(
+            "[trace=%s] worker=%s SessionFlaggedError: %s",
+            _get_trace_id(), worker_id, exc
+        )
+        try:
+            from modules.rollout.autoscaler import get_autoscaler
+            get_autoscaler().record_failure(worker_id)
+        except Exception:
+            pass
+        raise
     except Exception as exc:
+        try:
+            from modules.rollout.autoscaler import get_autoscaler
+            get_autoscaler().record_failure(worker_id)
+        except Exception:
+            _logger.debug("autoscaler.record_failure skipped", exc_info=True)
         _logger.error(
             "[trace=%s] Cycle failed for worker=%s, task_id=%s: %s",
             _get_trace_id(),
@@ -765,6 +796,11 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         )
         raise
     finally:
+        _logger.info(
+            "[trace=%s] worker=%s cycle_result=%s consecutive_failures=%d",
+            _get_trace_id(), worker_id, "success" if success else "failure",
+            _get_consecutive_failures(worker_id)
+        )
         if task_id is not None:
             _get_idempotency_store().release_inflight(task_id)
         # Clean up CDP driver to prevent registry memory leak (GAP-CDP-01).
