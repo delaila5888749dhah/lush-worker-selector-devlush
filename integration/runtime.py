@@ -229,7 +229,6 @@ def start_worker(task_fn):
         t = threading.Thread(target=_worker_fn, args=(wid, task_fn, persona), daemon=False)
         _workers[wid] = t
         _worker_states[wid] = "IDLE"
-    proxy = None
     try:
         from modules.cdp.proxy import get_default_pool
         proxy = get_default_pool().acquire(wid)
@@ -294,7 +293,7 @@ def stop_worker(worker_id, timeout=None):
         from modules.cdp.proxy import get_default_pool
         get_default_pool().release(worker_id)
     except Exception:
-        pass
+        _logger.debug("Failed to release proxy for worker %s", worker_id, exc_info=True)
     return True
 def get_active_workers() -> list[str]:
     """Return a list of active worker ids."""
