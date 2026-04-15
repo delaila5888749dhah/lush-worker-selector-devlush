@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from integration import runtime
 from modules.billing import main as billing
+from modules.cdp import proxy as proxy_mod
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 from integration.runtime import (
@@ -87,6 +88,15 @@ class TestStartWorker(RuntimeResetMixin, unittest.TestCase):
         barrier = threading.Event()
         ids = [start_worker(lambda _: barrier.wait(timeout=1)) for _ in range(3)]
         self.assertEqual(len(set(ids)), 3)
+        barrier.set()
+
+    def test_start_worker_continues_when_proxy_list_file_not_set(self):
+        """start_worker succeeds when PROXY_LIST_FILE is unset (empty pool)."""
+        barrier = threading.Event()
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_mod._default_pool = None  # pylint: disable=protected-access
+            wid = start_worker(lambda _: barrier.wait(timeout=1))
+        self.assertTrue(wid.startswith("worker-"))
         barrier.set()
 
 

@@ -20,6 +20,7 @@ from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
 from modules.billing import main as billing
 from modules.cdp import main as cdp
+from modules.cdp.proxy import get_default_pool
 from modules.common.exceptions import CycleExhaustedError
 from modules.common.thresholds import ERROR_RATE_THRESHOLD, MAX_RESTARTS_PER_HOUR
 _logger = logging.getLogger(__name__)
@@ -230,6 +231,18 @@ def start_worker(task_fn):
         _workers[wid] = t
         _worker_states[wid] = "IDLE"
     try:
+        proxy = get_default_pool().acquire(wid)
+        if proxy is None:
+            _logger.warning("No proxy available for worker %s — running without proxy", wid)
+        else:
+            _logger.debug("Assigned proxy for worker %s", wid)
+    except Exception:  # pylint: disable=broad-except
+        _logger.warning(
+            "Failed to acquire proxy from pool for worker %s — continuing without proxy",
+            wid,
+            exc_info=True,
+        )
+    try:
         t.start()
     except (RuntimeError, OSError):
         with _lock:
@@ -277,9 +290,14 @@ def stop_worker(worker_id, timeout=None):
         # the thread eventually exits.
         return False
     with _lock:
-        _stop_requests.discard(worker_id); _workers.pop(worker_id, None)
+        _stop_requests.discard(worker_id)
+        _workers.pop(worker_id, None)
         _worker_states.pop(worker_id, None)
     _log_event(worker_id, "stopped", "stop_requested")
+    try:
+        get_default_pool().release(worker_id)
+    except Exception:  # pylint: disable=broad-except
+        _logger.warning("Failed to release proxy for worker %s", worker_id, exc_info=True)
     return True
 def get_active_workers() -> list[str]:
     """Return a list of active worker ids."""
