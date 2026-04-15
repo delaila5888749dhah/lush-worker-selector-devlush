@@ -19,6 +19,7 @@ from modules.rollout import main as rollout
 from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
 from modules.billing import main as billing
+from modules.cdp import main as cdp
 from modules.common.exceptions import CycleExhaustedError
 from modules.common.thresholds import ERROR_RATE_THRESHOLD, MAX_RESTARTS_PER_HOUR
 _logger = logging.getLogger(__name__)
@@ -660,6 +661,13 @@ def set_behavior_delay_enabled(enabled):
 def get_trace_id():
     """Return the current trace_id, or None if not started."""
     with _trace_lock: return _trace_id
+
+
+def get_worker_browser_profile(worker_id: str):  # -> Optional[str]
+    """Return registered browser profile id for the worker, if any."""
+    return cdp.get_browser_profile(worker_id)
+
+
 def reset():
     """Reset all runtime state. Intended for testing."""
     global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until

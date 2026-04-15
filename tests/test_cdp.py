@@ -32,9 +32,10 @@ from modules.common.exceptions import PageStateError, SelectorTimeoutError
 
 def _reset_cdp():
     """Clear both internal registries to give each test a clean slate."""
-    with cdp._registry_lock:
-        cdp._driver_registry.clear()
-        cdp._pid_registry.clear()
+    with cdp._registry_lock:  # pylint: disable=protected-access
+        cdp._driver_registry.clear()  # pylint: disable=protected-access
+        cdp._pid_registry.clear()  # pylint: disable=protected-access
+        cdp._bitbrowser_registry.clear()  # pylint: disable=protected-access
 
 
 class DriverRegistryTests(unittest.TestCase):
