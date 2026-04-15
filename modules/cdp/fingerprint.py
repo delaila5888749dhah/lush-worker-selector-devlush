@@ -1,14 +1,16 @@
 """BitBrowser client utilities for per-worker fingerprint lifecycle."""
+# pylint: disable=duplicate-code
 
 import json
 import logging
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Dict, Optional, Tuple
 from uuid import uuid4
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
 class BitBrowserClient:
@@ -16,10 +18,17 @@ class BitBrowserClient:
 
     def __init__(self, endpoint: str, api_key: str):
         self._endpoint = endpoint.rstrip("/")
+        scheme = urllib.parse.urlparse(self._endpoint).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported endpoint scheme: {scheme!r}")
         self._api_key = api_key
 
     def _url(self, path: str) -> str:
-        return f"{self._endpoint}{path}"
+        url = f"{self._endpoint}{path}"
+        scheme = urllib.parse.urlparse(url).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme: {scheme!r}")
+        return url
 
     def _post(self, path: str, payload: Dict[str, object],
               timeout: int = 10) -> Dict[str, object]:
@@ -34,7 +43,7 @@ class BitBrowserClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             body = json.loads(resp.read().decode("utf-8"))
         if isinstance(body, dict) and isinstance(body.get("data"), dict):
             return body["data"]
@@ -72,14 +81,14 @@ class BitBrowserClient:
         try:
             self._post("/api/v1/browser/close", {"id": profile_id}, timeout=10)
         except (urllib.error.URLError, OSError) as exc:
-            _logger.warning("BitBrowser close_profile failed for %s: %s", profile_id, exc)
+            _log.warning("BitBrowser close_profile failed for %s: %s", profile_id, exc)
 
     def delete_profile(self, profile_id: str) -> None:
         """POST /api/v1/browser/delete. No-op if request fails."""
         try:
             self._post("/api/v1/browser/delete", {"id": profile_id}, timeout=10)
         except (urllib.error.URLError, OSError) as exc:
-            _logger.warning("BitBrowser delete_profile failed for %s: %s", profile_id, exc)
+            _log.warning("BitBrowser delete_profile failed for %s: %s", profile_id, exc)
 
     def is_available(self) -> bool:
         """GET /api/v1/browser/list → True if 2xx response."""
@@ -89,7 +98,7 @@ class BitBrowserClient:
                 headers={"X-Api-Key": self._api_key},
                 method="GET",
             )
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            with urllib.request.urlopen(req, timeout=2) as resp:  # nosec B310
                 resp.read()
             return True
         except (urllib.error.URLError, OSError):
