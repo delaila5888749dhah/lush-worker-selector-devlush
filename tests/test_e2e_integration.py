@@ -5,9 +5,12 @@ Tests run with mocked external services (no real browser, no real API calls).
 
 import os
 import random
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 import urllib.error
+
+import pytest  # pylint: disable=import-error
 
 from integration import orchestrator, runtime
 from modules.cdp import driver as driver_mod
@@ -51,27 +54,33 @@ def _billing() -> BillingProfile:
 
 def test_egift_form_uses_realistic_typing_not_send_keys(mock_webdriver):
     """fill_egift_form() must call _realistic_type_field(), never raw send_keys()."""
-    el = MagicMock()
-    mock_webdriver.find_elements.return_value = [el]
+    mock_element = MagicMock()
+    mock_webdriver.find_elements.return_value = [mock_element]
     givex = GivexDriver(mock_webdriver)
-    with patch.object(driver_mod, "_random_greeting", return_value="Hi"), patch.object(givex, "_realistic_type_field") as mock_type:
+    with patch.object(driver_mod, "_random_greeting", return_value="Hi"), \
+            patch.object(givex, "_realistic_type_field") as mock_type:
         givex.fill_egift_form(_task(), _billing())
     assert mock_type.call_count == 6
-    el.send_keys.assert_not_called()
+    mock_element.send_keys.assert_not_called()
 
 
 def test_amount_field_typed_with_zero_typo_rate(mock_webdriver):
     """SEL_AMOUNT_INPUT must always be typed with typo_rate=0."""
     givex = GivexDriver(mock_webdriver)
-    with patch.object(driver_mod, "_random_greeting", return_value="Hi"), patch.object(givex, "_realistic_type_field") as mock_type:
+    with patch.object(driver_mod, "_random_greeting", return_value="Hi"), \
+            patch.object(givex, "_realistic_type_field") as mock_type:
         givex.fill_egift_form(_task(), _billing())
-    assert call(SEL_AMOUNT_INPUT, "50", field_kind="amount", typo_rate=0.0) in mock_type.call_args_list
+    expected = call(SEL_AMOUNT_INPUT, "50", field_kind="amount", typo_rate=0.0)
+    assert expected in mock_type.call_args_list
 
 
 def test_navigate_clears_browser_state_before_each_cycle(mock_webdriver):
     """navigate_to_egift() must call execute_script(localStorage.clear) and delete_all_cookies()."""
     givex = GivexDriver(mock_webdriver)
-    with patch.object(givex, "find_elements", return_value=[]), patch.object(givex, "_wait_for_element", return_value=True), patch.object(givex, "_wait_for_url"), patch.object(givex, "bounding_box_click"):
+    with patch.object(givex, "find_elements", return_value=[]), \
+            patch.object(givex, "_wait_for_element", return_value=True), \
+            patch.object(givex, "_wait_for_url"), \
+            patch.object(givex, "bounding_box_click"):
         givex.navigate_to_egift()
     assert mock_webdriver.execute_script.call_count == 2
     assert mock_webdriver.delete_all_cookies.call_count == 2
@@ -141,18 +150,25 @@ def test_orchestrator_calls_record_success_on_payment_complete():
     store = MagicMock()
     store.is_duplicate.return_value = False
     task = _task()
-    with (
-        patch("integration.orchestrator._get_autoscaler", return_value=autoscaler),
-        patch("integration.orchestrator._get_idempotency_store", return_value=store),
-        patch("integration.orchestrator.initialize_cycle"),
-        patch(
-            "integration.orchestrator.run_payment_step",
-            return_value=(SimpleNamespace(name="success"), 50.0),
-        ),
-        patch("integration.orchestrator.handle_outcome", return_value="complete"),
-        patch("integration.orchestrator.cdp.unregister_driver"),
-        patch("integration.orchestrator.fsm.cleanup_worker"),
-    ):
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("integration.orchestrator._get_autoscaler", return_value=autoscaler)
+        )
+        stack.enter_context(
+            patch("integration.orchestrator._get_idempotency_store", return_value=store)
+        )
+        stack.enter_context(patch("integration.orchestrator.initialize_cycle"))
+        stack.enter_context(
+            patch(
+                "integration.orchestrator.run_payment_step",
+                return_value=(SimpleNamespace(name="success"), 50.0),
+            )
+        )
+        stack.enter_context(
+            patch("integration.orchestrator.handle_outcome", return_value="complete")
+        )
+        stack.enter_context(patch("integration.orchestrator.cdp.unregister_driver"))
+        stack.enter_context(patch("integration.orchestrator.fsm.cleanup_worker"))
         orchestrator.run_cycle(task, worker_id="worker-1")
     autoscaler.record_success.assert_called_once_with("worker-1")
 
@@ -162,49 +178,52 @@ def test_orchestrator_calls_record_failure_on_session_flagged():
     autoscaler = MagicMock()
     store = MagicMock()
     store.is_duplicate.return_value = False
-    with (
-        patch("integration.orchestrator._get_autoscaler", return_value=autoscaler),
-        patch("integration.orchestrator._get_idempotency_store", return_value=store),
-        patch(
-            "integration.orchestrator.initialize_cycle",
-            side_effect=SessionFlaggedError("flagged"),
-        ),
-        patch("integration.orchestrator.cdp.unregister_driver"),
-        patch("integration.orchestrator.fsm.cleanup_worker"),
-    ):
-        try:
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("integration.orchestrator._get_autoscaler", return_value=autoscaler)
+        )
+        stack.enter_context(
+            patch("integration.orchestrator._get_idempotency_store", return_value=store)
+        )
+        stack.enter_context(
+            patch(
+                "integration.orchestrator.initialize_cycle",
+                side_effect=SessionFlaggedError("flagged"),
+            )
+        )
+        stack.enter_context(patch("integration.orchestrator.cdp.unregister_driver"))
+        stack.enter_context(patch("integration.orchestrator.fsm.cleanup_worker"))
+        with pytest.raises(SessionFlaggedError):
             orchestrator.run_cycle(_task(), worker_id="worker-1")
-            assert False, "Expected SessionFlaggedError"
-        except SessionFlaggedError:
-            pass
     autoscaler.record_failure.assert_called_once_with("worker-1")
 
 
 def test_startup_config_rejects_worker_count_zero():
     """WORKER_COUNT=0 → ConfigError raised."""
-    with patch.dict(os.environ, {"WORKER_COUNT": "0"}, clear=True), patch("integration.runtime.validate_config", return_value=None):
-        try:
+    with patch.dict(os.environ, {"WORKER_COUNT": "0"}, clear=True), \
+            patch("integration.runtime.validate_config", return_value=None):
+        with pytest.raises(runtime.ConfigError):
             runtime._validate_startup_config()  # pylint: disable=protected-access
-            assert False, "Expected ConfigError"
-        except runtime.ConfigError:
-            pass
 
 
 def test_startup_config_rejects_non_integer_worker_count():
     """WORKER_COUNT=abc → ConfigError raised."""
-    with patch.dict(os.environ, {"WORKER_COUNT": "abc"}, clear=True), patch("integration.runtime.validate_config", return_value=None):
-        try:
+    with patch.dict(os.environ, {"WORKER_COUNT": "abc"}, clear=True), \
+            patch("integration.runtime.validate_config", return_value=None):
+        with pytest.raises(runtime.ConfigError):
             runtime._validate_startup_config()  # pylint: disable=protected-access
-            assert False, "Expected ConfigError"
-        except runtime.ConfigError:
-            pass
 
 
 def test_startup_config_warns_on_missing_worker_count():
     """WORKER_COUNT not set → warning logged, no exception."""
-    with patch.dict(os.environ, {}, clear=True), patch("integration.runtime.validate_config", return_value=None), patch("integration.runtime._logger.warning") as mock_warning:
+    with patch.dict(os.environ, {}, clear=True), \
+            patch("integration.runtime.validate_config", return_value=None), \
+            patch("integration.runtime._logger.warning") as mock_warning:
         runtime._validate_startup_config()  # pylint: disable=protected-access
-    assert any("WORKER_COUNT not set" in str(c.args[0]) for c in mock_warning.call_args_list)
+    assert any(
+        "WORKER_COUNT not set" in str(c.args[0])
+        for c in mock_warning.call_args_list
+    )
 
 
 def test_ghost_cursor_never_starts_at_origin(mock_webdriver):
@@ -231,9 +250,11 @@ def test_bezier_arc_direction_is_bidirectional():
 
 def test_driver_utc_offset_flows_to_temporal_model(mock_webdriver):
     """set_proxy_utc_offset(7) → get_time_state called with 7."""
-    el = MagicMock()
-    mock_webdriver.find_elements.return_value = [el]
-    mock_webdriver.execute_script.return_value = {"left": 1.0, "top": 1.0, "width": 10.0, "height": 10.0}
+    mock_element = MagicMock()
+    mock_webdriver.find_elements.return_value = [mock_element]
+    mock_webdriver.execute_script.return_value = {
+        "left": 1.0, "top": 1.0, "width": 10.0, "height": 10.0
+    }
     givex = GivexDriver(mock_webdriver, persona=PersonaProfile(123))
     temporal = MagicMock()
     temporal.get_time_state.return_value = "DAY"

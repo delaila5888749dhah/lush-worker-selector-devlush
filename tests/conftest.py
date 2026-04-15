@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer  # pylint: disable=no-name-in-module
 from unittest.mock import MagicMock
 
-import pytest
+import pytest  # pylint: disable=import-error
 
 from modules.cdp.proxy import ProxyPool
 
@@ -32,15 +32,18 @@ class _BitBrowserMockHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def reset_calls(cls):
+        """Reset the recorded API call log."""
         with cls._lock:
             cls._calls = []
 
     @classmethod
     def snapshot_calls(cls):
+        """Return a snapshot copy of all recorded API calls."""
         with cls._lock:
             return list(cls._calls or [])
 
     def _write_json(self, payload):
+        """Serialise *payload* as JSON and send a 200 OK response."""
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -49,9 +52,11 @@ class _BitBrowserMockHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):  # pylint: disable=invalid-name
+        """Handle GET requests (browser list endpoint)."""
         self._write_json({"data": []})
 
     def do_POST(self):  # pylint: disable=invalid-name
+        """Handle POST requests (create, open, close, delete)."""
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         with self._lock:
@@ -60,12 +65,15 @@ class _BitBrowserMockHandler(BaseHTTPRequestHandler):
             self._write_json({"data": {"id": "profile-1"}})
             return
         if self.path == "/api/v1/browser/open":
-            self._write_json({"data": {"webdriver": "ws://127.0.0.1:9222/profile-1"}})
+            self._write_json(
+                {"data": {"webdriver": "ws://127.0.0.1:9222/profile-1"}}
+            )
             return
         self._write_json({"ok": True})
 
-    def log_message(self, _format, *_args):  # noqa: A002
-        return
+    def log_message(self, format, *args):  # noqa: A002  # pylint: disable=redefined-builtin
+        """Suppress server log output during tests."""
+        pass  # noqa: PIE790 — intentionally silent override
 
 
 @pytest.fixture
