@@ -114,6 +114,10 @@ _cdp_executor_lock = threading.Lock()
 _cdp_timeout_count: int = 0          # total CDP calls that timed out (caller-side)
 _active_cdp_requests: int = 0        # orchestration-level tracking only
 _cdp_metric_lock = threading.Lock()  # protects _cdp_timeout_count and _active_cdp_requests
+# Guards watchdog.notify_total() calls that may be triggered concurrently from
+# both the CDP callback path and the pre-wait DOM fallback path.
+_network_listener_lock = threading.Lock()
+_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
 
 # NOTE on _active_cdp_requests:
 # This counter reflects orchestration-level tracking only.
@@ -564,19 +568,27 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
             "return el ? el.innerText : null;"
         )
         if isinstance(result, (int, float)):
-            watchdog.notify_total(worker_id, float(result))
+            with _network_listener_lock:
+                watchdog.notify_total(worker_id, float(result))
             return
-        if isinstance(result, str) and result:
-            match = re.search(r'[\d.]+', result.replace(',', ''))
+        elif isinstance(result, str) and result:
+            cleaned = result.replace(',', '')
+            match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
             if match:
-                watchdog.notify_total(worker_id, float(match.group()))
+                value = float(match.group())
+                # Handle accounting-style negative numbers, e.g. "(49.99)".
+                if "(" in cleaned and ")" in cleaned and value > 0:
+                    value = -value
+                with _network_listener_lock:
+                    watchdog.notify_total(worker_id, value)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
         _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
 
 
 def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     """Enable CDP Network monitoring and set up total interception."""
-    target_urls = ["/checkout/total", "/api/tax", "/api/checkout", "cws4.0"]
+    # "cws4.0" is intentionally substring-matched because this endpoint path
+    # can appear with varying prefixes across environments.
     try:
         driver_obj.execute_cdp_cmd("Network.enable", {})
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
@@ -589,7 +601,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                 try:
                     response = params.get("response", {}) if isinstance(params, dict) else {}
                     url = str(response.get("url", ""))
-                    if any(part in url for part in target_urls):
+                    if any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
                         _notify_total_from_dom(driver_obj, worker_id)
                 except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                     _logger.warning(
@@ -639,6 +651,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         zip_code=zip_code,
     )
     driver_obj = cdp._get_driver(worker_id)
+    if driver_obj is None:
+        raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
     _setup_network_total_listener(driver_obj, worker_id)
     watchdog.enable_network_monitor(worker_id)
     try:

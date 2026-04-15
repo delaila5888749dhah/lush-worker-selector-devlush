@@ -231,16 +231,25 @@ class RunPaymentStepTests(unittest.TestCase):
         driver.execute_cdp_cmd.assert_called_once_with("Network.enable", {})
         mock_watchdog.notify_total.assert_called_once_with("default", 49.99)
         notify_idx = next(
-            i for i, item in enumerate(mock_watchdog.mock_calls)
-            if item[0] == "notify_total"
+            (
+                i for i, item in enumerate(mock_watchdog.mock_calls)
+                if item[0] == "notify_total"
+            ),
+            None,
         )
         wait_idx = next(
-            i for i, item in enumerate(mock_watchdog.mock_calls)
-            if item[0] == "wait_for_total"
+            (
+                i for i, item in enumerate(mock_watchdog.mock_calls)
+                if item[0] == "wait_for_total"
+            ),
+            None,
         )
+        self.assertIsNotNone(notify_idx, "notify_total call should be present")
+        self.assertIsNotNone(wait_idx, "wait_for_total call should be present")
         self.assertLess(
             notify_idx,
             wait_idx,
+            "notify_total must be called before wait_for_total",
         )
         self.assertEqual(state.name, "success")
         self.assertEqual(total, 49.99)
