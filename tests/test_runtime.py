@@ -1613,11 +1613,13 @@ class TestStartupConfigValidation(RuntimeResetMixin, unittest.TestCase):
         env = dict(os.environ)
         env.pop("WORKER_COUNT", None)
         env["GIVEX_ENDPOINT"] = "https://example.test"
-        with patch.dict(os.environ, env, clear=True):
-            with self.assertLogs("integration.runtime", level="WARNING") as logs:
-                self.assertTrue(start(lambda _: None, interval=0.05))
-            self.assertTrue(
-                any("WORKER_COUNT not set" in line for line in logs.output),
-                "Expected WORKER_COUNT warning at startup",
-            )
+        try:
+            with patch.dict(os.environ, env, clear=True):
+                with self.assertLogs("integration.runtime", level="WARNING") as logs:
+                    self.assertTrue(start(lambda _: None, interval=0.05))
+                self.assertTrue(
+                    any("WORKER_COUNT not set" in line for line in logs.output),
+                    "Expected WORKER_COUNT warning at startup",
+                )
+        finally:
             stop()

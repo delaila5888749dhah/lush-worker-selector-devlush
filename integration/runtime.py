@@ -16,6 +16,7 @@ from modules.observability import alerting
 from modules.observability import metrics_exporter
 from modules.observability import log_sink
 from modules.rollout import main as rollout
+from modules.delay.config import DelayConfigError, validate_config
 from modules.delay.wrapper import wrap as _behavior_wrap
 from modules.delay.persona import PersonaProfile
 from modules.billing import main as billing
@@ -39,6 +40,7 @@ _VALID_TRANSITIONS = {
     "SAFE_POINT": {"IN_CYCLE"},
 }
 _lock = threading.Lock()
+_startup_config_lock = threading.Lock()
 _state = "INIT"
 _workers: dict[str, threading.Thread] = {}
 _worker_states: dict[str, str] = {}
@@ -460,7 +462,6 @@ def _validate_startup_config() -> None:
         if worker_count < 1 or worker_count > 50:
             raise ConfigError(f"WORKER_COUNT={worker_count} out of range [1, 50]")
 
-    from modules.delay.config import DelayConfigError, validate_config
     try:
         validate_config()
     except DelayConfigError as exc:
@@ -512,6 +513,7 @@ def start(task_fn, interval=None):
     with _lock:
         if _state not in ("INIT", "STOPPED"):
             return False
+    with _startup_config_lock:
         _validate_startup_config()
     _ensure_rollout_configured()
     try:
