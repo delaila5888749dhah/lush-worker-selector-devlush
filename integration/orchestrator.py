@@ -116,7 +116,7 @@ _active_cdp_requests: int = 0        # orchestration-level tracking only
 _cdp_metric_lock = threading.Lock()  # protects _cdp_timeout_count and _active_cdp_requests
 # Guards watchdog.notify_total() calls that may be triggered concurrently from
 # both the CDP callback path and the pre-wait DOM fallback path.
-_network_listener_lock = threading.Lock()
+_network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
 _CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
 
 # NOTE on _active_cdp_requests:
@@ -551,7 +551,7 @@ def _emit_billing_audit_event(
             "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         _AUDIT_LOGGER.info("billing_selection %s", json.dumps(event, ensure_ascii=False))
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to emit billing audit event for worker=%s: %s",
             _get_trace_id(),
@@ -571,7 +571,7 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
             with _network_listener_lock:
                 watchdog.notify_total(worker_id, float(result))
             return
-        elif isinstance(result, str) and result:
+        if isinstance(result, str) and result:
             cleaned = result.replace(',', '')
             match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
             if match:
@@ -581,7 +581,7 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
                     value = -value
                 with _network_listener_lock:
                     watchdog.notify_total(worker_id, value)
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
 
 
@@ -591,7 +591,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     # can appear with varying prefixes across environments.
     try:
         driver_obj.execute_cdp_cmd("Network.enable", {})
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] Network.enable failed: %s", _get_trace_id(), exc)
         return
     try:
@@ -603,14 +603,14 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                     url = str(response.get("url", ""))
                     if any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
                         _notify_total_from_dom(driver_obj, worker_id)
-                except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+                except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
                         "[trace=%s] Network.responseReceived callback failed: %s",
                         _get_trace_id(),
                         callback_exc,
                     )
             add_listener("Network.responseReceived", _on_response)
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to set Network.responseReceived listener: %s",
             _get_trace_id(),
@@ -650,7 +650,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         task_id=getattr(task, "task_id", None),
         zip_code=zip_code,
     )
-    driver_obj = cdp._get_driver(worker_id)
+    driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
     if driver_obj is None:
         raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
     _setup_network_total_listener(driver_obj, worker_id)
