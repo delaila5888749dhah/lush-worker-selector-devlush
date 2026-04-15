@@ -57,9 +57,14 @@ def _dispatch(drv, el, ch, strict):
         _log.debug("keyboard: CDP dispatch skipped, trying send_keys", exc_info=True)
     try:
         el.send_keys(ch)
+        _log.warning(
+            "keyboard: CDP dispatch fell back to send_keys for char %r (strict=%s)", ch, strict,
+        )
         return True
     except Exception:
-        (_log.warning if strict else _log.debug)("keyboard: dispatch failed for char")
+        (_log.warning if strict else _log.debug)(
+            "keyboard: dispatch completely failed for char %r", ch,
+        )
         return False
 
 def type_value(driver, element, value, rnd, *, typo_rate=0.0, delays=None,

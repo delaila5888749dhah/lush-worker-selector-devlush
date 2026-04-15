@@ -265,7 +265,7 @@ class TestAddToCartAndCheckout(unittest.TestCase):
             return []
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"):
             gd.add_to_cart_and_checkout()
@@ -314,7 +314,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
             return []
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"), patch.object(gd, "_wait_for_url"):
             gd.select_guest_checkout("guest@example.com")
@@ -710,7 +710,7 @@ class TestNavigateToEgift(unittest.TestCase):
             return [btn_el]
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"):
             gd.navigate_to_egift()
@@ -873,7 +873,7 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         selenium.execute_script.return_value = self._rect()
         selenium.execute_cdp_cmd.side_effect = RuntimeError("CDP unavailable")
         persona = _make_persona(42)
-        gd = GivexDriver(selenium, persona=persona)
+        gd = GivexDriver(selenium, persona=persona, strict=False)
         with patch("time.sleep"):
             gd.bounding_box_click("#some-el")
         element.click.assert_called_once()
@@ -884,7 +884,7 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         selenium.execute_script.side_effect = RuntimeError("script error")
         persona = _make_persona(42)
-        gd = GivexDriver(selenium, persona=persona)
+        gd = GivexDriver(selenium, persona=persona, strict=False)
         with patch("time.sleep"):
             gd.bounding_box_click("#some-el")
         element.click.assert_called_once()
@@ -1291,11 +1291,17 @@ class TestStrictMode(unittest.TestCase):
                 gd.bounding_box_click("#el")
         self.assertTrue(any("strict" in msg.lower() for msg in cm.output))
 
-    def test_default_strict_is_false(self):
-        """GivexDriver defaults to non-strict mode."""
+    def test_default_strict_is_true(self):
+        """GivexDriver defaults to strict mode."""
         selenium = _make_driver()
-        gd = GivexDriver(selenium)
-        self.assertFalse(gd._strict)
+        givex_driver = GivexDriver(selenium)
+        self.assertTrue(givex_driver._strict)  # pylint: disable=protected-access
+
+    def test_explicit_strict_false_is_supported(self):
+        """GivexDriver(strict=False) enables legacy fallback mode."""
+        selenium = _make_driver()
+        givex_driver = GivexDriver(selenium, strict=False)
+        self.assertFalse(givex_driver._strict)  # pylint: disable=protected-access
 
 
 # ── TestRealisticTypeField ───────────────────────────────────────────────────

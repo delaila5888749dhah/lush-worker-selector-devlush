@@ -193,6 +193,16 @@ class TestTypeValueBurstDelays(unittest.TestCase):
 class TestTypeValueStrictMode(unittest.TestCase):
     """type_value logs warning on failures when strict=True."""
 
+    def test_fallback_success_emits_warning(self):
+        """CDP fail → send_keys success emits WARNING with fallback context."""
+        drv = _mock_driver()
+        drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
+        el = MagicMock()  # pylint: disable=invalid-name
+        with patch("time.sleep"):
+            with self.assertLogs("modules.cdp.keyboard", level="WARNING") as log_cm:
+                type_value(drv, el, "x", _rnd(), strict=False)
+        self.assertTrue(any("fell back to send_keys" in msg for msg in log_cm.output))
+
     def test_strict_warns_on_cdp_and_fallback_failure(self):
         drv = _mock_driver()
         drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
@@ -201,7 +211,7 @@ class TestTypeValueStrictMode(unittest.TestCase):
         with patch("time.sleep"):
             with self.assertLogs("modules.cdp.keyboard", level="WARNING") as cm:
                 type_value(drv, el, "x", _rnd(), strict=True)
-        self.assertTrue(any("dispatch failed" in msg for msg in cm.output))
+        self.assertTrue(any("dispatch completely failed" in msg for msg in cm.output))
 
     def test_non_strict_does_not_warn(self):
         drv = _mock_driver()

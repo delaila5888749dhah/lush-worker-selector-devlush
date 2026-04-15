@@ -122,9 +122,19 @@ class GivexDriver:
     Args:
         driver: A Selenium WebDriver instance (or test double).
         persona: Optional behavior profile; ``None`` preserves legacy mode.
+        strict: When ``True`` (default), CDP dispatch failures raise instead of
+            silently falling back.
     """
 
-    def __init__(self, driver: object, persona=None, *, strict: bool = False) -> None:
+    def __init__(self, driver: object, persona=None, *, strict: bool = True) -> None:
+        """Initialize a Givex driver wrapper.
+
+        Args:
+            driver: Selenium WebDriver instance (or compatible mock).
+            persona: Optional behavior profile.
+            strict: Defaults to ``True`` so CDP dispatch failures raise instead
+                of silently falling back.
+        """
         self._driver = driver
         self._persona = persona
         self._strict = strict
