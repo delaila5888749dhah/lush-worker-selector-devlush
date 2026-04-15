@@ -22,6 +22,12 @@ from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from modules.common.exceptions import SessionFlaggedError
+# Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
+# Import fails gracefully so orchestrator works before that PR lands.
+try:
+    from modules.rollout.autoscaler import get_autoscaler as _get_autoscaler
+except ImportError:
+    _get_autoscaler = None  # type: ignore[assignment]
 from modules.billing import main as billing
 from modules.cdp import main as cdp
 from modules.delay.config import CDP_CALL_TIMEOUT as _CDP_CALL_TIMEOUT_CONFIG
@@ -95,10 +101,29 @@ def _get_trace_id() -> str:
 def _get_consecutive_failures(worker_id: str) -> int:
     """Return autoscaler consecutive failure count, or -1 if unavailable."""
     try:
-        from modules.rollout.autoscaler import get_autoscaler
-        return get_autoscaler().get_consecutive_failures(worker_id)
-    except Exception:
+        if _get_autoscaler is not None:
+            return _get_autoscaler().get_consecutive_failures(worker_id)
         return -1
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        return -1
+
+
+def _record_autoscaler_success(worker_id: str) -> None:
+    """Record a successful payment cycle in the autoscaler. No-op if unavailable."""
+    try:
+        if _get_autoscaler is not None:
+            _get_autoscaler().record_success(worker_id)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.debug("autoscaler.record_success skipped", exc_info=True)
+
+
+def _record_autoscaler_failure(worker_id: str) -> None:
+    """Record a failed payment cycle in the autoscaler. No-op if unavailable."""
+    try:
+        if _get_autoscaler is not None:
+            _get_autoscaler().record_failure(worker_id)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.debug("autoscaler.record_failure skipped", exc_info=True)
 
 # TTL-based idempotency cache with in-flight tracking.
 _IDEMPOTENCY_TTL = 3600  # 1 hour
@@ -762,11 +787,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         state, total = run_payment_step(task, zip_code, worker_id=worker_id)
         action = handle_outcome(state, task.order_queue, worker_id=worker_id)
         success = True
-        try:
-            from modules.rollout.autoscaler import get_autoscaler
-            get_autoscaler().record_success(worker_id)
-        except Exception:
-            _logger.debug("autoscaler.record_success skipped", exc_info=True)
+        _record_autoscaler_success(worker_id)
         if task_id is not None:
             _get_idempotency_store().mark_completed(task_id)
         return action, state, total
@@ -775,18 +796,10 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
             "[trace=%s] worker=%s, task_id=%s SessionFlaggedError: %s",
             _get_trace_id(), worker_id, task_id, exc
         )
-        try:
-            from modules.rollout.autoscaler import get_autoscaler
-            get_autoscaler().record_failure(worker_id)
-        except Exception:
-            _logger.debug("autoscaler.record_failure skipped", exc_info=True)
+        _record_autoscaler_failure(worker_id)
         raise
     except Exception as exc:
-        try:
-            from modules.rollout.autoscaler import get_autoscaler
-            get_autoscaler().record_failure(worker_id)
-        except Exception:
-            _logger.debug("autoscaler.record_failure skipped", exc_info=True)
+        _record_autoscaler_failure(worker_id)
         _logger.error(
             "[trace=%s] Cycle failed for worker=%s, task_id=%s: %s",
             _get_trace_id(),

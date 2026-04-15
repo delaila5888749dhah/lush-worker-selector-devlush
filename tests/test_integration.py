@@ -322,10 +322,8 @@ class RunCycleTests(unittest.TestCase):
 
     def test_run_cycle_success_records_autoscaler_success_once(self):
         autoscaler = MagicMock()
-        autoscaler_module = types.ModuleType("modules.rollout.autoscaler")
-        autoscaler_module.get_autoscaler = MagicMock(return_value=autoscaler)
         with (
-            patch.dict(sys.modules, {"modules.rollout.autoscaler": autoscaler_module}),
+            patch("integration.orchestrator._get_autoscaler", return_value=autoscaler),
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp"),
             patch("integration.orchestrator.watchdog") as mock_watchdog,
@@ -339,10 +337,8 @@ class RunCycleTests(unittest.TestCase):
 
     def test_run_cycle_failure_records_autoscaler_failure_once(self):
         autoscaler = MagicMock()
-        autoscaler_module = types.ModuleType("modules.rollout.autoscaler")
-        autoscaler_module.get_autoscaler = MagicMock(return_value=autoscaler)
         with (
-            patch.dict(sys.modules, {"modules.rollout.autoscaler": autoscaler_module}),
+            patch("integration.orchestrator._get_autoscaler", return_value=autoscaler),
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp"),
             patch("integration.orchestrator.watchdog") as mock_watchdog,
@@ -356,10 +352,8 @@ class RunCycleTests(unittest.TestCase):
 
     def test_run_cycle_session_flagged_records_failure_and_reraises(self):
         autoscaler = MagicMock()
-        autoscaler_module = types.ModuleType("modules.rollout.autoscaler")
-        autoscaler_module.get_autoscaler = MagicMock(return_value=autoscaler)
         with (
-            patch.dict(sys.modules, {"modules.rollout.autoscaler": autoscaler_module}),
+            patch("integration.orchestrator._get_autoscaler", return_value=autoscaler),
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp"),
             patch("integration.orchestrator.watchdog") as mock_watchdog,
@@ -387,7 +381,7 @@ class RunCycleTests(unittest.TestCase):
 
 class ConsecutiveFailuresHelperTests(unittest.TestCase):
     def test_get_consecutive_failures_returns_minus_one_when_unavailable(self):
-        with patch.dict(sys.modules, {"modules.rollout.autoscaler": None}):
+        with patch("integration.orchestrator._get_autoscaler", None):
             self.assertEqual(_get_consecutive_failures("default"), -1)
 
 
