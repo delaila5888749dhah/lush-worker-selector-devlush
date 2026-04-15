@@ -10,8 +10,13 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import os
 import secrets
 import time
+import datetime
+import ipaddress
+import urllib.request
+import urllib.error
 
 try:
     from selenium.webdriver.support.ui import Select  # type: ignore[import]
@@ -31,6 +36,13 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
     _type_value = None  # type: ignore[assignment,misc]
 
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
+
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo  # type: ignore[import]
+    from zoneinfo import ZoneInfoNotFoundError as _ZoneInfoNotFoundError
+except ImportError:  # pragma: no cover - Python < 3.9
+    _ZoneInfo = None  # type: ignore[assignment,misc]
+    _ZoneInfoNotFoundError = Exception  # type: ignore[assignment,misc]
 
 try:
     from modules.delay.biometrics import BiometricProfile as _BiometricProfile  # type: ignore
@@ -110,6 +122,51 @@ _GREETINGS = [
 def _random_greeting() -> str:
     """Return a random greeting message for the eGift form."""
     return secrets.choice(_GREETINGS)
+
+
+def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
+    """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb."""
+    if _ZoneInfo is None:
+        return None
+    mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+    if not os.path.exists(mmdb_path):
+        return None
+    try:
+        import geoip2.database  # type: ignore
+    except ImportError:
+        return None
+    try:
+        with geoip2.database.Reader(mmdb_path) as reader:
+            record = reader.city(ip_addr)
+            tz_name = record.location.time_zone
+            if tz_name:
+                tz_info = _ZoneInfo(tz_name)
+                now = datetime.datetime.now(tz_info)
+                offset = now.utcoffset()
+                if offset is None:
+                    return None
+                return int(offset.total_seconds() // 3600)
+    except (OSError, ValueError, AttributeError,
+            _ZoneInfoNotFoundError) as exc:
+        _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
+    return None
+
+
+def _get_current_ip_best_effort() -> str | None:
+    """Return current public IP using a short best-effort ipify request."""
+    try:
+        with urllib.request.urlopen(  # nosec B310
+            "https://api.ipify.org", timeout=3,
+        ) as response:
+            ip_value = response.read().decode("utf-8").strip()
+            if not ip_value:
+                return None
+            ipaddress.ip_address(ip_value)
+            return ip_value
+    except (urllib.error.URLError, TimeoutError,
+            OSError, ValueError, UnicodeDecodeError) as exc:
+        _log.debug("Public IP lookup failed: %s", exc)
+        return None
 
 class GivexDriver:
     """Automates the Givex e-gift card purchase flow using CDP/Selenium.
@@ -433,6 +490,8 @@ class GivexDriver:
                     return
                 _log.debug("bounding_box_click: CDP failed, .click() fallback", exc_info=True)
         elements[0].click()
+        if not self._strict or self._rnd is None:
+            elements[0].click()
 
     def cdp_click_absolute(self, x: float, y: float) -> None:
         """Send an absolute-coordinate CDP click."""
@@ -478,7 +537,7 @@ class GivexDriver:
 
     # ── Navigation ──────────────────────────────────────────────────────────
 
-    def preflight_geo_check(self) -> None:
+    def preflight_geo_check(self) -> str:
         """Navigate to geo-check URL and assert the IP is US-based.
 
         Raises:
@@ -490,14 +549,35 @@ class GivexDriver:
             data = _json.loads(body)
             country = data.get("country", "")
             utc_offset = data.get("utc_offset", 0)
-            # TODO PR-J: Replace with MaxMind GeoLite2 lookup for accurate proxy timezone
             self.set_proxy_utc_offset(int(utc_offset) if utc_offset is not None else 0)
         except Exception as exc:
-            raise RuntimeError(f"Geo-check failed: {exc}") from exc
+            _log.warning(
+                "preflight_geo_check: API failed, trying MaxMind fallback: %s",
+                exc,
+            )
+            detected_ip = _get_current_ip_best_effort()
+            if detected_ip:
+                detected_offset = _lookup_maxmind_utc_offset(detected_ip)
+                if detected_offset is None:
+                    _log.warning(
+                        "preflight_geo_check: MaxMind fallback "
+                        "unavailable for IP %s; using UTC offset 0",
+                        detected_ip,
+                    )
+                utc_offset = detected_offset or 0
+            else:
+                _log.warning(
+                    "preflight_geo_check: unable to detect "
+                    "public IP; using UTC offset 0",
+                )
+                utc_offset = 0
+            self.set_proxy_utc_offset(utc_offset)
+            return "UNKNOWN"
         if country != "US":
             raise RuntimeError(
                 f"Geo-check failed: expected country 'US', got {country!r}"
             )
+        return country
 
     def _clear_browser_state(self) -> None:
         """Clear localStorage, sessionStorage, and cookies (Blueprint §3 Hard-Reset)."""

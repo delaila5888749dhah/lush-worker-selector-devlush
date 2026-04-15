@@ -114,6 +114,10 @@ _cdp_executor_lock = threading.Lock()
 _cdp_timeout_count: int = 0          # total CDP calls that timed out (caller-side)
 _active_cdp_requests: int = 0        # orchestration-level tracking only
 _cdp_metric_lock = threading.Lock()  # protects _cdp_timeout_count and _active_cdp_requests
+# Guards watchdog.notify_total() calls that may be triggered concurrently from
+# both the CDP callback path and the pre-wait DOM fallback path.
+_network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
+_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
 
 # NOTE on _active_cdp_requests:
 # This counter reflects orchestration-level tracking only.
@@ -547,11 +551,69 @@ def _emit_billing_audit_event(
             "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         _AUDIT_LOGGER.info("billing_selection %s", json.dumps(event, ensure_ascii=False))
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to emit billing audit event for worker=%s: %s",
             _get_trace_id(),
             worker_id,
+            exc,
+        )
+
+
+def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
+    """Fallback: read total from DOM and notify watchdog."""
+    try:
+        result = driver_obj.execute_script(
+            "var el = document.querySelector('.order-total, .checkout-total, [data-total]');"
+            "return el ? el.innerText : null;"
+        )
+        if isinstance(result, (int, float)):
+            with _network_listener_lock:
+                watchdog.notify_total(worker_id, float(result))
+            return
+        if isinstance(result, str) and result:
+            cleaned = result.replace(',', '')
+            match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
+            if match:
+                value = float(match.group())
+                # Handle accounting-style negative numbers, e.g. "(49.99)".
+                if "(" in cleaned and ")" in cleaned and value > 0:
+                    value = -value
+                with _network_listener_lock:
+                    watchdog.notify_total(worker_id, value)
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
+
+
+def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
+    """Enable CDP Network monitoring and set up total interception."""
+    # "cws4.0" is intentionally substring-matched because this endpoint path
+    # can appear with varying prefixes across environments.
+    try:
+        driver_obj.execute_cdp_cmd("Network.enable", {})
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning("[trace=%s] Network.enable failed: %s", _get_trace_id(), exc)
+        return
+    try:
+        add_listener = getattr(driver_obj, "add_cdp_listener", None)
+        if callable(add_listener):
+            def _on_response(params):
+                try:
+                    response = params.get("response", {}) if isinstance(params, dict) else {}
+                    url = str(response.get("url", ""))
+                    if any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
+                        _notify_total_from_dom(driver_obj, worker_id)
+                except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.warning(
+                        "[trace=%s] Network.responseReceived callback failed: %s",
+                        _get_trace_id(),
+                        callback_exc,
+                    )
+            add_listener("Network.responseReceived", _on_response)
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning(
+            "[trace=%s] Failed to set Network.responseReceived listener: %s",
+            _get_trace_id(),
             exc,
         )
 
@@ -588,6 +650,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         task_id=getattr(task, "task_id", None),
         zip_code=zip_code,
     )
+    driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+    if driver_obj is None:
+        raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
+    _setup_network_total_listener(driver_obj, worker_id)
     watchdog.enable_network_monitor(worker_id)
     try:
         _cdp_call_with_timeout(
@@ -601,6 +667,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         _task_id = getattr(task, "task_id", None)
         if _task_id is not None:
             _get_idempotency_store().mark_submitted(_task_id)
+        # Fallback: read total from DOM to unblock watchdog
+        _notify_total_from_dom(driver_obj, worker_id)
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
     except Exception as exc:
         _logger.error(
