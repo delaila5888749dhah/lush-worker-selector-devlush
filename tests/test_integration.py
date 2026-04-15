@@ -214,6 +214,61 @@ class RunPaymentStepTests(unittest.TestCase):
         self.assertEqual(total, 49.99)
         self.assertEqual(state.name, "success")
 
+    def test_dom_total_fallback_notifies_watchdog_before_wait(self):
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            driver = MagicMock()
+            driver.execute_script.return_value = "Total: $49.99"
+            mock_cdp._get_driver.return_value = driver
+            mock_watchdog.wait_for_total.return_value = 49.99
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
+            state, total = run_payment_step(_make_task())
+        driver.execute_cdp_cmd.assert_called_once_with("Network.enable", {})
+        mock_watchdog.notify_total.assert_called_once_with("default", 49.99)
+        notify_idx = next(
+            (
+                i for i, item in enumerate(mock_watchdog.mock_calls)
+                if item[0] == "notify_total"
+            ),
+            None,
+        )
+        wait_idx = next(
+            (
+                i for i, item in enumerate(mock_watchdog.mock_calls)
+                if item[0] == "wait_for_total"
+            ),
+            None,
+        )
+        self.assertIsNotNone(notify_idx, "notify_total call should be present")
+        self.assertIsNotNone(wait_idx, "wait_for_total call should be present")
+        self.assertLess(
+            notify_idx,
+            wait_idx,
+            "notify_total must be called before wait_for_total",
+        )
+        self.assertEqual(state.name, "success")
+        self.assertEqual(total, 49.99)
+
+    def test_no_dom_total_still_raises_watchdog_timeout(self):
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            driver = MagicMock()
+            driver.execute_script.return_value = None
+            mock_cdp._get_driver.return_value = driver
+            mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
+            with self.assertRaises(SessionFlaggedError):
+                run_payment_step(_make_task())
+        mock_watchdog.notify_total.assert_not_called()
+
 
 class RunCycleTests(unittest.TestCase):
     def setUp(self):
