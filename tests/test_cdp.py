@@ -10,11 +10,14 @@ Covers:
 """
 
 import signal
+import os
+import tempfile
 import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
 import modules.cdp.main as cdp
+import modules.cdp.proxy as proxy_mod
 from modules.cdp.main import (
     _sanitize_error,
     _register_pid,
@@ -27,6 +30,7 @@ from modules.cdp.main import (
     fill_payment_and_billing,
     clear_card_fields,
 )
+from modules.cdp.proxy import ProxyPool, get_default_pool
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
 
 
@@ -350,6 +354,54 @@ class ThreadSafetyTests(unittest.TestCase):
             t.join(timeout=10)
 
         self.assertEqual(errors, [], f"Thread errors: {errors}")
+
+
+class ProxyPoolTests(unittest.TestCase):
+    def tearDown(self):
+        proxy_mod._default_pool = None  # pylint: disable=protected-access
+
+    def test_acquire_unique_proxies_for_three_workers(self):
+        pool = ProxyPool(["http://p1:8080", "http://p2:8080", "http://p3:8080"])
+        p1 = pool.acquire("w1")
+        p2 = pool.acquire("w2")
+        p3 = pool.acquire("w3")
+        self.assertEqual({p1, p2, p3}, {"http://p1:8080", "http://p2:8080", "http://p3:8080"})
+
+    def test_acquire_returns_none_when_pool_empty(self):
+        pool = ProxyPool(["http://p1:8080", "http://p2:8080", "http://p3:8080"])
+        self.assertIsNotNone(pool.acquire("w1"))
+        self.assertIsNotNone(pool.acquire("w2"))
+        self.assertIsNotNone(pool.acquire("w3"))
+        self.assertIsNone(pool.acquire("w4"))
+
+    def test_release_returns_proxy_to_pool(self):
+        pool = ProxyPool(["http://p1:8080"])
+        assigned = pool.acquire("w1")
+        self.assertEqual(pool.available_count(), 0)
+        pool.release("w1")
+        self.assertEqual(pool.available_count(), 1)
+        self.assertEqual(pool.acquire("w2"), assigned)
+
+    def test_default_pool_without_proxy_list_file_starts_empty(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_mod._default_pool = None  # pylint: disable=protected-access
+            pool = get_default_pool()
+            self.assertEqual(pool.available_count(), 0)
+            self.assertIsNone(pool.acquire("worker-1"))
+
+    def test_load_from_file(self):
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+            handle.write("http://p1:8080\n")
+            handle.write("\n")
+            handle.write("socks5://user:pass@p2:1080\n")
+            path = handle.name
+        try:
+            pool = ProxyPool()
+            loaded = pool.load_from_file(path)
+            self.assertEqual(loaded, 2)
+            self.assertEqual(pool.available_count(), 2)
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

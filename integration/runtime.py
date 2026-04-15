@@ -229,6 +229,14 @@ def start_worker(task_fn):
         t = threading.Thread(target=_worker_fn, args=(wid, task_fn, persona), daemon=False)
         _workers[wid] = t
         _worker_states[wid] = "IDLE"
+    proxy = None
+    try:
+        from modules.cdp.proxy import get_default_pool
+        proxy = get_default_pool().acquire(wid)
+        if proxy is None:
+            _logger.warning("No proxy available for worker %s — running without proxy", wid)
+    except Exception:
+        _logger.warning("Proxy pool unavailable for worker %s", wid, exc_info=True)
     try:
         t.start()
     except (RuntimeError, OSError):
@@ -280,6 +288,11 @@ def stop_worker(worker_id, timeout=None):
         _stop_requests.discard(worker_id); _workers.pop(worker_id, None)
         _worker_states.pop(worker_id, None)
     _log_event(worker_id, "stopped", "stop_requested")
+    try:
+        from modules.cdp.proxy import get_default_pool
+        get_default_pool().release(worker_id)
+    except Exception:
+        pass
     return True
 def get_active_workers() -> list[str]:
     """Return a list of active worker ids."""
