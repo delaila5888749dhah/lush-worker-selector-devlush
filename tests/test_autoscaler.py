@@ -91,6 +91,8 @@ class TestAutoscalerReset(AutoScalerResetMixin, unittest.TestCase):
 
     def test_reset_is_idempotent_when_no_instance(self):
         autoscaler_module.reset()  # must not raise when no instance exists
+        autoscaler_module.reset()  # calling twice must also be safe
+        self.assertIsNone(autoscaler_module._autoscaler_instance)  # pylint: disable=protected-access
 
     def test_runtime_reset_clears_autoscaler_state(self):
         from integration import runtime
