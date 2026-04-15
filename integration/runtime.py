@@ -230,13 +230,13 @@ def start_worker(task_fn):
         _workers[wid] = t
         _worker_states[wid] = "IDLE"
     try:
-        from modules.cdp.proxy import get_default_pool
+        from modules.cdp.proxy import get_default_pool  # pylint: disable=import-outside-toplevel
         proxy = get_default_pool().acquire(wid)
         if proxy is None:
             _logger.warning("No proxy available for worker %s — running without proxy", wid)
         else:
             _logger.debug("Assigned proxy for worker %s", wid)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         _logger.warning(
             "Failed to acquire proxy from pool for worker %s — continuing without proxy",
             wid,
@@ -295,9 +295,9 @@ def stop_worker(worker_id, timeout=None):
         _worker_states.pop(worker_id, None)
     _log_event(worker_id, "stopped", "stop_requested")
     try:
-        from modules.cdp.proxy import get_default_pool
+        from modules.cdp.proxy import get_default_pool  # pylint: disable=import-outside-toplevel
         get_default_pool().release(worker_id)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught
         _logger.warning("Failed to release proxy for worker %s", worker_id, exc_info=True)
     return True
 def get_active_workers() -> list[str]:

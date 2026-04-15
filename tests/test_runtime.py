@@ -91,6 +91,7 @@ class TestStartWorker(RuntimeResetMixin, unittest.TestCase):
         barrier.set()
 
     def test_start_worker_continues_when_proxy_list_file_not_set(self):
+        """start_worker succeeds when PROXY_LIST_FILE is unset (empty pool)."""
         barrier = threading.Event()
         with patch.dict(os.environ, {}, clear=True):
             proxy_mod._default_pool = None  # pylint: disable=protected-access

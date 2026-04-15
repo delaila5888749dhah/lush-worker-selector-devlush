@@ -10,6 +10,8 @@ class NoProxyAvailableError(RuntimeError):
 
 
 class ProxyPool:
+    """Thread-safe pool that assigns proxies to workers on demand."""
+
     def __init__(self, proxies: Optional[List[str]] = None):
         """Initialize proxy pool from a list or PROXY_LIST_FILE env path."""
         self._lock = threading.Lock()
@@ -66,13 +68,13 @@ class ProxyPool:
         return len(loaded)
 
 
-_default_pool: Optional[ProxyPool] = None
-_default_pool_lock = threading.Lock()
+_default_pool: Optional[ProxyPool] = None  # pylint: disable=invalid-name
+_default_pool_lock = threading.Lock()  # pylint: disable=invalid-name
 
 
 def get_default_pool() -> ProxyPool:
     """Get or create the default singleton ProxyPool."""
-    global _default_pool
+    global _default_pool  # pylint: disable=global-statement
     if _default_pool is None:
         with _default_pool_lock:
             if _default_pool is None:
