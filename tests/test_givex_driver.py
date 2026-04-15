@@ -866,7 +866,8 @@ class TestMaxMindGeoLookup(unittest.TestCase):
             def __exit__(self, exc_type, exc_value, traceback):
                 return False
 
-            def city(self, _ip):
+            @staticmethod
+            def city(_ip):
                 """Return the canned fake record."""
                 return fake_record
 

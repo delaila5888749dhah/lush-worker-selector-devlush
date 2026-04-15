@@ -38,6 +38,13 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
 
 try:
+    from zoneinfo import ZoneInfo as _ZoneInfo  # type: ignore[import]
+    from zoneinfo import ZoneInfoNotFoundError as _ZoneInfoNotFoundError
+except ImportError:  # pragma: no cover - Python < 3.9
+    _ZoneInfo = None  # type: ignore[assignment,misc]
+    _ZoneInfoNotFoundError = Exception  # type: ignore[assignment,misc]
+
+try:
     from modules.delay.biometrics import BiometricProfile as _BiometricProfile  # type: ignore
     from modules.delay.temporal import TemporalModel as _TemporalModel  # type: ignore
     from modules.delay.state import BehaviorStateMachine as _BehaviorStateMachine  # type: ignore
@@ -119,13 +126,13 @@ def _random_greeting() -> str:
 
 def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
     """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb."""
-    import zoneinfo  # pylint: disable=import-outside-toplevel
-
+    if _ZoneInfo is None:
+        return None
     mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
     if not os.path.exists(mmdb_path):
         return None
     try:
-        import geoip2.database  # type: ignore  # pylint: disable=import-outside-toplevel
+        import geoip2.database  # type: ignore
     except ImportError:
         return None
     try:
@@ -133,14 +140,14 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
             record = reader.city(ip_addr)
             tz_name = record.location.time_zone
             if tz_name:
-                tz_info = zoneinfo.ZoneInfo(tz_name)
+                tz_info = _ZoneInfo(tz_name)
                 now = datetime.datetime.now(tz_info)
                 offset = now.utcoffset()
                 if offset is None:
                     return None
                 return int(offset.total_seconds() // 3600)
     except (OSError, ValueError, AttributeError,
-            zoneinfo.ZoneInfoNotFoundError) as exc:
+            _ZoneInfoNotFoundError) as exc:
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None
 
@@ -481,8 +488,7 @@ class GivexDriver:
                     _log.warning("bounding_box_click: CDP failed (strict mode)")
                     return
                 _log.debug("bounding_box_click: CDP failed, .click() fallback", exc_info=True)
-        if not self._strict:
-            elements[0].click()
+        elements[0].click()
 
     def cdp_click_absolute(self, x: float, y: float) -> None:
         """Send an absolute-coordinate CDP click."""
