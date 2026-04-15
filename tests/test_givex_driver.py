@@ -1433,7 +1433,7 @@ class TestRealisticTypeField(unittest.TestCase):
              typo_patcher as mock_typo, \
              patch("time.sleep"):
             gd._realistic_type_field("#f", "x")  # pylint: disable=protected-access
-        self.assertEqual(mock_typo.call_args[0][0], -3)
+        self.assertEqual(mock_typo.call_args, call(-3))
 
 
 # ── TestHesitationDistribution ───────────────────────────────────────────────
