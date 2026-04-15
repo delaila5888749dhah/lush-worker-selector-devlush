@@ -17,12 +17,13 @@ Covers:
 
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     GivexDriver,
     SEL_ADD_TO_CART,
+    SEL_AMOUNT_INPUT,
     SEL_BEGIN_CHECKOUT,
     SEL_BILLING_ADDRESS,
     SEL_BILLING_CITY,
@@ -176,23 +177,22 @@ class TestFillEgiftForm(unittest.TestCase):
         billing = _make_billing()
         full_name = f"{billing.first_name} {billing.last_name}"
 
-        element = MagicMock()
-        selenium.find_elements.return_value = [element]
-
         gd = GivexDriver(selenium)
 
-        with patch.object(drv, "_random_greeting", return_value="Test greeting"):
+        with patch.object(drv, "_random_greeting", return_value="Test greeting"), \
+             patch.object(gd, "_realistic_type_field") as mock_type:
             gd.fill_egift_form(task, billing)
 
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        self.assertIn(str(task.amount), sent_values)
-        self.assertIn(task.recipient_email, sent_values)
-        self.assertIn(full_name, sent_values)
-        self.assertIn("Test greeting", sent_values)
-        # full_name appears twice: recipient name + sender name
-        self.assertEqual(sent_values.count(full_name), 2)
-        # recipient_email appears twice: email + confirm email
-        self.assertEqual(sent_values.count(task.recipient_email), 2)
+        expected_calls = [
+            call(SEL_GREETING_MSG, "Test greeting", field_kind="text"),
+            call(SEL_AMOUNT_INPUT, str(task.amount), field_kind="amount", typo_rate=0.0),
+            call(SEL_RECIPIENT_NAME, full_name, field_kind="name"),
+            call(SEL_RECIPIENT_EMAIL, task.recipient_email, field_kind="text"),
+            call(SEL_CONFIRM_RECIPIENT_EMAIL, task.recipient_email, field_kind="text"),
+            call(SEL_SENDER_NAME, full_name, field_kind="name"),
+        ]
+        self.assertEqual(mock_type.call_count, 6)
+        mock_type.assert_has_calls(expected_calls)
 
     def test_fill_egift_form_sends_confirm_email(self):
         """Verify recipient_email is sent to both SEL_RECIPIENT_EMAIL and SEL_CONFIRM_RECIPIENT_EMAIL."""
@@ -200,29 +200,47 @@ class TestFillEgiftForm(unittest.TestCase):
         task = _make_task()
         billing = _make_billing()
 
-        element = MagicMock()
-        selenium.find_elements.return_value = [element]
-
         gd = GivexDriver(selenium)
 
-        with patch.object(drv, "_random_greeting", return_value="Hi"):
+        with patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch.object(gd, "_realistic_type_field") as mock_type:
             gd.fill_egift_form(task, billing)
 
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        # Both email and confirm email should receive recipient_email
-        self.assertEqual(sent_values.count(task.recipient_email), 2)
+        email_calls = [
+            c for c in mock_type.call_args_list
+            if c.args[0] in (SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL)
+        ]
+        self.assertEqual(len(email_calls), 2)
+        self.assertTrue(all(c.args[1] == task.recipient_email for c in email_calls))
 
     def test_fill_egift_form_uses_billing_profile_name_as_sender(self):
         selenium = _make_driver()
         task = _make_task()
         billing = _make_billing()
+        gd = GivexDriver(selenium)
+        with patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch.object(gd, "_realistic_type_field") as mock_type:
+            gd.fill_egift_form(task, billing)
+        sender_calls = [c for c in mock_type.call_args_list if c.args[0] == SEL_SENDER_NAME]
+        self.assertEqual(len(sender_calls), 1)
+        self.assertEqual(sender_calls[0].args[1], "Jane Doe")
+
+    def test_fill_egift_form_uses_type_value_not_send_keys(self):
+        """fill_egift_form dispatches via _type_value, never via send_keys."""
+        selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         gd = GivexDriver(selenium)
-        with patch.object(drv, "_random_greeting", return_value="Hi"):
-            gd.fill_egift_form(task, billing)
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        self.assertIn("Jane Doe", sent_values)
+
+        with patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch("modules.cdp.driver._type_value") as mock_tv, \
+             patch("time.sleep"):
+            mock_tv.return_value = {"typed_chars": 1, "typos_injected": 0,
+                                    "corrections_made": 0, "mode": "cdp_key"}
+            gd.fill_egift_form(_make_task(), _make_billing())
+
+        self.assertEqual(mock_tv.call_count, 6)
+        element.send_keys.assert_not_called()
 
 
 class TestAddToCartAndCheckout(unittest.TestCase):
@@ -1140,19 +1158,16 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
 
     def test_fill_egift_form_calls_smooth_scroll_first(self):
         selenium = _make_driver()
-        element = MagicMock()
-        selenium.find_elements.return_value = [element]
         gd = GivexDriver(selenium)
         call_log = []
 
         with patch.object(gd, "_smooth_scroll_to", side_effect=lambda s: call_log.append(("scroll", s))), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch("time.sleep"):
-            original_type = gd._cdp_type_field
-            def tracking_type(sel, val):
+            def tracking_type(sel, _val, **_kw):  # pylint: disable=unused-argument
+                """Spy that records selector to call_log."""
                 call_log.append(("type", sel))
-                original_type(sel, val)
-            gd._cdp_type_field = tracking_type
+            gd._realistic_type_field = tracking_type  # pylint: disable=protected-access
             gd.fill_egift_form(_make_task(), _make_billing())
 
         self.assertGreater(len(call_log), 1)

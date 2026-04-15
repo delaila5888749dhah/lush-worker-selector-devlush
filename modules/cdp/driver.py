@@ -236,7 +236,10 @@ class GivexDriver:
             _log.debug("Element clear() skipped in _cdp_type_field")
         el.send_keys(value)
 
-    def _realistic_type_field(self, sel, val, *, use_burst=False, field_kind="text"):
+    def _realistic_type_field(
+            self, sel, val, *, use_burst=False,
+            field_kind="text", typo_rate=None,
+    ):
         els = self.find_elements(sel)
         if not els: raise SelectorTimeoutError(sel, 0)  # noqa: E701
         if _type_value is None:
@@ -244,11 +247,17 @@ class GivexDriver:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
             self._cdp_type_field(sel, val)
             return
-        tr = self._persona.get_typo_probability() if self._persona else 0.0
+        typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
         if self._persona and self._temporal:
-            tr += self._temporal.get_night_typo_increase()
+            typo_prob += self._temporal.get_night_typo_increase()
+        if typo_rate is not None:
+            typo_prob = typo_rate
         dl = (self._bio.generate_4x4_pattern() if self._bio and use_burst and len(val) >= 16 else self._bio.generate_burst_pattern(len(val)) if self._bio else None)
-        _type_value(self._driver, els[0], val, self._get_rng(), typo_rate=tr, delays=dl, strict=self._strict, field_kind=field_kind, engine=self._engine)
+        _type_value(
+            self._driver, els[0], val, self._get_rng(),
+            typo_rate=typo_prob, delays=dl, strict=self._strict,
+            field_kind=field_kind, engine=self._engine,
+        )
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """Select the option matching *value* in a ``<select>`` element.
@@ -503,12 +512,26 @@ class GivexDriver:
             self._sm.transition("FILLING_FORM")
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
-        self._cdp_type_field(SEL_GREETING_MSG, _random_greeting())
-        self._cdp_type_field(SEL_AMOUNT_INPUT, str(task.amount))
-        self._cdp_type_field(SEL_RECIPIENT_NAME, full_name)
-        self._cdp_type_field(SEL_RECIPIENT_EMAIL, task.recipient_email)
-        self._cdp_type_field(SEL_CONFIRM_RECIPIENT_EMAIL, task.recipient_email)
-        self._cdp_type_field(SEL_SENDER_NAME, full_name)
+        self._realistic_type_field(
+            SEL_GREETING_MSG, _random_greeting(), field_kind="text",
+        )
+        self._realistic_type_field(
+            SEL_AMOUNT_INPUT, str(task.amount),
+            field_kind="amount", typo_rate=0.0,
+        )
+        self._realistic_type_field(
+            SEL_RECIPIENT_NAME, full_name, field_kind="name",
+        )
+        self._realistic_type_field(
+            SEL_RECIPIENT_EMAIL, task.recipient_email, field_kind="text",
+        )
+        self._realistic_type_field(
+            SEL_CONFIRM_RECIPIENT_EMAIL, task.recipient_email,
+            field_kind="text",
+        )
+        self._realistic_type_field(
+            SEL_SENDER_NAME, full_name, field_kind="name",
+        )
 
     def add_to_cart_and_checkout(self) -> None:
         """Click Add-to-Cart, wait for Review & Checkout button, then click it.
