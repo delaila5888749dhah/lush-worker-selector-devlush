@@ -62,14 +62,40 @@ class TestBuildPath(unittest.TestCase):
         path_from_offset = build_path((50.0, 25.0), (100.0, 50.0), _rnd(5), n_points=3)
         self.assertNotEqual(path_from_zero[:-1], path_from_offset[:-1])
 
+    def test_curve_direction_is_randomized(self):
+        """Bézier arcs bend both left and right across many seeds."""
+        negatives = 0
+        positives = 0
+        for seed in range(100):
+            path = build_path((0.0, 0.0), (100.0, 0.0), _rnd(seed), n_points=5)
+            coord_y = path[0][1]
+            if coord_y < 0:
+                negatives += 1
+            elif coord_y > 0:
+                positives += 1
+        self.assertGreaterEqual(negatives, 30)
+        self.assertGreaterEqual(positives, 30)
+
 
 class TestGhostCursorPosition(unittest.TestCase):
     """GhostCursor tracks the logical cursor position across moves."""
 
-    def test_initial_position_is_origin(self):
+    def test_initial_position_is_randomized_within_default_viewport(self):
+        """Initial cursor lands inside 10–90 % of the default viewport."""
         driver = MagicMock()
-        gc = GhostCursor(driver, _rnd(0))
-        self.assertEqual(gc.position, (0.0, 0.0))
+        cursor = GhostCursor(driver, _rnd(0))
+        pos_x, pos_y = cursor.position
+        self.assertGreaterEqual(pos_x, 128.0)
+        self.assertLessEqual(pos_x, 1152.0)
+        self.assertGreaterEqual(pos_y, 72.0)
+        self.assertLessEqual(pos_y, 648.0)
+
+    def test_initial_position_is_never_origin_across_many_instances(self):
+        """No cursor out of 1000 seeds starts at the (0, 0) corner."""
+        driver = MagicMock()
+        for seed in range(1000):
+            cursor = GhostCursor(driver, _rnd(seed))
+            self.assertNotEqual(cursor.position, (0.0, 0.0))
 
     def test_position_updated_after_move_to(self):
         driver = MagicMock()
@@ -165,6 +191,24 @@ class TestGhostCursorDispatch(unittest.TestCase):
         self.assertEqual(len(sleep_calls), 5)
         for val in sleep_calls:
             self.assertAlmostEqual(val, 0.07)
+
+    def test_dynamic_click_delay_scales_with_distance(self):
+        """Longer moves produce a larger per-waypoint delay than short ones."""
+        short_driver = MagicMock()
+        short_sleep_calls = []
+        short_cursor = GhostCursor(short_driver, _rnd(10))
+        short_cursor._x, short_cursor._y = 0.0, 0.0
+        with patch("time.sleep", side_effect=short_sleep_calls.append):
+            short_cursor.move_to(100.0, 0.0, n_points=1)
+
+        long_driver = MagicMock()
+        long_sleep_calls = []
+        long_cursor = GhostCursor(long_driver, _rnd(10))
+        long_cursor._x, long_cursor._y = 0.0, 0.0
+        with patch("time.sleep", side_effect=long_sleep_calls.append):
+            long_cursor.move_to(1000.0, 0.0, n_points=1)
+
+        self.assertGreater(long_sleep_calls[0], short_sleep_calls[0])
 
 
 class TestGhostCursorScrollWheel(unittest.TestCase):
