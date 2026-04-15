@@ -491,12 +491,31 @@ class GivexDriver:
                 f"Geo-check failed: expected country 'US', got {country!r}"
             )
 
+    def _clear_browser_state(self) -> None:
+        """Clear localStorage, sessionStorage, and cookies (Blueprint §3 Hard-Reset)."""
+        try:
+            self._driver.execute_script(
+                "window.localStorage.clear(); "
+                "window.sessionStorage.clear();"
+            )
+        except Exception:
+            _log.debug("_clear_browser_state: script clear skipped", exc_info=True)
+        try:
+            self._driver.delete_all_cookies()
+        except Exception:
+            _log.debug(
+                "_clear_browser_state: delete_all_cookies skipped",
+                exc_info=True,
+            )
+        _log.debug("_clear_browser_state: browser state cleared for new cycle")
+
     def navigate_to_egift(self) -> None:
         """Navigate to the Givex base URL and open the eGift purchase page.
 
         Accepts the cookie banner if present, then clicks the Buy eGift link,
         and navigates directly to the eGift form page.
         """
+        self._clear_browser_state()
         self._driver.get(URL_BASE)
         # Dismiss cookie banner if present (best-effort)
         if self.find_elements(SEL_COOKIE_ACCEPT):
@@ -507,6 +526,7 @@ class GivexDriver:
         self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10)
         self.bounding_box_click(SEL_BUY_EGIFT_BTN)
         self._wait_for_url(URL_EGIFT, timeout=15)
+        self._clear_browser_state()
 
     # ── eGift form (Step 1) ─────────────────────────────────────────────────
 

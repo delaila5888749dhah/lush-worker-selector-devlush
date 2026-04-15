@@ -699,6 +699,16 @@ class TestDetectPageState(unittest.TestCase):
 class TestNavigateToEgift(unittest.TestCase):
     """navigate_to_egift waits for URL_EGIFT after clicking buy button."""
 
+    _CLEAR_SCRIPT = "window.localStorage.clear(); window.sessionStorage.clear();"
+
+    def _assert_clear_script_called_twice(self, selenium):
+        clear_script_calls = [
+            c.args[0]
+            for c in selenium.execute_script.call_args_list
+            if c.args and c.args[0] == self._CLEAR_SCRIPT
+        ]
+        self.assertEqual(clear_script_calls, [self._CLEAR_SCRIPT, self._CLEAR_SCRIPT])
+
     def test_navigate_to_egift_waits_for_url(self):
         selenium = _make_driver(current_url=URL_EGIFT)
         btn_el = MagicMock()
@@ -716,6 +726,72 @@ class TestNavigateToEgift(unittest.TestCase):
             gd.navigate_to_egift()
 
         # Verify only URL_BASE was navigated to (not URL_EGIFT directly)
+        selenium.get.assert_called_once_with(URL_BASE)
+        btn_el.click.assert_called_once()
+
+    def test_navigate_to_egift_clears_browser_state_twice(self):
+        """localStorage/sessionStorage clear and delete_all_cookies called twice."""
+        selenium = _make_driver(current_url=URL_EGIFT)
+        btn_el = MagicMock()
+
+        def side_effect(_method, selector):
+            clean = selector.strip()
+            if clean == "#button--accept-cookies":
+                return []
+            return [btn_el]
+
+        selenium.find_elements.side_effect = side_effect
+        gd = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            gd.navigate_to_egift()
+
+        self.assertEqual(selenium.delete_all_cookies.call_count, 2)
+        self._assert_clear_script_called_twice(selenium)
+
+    def test_navigate_to_egift_does_not_crash_when_script_clear_fails(self):
+        """execute_script exception does not abort navigate_to_egift flow."""
+        selenium = _make_driver(current_url=URL_EGIFT)
+        btn_el = MagicMock()
+
+        def side_effect(_method, selector):
+            clean = selector.strip()
+            if clean == "#button--accept-cookies":
+                return []
+            return [btn_el]
+
+        selenium.find_elements.side_effect = side_effect
+        selenium.execute_script.side_effect = RuntimeError("script error")
+        gd = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            gd.navigate_to_egift()
+
+        self._assert_clear_script_called_twice(selenium)
+        self.assertEqual(selenium.delete_all_cookies.call_count, 2)
+        selenium.get.assert_called_once_with(URL_BASE)
+        btn_el.click.assert_called_once()
+
+    def test_navigate_to_egift_does_not_crash_when_cookie_clear_fails(self):
+        """delete_all_cookies exception does not abort navigate_to_egift flow."""
+        selenium = _make_driver(current_url=URL_EGIFT)
+        btn_el = MagicMock()
+
+        def side_effect(_method, selector):
+            clean = selector.strip()
+            if clean == "#button--accept-cookies":
+                return []
+            return [btn_el]
+
+        selenium.find_elements.side_effect = side_effect
+        selenium.delete_all_cookies.side_effect = RuntimeError("cookie clear error")
+        gd = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            gd.navigate_to_egift()
+
+        self._assert_clear_script_called_twice(selenium)
+        self.assertEqual(selenium.delete_all_cookies.call_count, 2)
         selenium.get.assert_called_once_with(URL_BASE)
         btn_el.click.assert_called_once()
 
