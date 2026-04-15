@@ -740,11 +740,11 @@ class TestPreflightGeoCheck(unittest.TestCase):
         body_el = MagicMock()
         body_el.text = '{"country": "US", "utc_offset": -5}'
         selenium.find_element.return_value = body_el
-        gd = GivexDriver(selenium)
+        driver = GivexDriver(selenium)
 
-        gd.preflight_geo_check()
+        driver.preflight_geo_check()
 
-        self.assertEqual(gd._utc_offset_hours, -5)  # pylint: disable=protected-access
+        self.assertEqual(driver._utc_offset_hours, -5)  # pylint: disable=protected-access
 
 
 # ── Helpers for persona-aware tests ─────────────────────────────────────────
@@ -935,12 +935,12 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         selenium.execute_script.return_value = self._rect()
         persona = _make_persona(42)
-        gd = GivexDriver(selenium, persona=persona)
-        gd.set_proxy_utc_offset(7)
-        temporal = gd._temporal  # pylint: disable=protected-access
+        driver = GivexDriver(selenium, persona=persona)
+        driver.set_proxy_utc_offset(7)
+        temporal = driver._temporal  # pylint: disable=protected-access
         with patch.object(temporal, "get_time_state", return_value="DAY") as mock_get_time_state, \
              patch("time.sleep"):
-            gd.bounding_box_click("#some-el")
+            driver.bounding_box_click("#some-el")
         mock_get_time_state.assert_called_with(7)
 
 
@@ -1422,17 +1422,17 @@ class TestRealisticTypeField(unittest.TestCase):
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         persona = _make_persona(0)
-        gd = GivexDriver(selenium, persona=persona)
-        gd.set_proxy_utc_offset(-3)
+        driver = GivexDriver(selenium, persona=persona)
+        driver.set_proxy_utc_offset(-3)
         tv_result = {
             "typed_chars": 1, "typos_injected": 0, "corrections_made": 0, "mode": "cdp_key",
         }
-        temporal = gd._temporal  # pylint: disable=protected-access
+        temporal = driver._temporal  # pylint: disable=protected-access
         typo_patcher = patch.object(temporal, "get_night_typo_increase", return_value=0.01)
         with patch("modules.cdp.driver._type_value", return_value=tv_result), \
              typo_patcher as mock_typo, \
              patch("time.sleep"):
-            gd._realistic_type_field("#f", "x")  # pylint: disable=protected-access
+            driver._realistic_type_field("#f", "x")  # pylint: disable=protected-access
         self.assertEqual(mock_typo.call_args, call(-3))
 
 
