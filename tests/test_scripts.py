@@ -1,5 +1,4 @@
 """Tests for scripts/seed_billing_pool.py and scripts/download_maxmind.py."""
-from glob import glob
 import hashlib
 import importlib.util
 import io
@@ -9,8 +8,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -58,7 +57,11 @@ class ScriptTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            txt_files = glob(os.path.join(output_dir, "*.txt"))
+            txt_files = [
+                os.path.join(output_dir, name)
+                for name in os.listdir(output_dir)
+                if name.endswith(".txt")
+            ]
             self.assertGreaterEqual(len(txt_files), 1)
             with open(txt_files[0], "r", encoding="utf-8") as handle:
                 lines = handle.read().strip().splitlines()
