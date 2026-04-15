@@ -433,7 +433,6 @@ class GivexDriver:
                 _log.debug("bounding_box_click: CDP failed, .click() fallback", exc_info=True)
         if not self._strict or self._rnd is None:
             elements[0].click()
-        elements[0].click()
 
     def cdp_click_absolute(self, x: float, y: float) -> None:
         """Send an absolute-coordinate CDP click."""
