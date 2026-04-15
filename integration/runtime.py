@@ -235,8 +235,10 @@ def start_worker(task_fn):
         proxy = get_default_pool().acquire(wid)
         if proxy is None:
             _logger.warning("No proxy available for worker %s — running without proxy", wid)
+        else:
+            _logger.debug("Assigned proxy for worker %s", wid)
     except Exception:
-        _logger.warning("Proxy pool unavailable for worker %s", wid, exc_info=True)
+        _logger.warning("Failed to acquire proxy from pool for worker %s", wid, exc_info=True)
     try:
         t.start()
     except (RuntimeError, OSError):
