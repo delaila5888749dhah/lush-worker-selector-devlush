@@ -15,6 +15,7 @@ from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 from integration.runtime import (
     ALLOWED_STATES,
+    ConfigError,
     _apply_scale,
     get_active_workers,
     get_deployment_status,
@@ -1588,4 +1589,29 @@ class TestBillingPoolPreflightValidation(RuntimeResetMixin, unittest.TestCase):
             with patch.object(billing, "_pool_dir", return_value=missing):
                 self.assertFalse(start(lambda _: None, interval=0.05))
         finally:
+            stop()
+
+
+class TestStartupConfigValidation(RuntimeResetMixin, unittest.TestCase):
+    def test_start_raises_config_error_for_zero_worker_count(self):
+        with patch.dict(os.environ, {"WORKER_COUNT": "0", "GIVEX_ENDPOINT": "https://example.test"}):
+            with self.assertRaises(ConfigError):
+                start(lambda _: None, interval=0.05)
+
+    def test_start_raises_config_error_for_non_integer_worker_count(self):
+        with patch.dict(os.environ, {"WORKER_COUNT": "abc", "GIVEX_ENDPOINT": "https://example.test"}):
+            with self.assertRaises(ConfigError):
+                start(lambda _: None, interval=0.05)
+
+    def test_start_warns_when_worker_count_missing(self):
+        env = dict(os.environ)
+        env.pop("WORKER_COUNT", None)
+        env["GIVEX_ENDPOINT"] = "https://example.test"
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertLogs("integration.runtime", level="WARNING") as logs:
+                self.assertTrue(start(lambda _: None, interval=0.05))
+            self.assertTrue(
+                any("WORKER_COUNT not set" in line for line in logs.output),
+                "Expected WORKER_COUNT warning at startup",
+            )
             stop()

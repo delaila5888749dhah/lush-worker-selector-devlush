@@ -24,6 +24,12 @@ from modules.cdp.proxy import get_default_pool
 from modules.common.exceptions import CycleExhaustedError
 from modules.common.thresholds import ERROR_RATE_THRESHOLD, MAX_RESTARTS_PER_HOUR
 _logger = logging.getLogger(__name__)
+
+
+class ConfigError(RuntimeError):
+    """Raised when runtime startup configuration is invalid."""
+
+
 ALLOWED_STATES = {"INIT", "RUNNING", "STOPPING", "STOPPED"}
 ALLOWED_WORKER_STATES = {"IDLE", "IN_CYCLE", "CRITICAL_SECTION", "SAFE_POINT"}
 _VALID_TRANSITIONS = {
@@ -440,6 +446,29 @@ def register_signal_handlers():
         signal.signal(signal.SIGINT, _handle_shutdown)
     atexit.register(stop, timeout=_WORKER_TIMEOUT)
 
+
+def _validate_startup_config() -> None:
+    """Validate critical startup config. Raises ConfigError on invalid values."""
+    raw = os.environ.get("WORKER_COUNT", "")
+    if not raw:
+        _logger.warning("WORKER_COUNT not set — defaulting to 1")
+    else:
+        try:
+            worker_count = int(raw)
+        except ValueError as exc:
+            raise ConfigError(f"WORKER_COUNT={raw!r} is not a valid integer") from exc
+        if worker_count < 1 or worker_count > 50:
+            raise ConfigError(f"WORKER_COUNT={worker_count} out of range [1, 50]")
+
+    from modules.delay.config import DelayConfigError, validate_config
+    try:
+        validate_config()
+    except DelayConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+
+    if not os.environ.get("GIVEX_ENDPOINT"):
+        _logger.warning("GIVEX_ENDPOINT not set — will use default")
+
 def _validate_billing_pool_preflight() -> None:  # pylint: disable=protected-access
     """Validate billing pool before runtime startup. Raises RuntimeError if invalid.
 
@@ -483,6 +512,7 @@ def start(task_fn, interval=None):
     with _lock:
         if _state not in ("INIT", "STOPPED"):
             return False
+    _validate_startup_config()
     _ensure_rollout_configured()
     try:
         _validate_billing_pool_preflight()
