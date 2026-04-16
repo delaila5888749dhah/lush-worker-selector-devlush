@@ -21,6 +21,7 @@ from integration.runtime import (
     _ensure_rollout_configured,
     get_all_worker_states,
     is_safe_to_control,
+    reset,
     start_worker,
 )
 from modules.monitor import main as monitor
