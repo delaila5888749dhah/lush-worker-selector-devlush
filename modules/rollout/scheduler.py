@@ -18,13 +18,13 @@ _DEFAULT_INTERVAL: float = 300.0
 _lock = threading.Lock()
 _stop_event = threading.Event()
 _scheduler_thread: Optional[threading.Thread] = None  # pylint: disable=invalid-name
-# Stable-window anchor; all reads/writes must hold _lock.
+# Stable-window anchor (time.monotonic() when stable); all reads/writes must hold _lock.
 _stable_since: Optional[float] = None  # pylint: disable=invalid-name
 _is_stable_fn = None  # pylint: disable=invalid-name
 
 
 def _clamp_interval(interval) -> float:
-    """Clamp *interval* to [_MIN_INTERVAL, _MAX_INTERVAL]; handles NaN/inf."""
+    """Clamp *interval* to [_MIN_INTERVAL, _MAX_INTERVAL]; invalid/NaN/inf falls back."""
     try:
         interval_val = float(interval)
     except (TypeError, ValueError):
@@ -69,7 +69,7 @@ def _do_advance() -> None:
 
 
 def _scheduler_loop(interval: float) -> None:
-    """Main scheduler loop; eligibility decided under lock (no TOCTOU)."""
+    """Main scheduler loop; eligibility checked atomically under lock (no TOCTOU race)."""
     global _stable_since  # pylint: disable=global-statement,invalid-name
     while not _stop_event.is_set():
         try:
