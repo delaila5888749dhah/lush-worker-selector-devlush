@@ -648,3 +648,53 @@ Non-interference:
 Synchronization Matrix (§11) — thêm entry mới:
 · Spec §12 (Billing Audit Event) ↔ Blueprint §12 (Billing Selection Audit Event):
 · Status: ✓ ĐỒNG BỘ
+
+---
+
+13. RUNTIME LIFECYCLE & CONTROL-PLANE SAFETY (PR 13)
+
+Các đảm bảo kỹ thuật bổ sung tại integration/runtime.py để đảm bảo vòng đời worker và control-plane hoạt động đúng trong môi trường concurrent.
+
+§13.1. STOP_WORKER RACE SAFETY
+· stop_worker() đọc worker state và thêm vào _stop_requests trong cùng một lock section → không có TOCTOU.
+· Worker trong CRITICAL_SECTION không bị buộc dừng — được chờ hoàn thành CS tự nhiên qua join().
+· Worker không bị xóa khỏi registry khi timeout — giữ nguyên để thread còn chạy có thể gọi set_worker_state().
+
+§13.2. GRACEFUL SHUTDOWN TIMEOUT BUDGETING
+· stop() phân bổ 30% budget cho loop thread, 70% cho workers.
+· Stragglers được log rõ ràng với action "hard_timeout" thay vì bị bỏ qua.
+· Trạng thái STOPPED được set sau khi tất cả joins hoàn tất (hoặc timeout).
+· _flush_idempotency_store() được gọi sau khi state = "STOPPED" → luôn có cơ hội thực thi.
+
+§13.3. RESET() PRODUCTION GUARD
+· reset() kiểm tra _state == "RUNNING" và _behavior_delay_enabled == True.
+· Nếu đang chạy ở production mode → raise RuntimeError với message rõ ràng.
+· Trong test context (_behavior_delay_enabled = False), reset() hoạt động bình thường.
+
+§13.4. _PENDING_RESTARTS CAP
+· Khi worker fail, _pending_restarts bị cap tại max(1, len(_workers)).
+· Ngăn _pending_restarts tích lũy vô hạn khi nhiều failures xảy ra trước _apply_scale().
+· _apply_scale() vẫn decrement đúng số lượng khi scale-up.
+
+§13.5. METRICS UNAVAILABLE DEGRADED PATH
+· Khi monitor.get_metrics() fail, log event action = "metrics_unavailable_scaling_deferred".
+· Logger WARNING message rõ ràng: "Metrics unavailable; scaling decision deferred for this tick".
+· Phân biệt với "hold_deferred" (unsafe worker state) và "hold" (normal HOLD decision).
+
+§13.6. LOG_SINK ERROR COUNTER
+· _log_event() bọc log_sink.emit() trong try/except.
+· Mỗi lần emit() fail → _log_sink_error_count tăng lên 1.
+· Logger WARNING với total failure count → runtime có tín hiệu quan sát được.
+· Runtime không crash khi sink fail.
+
+§13.7. START_WORKER PROXY CLEANUP ON THREAD FAILURE
+· Nếu Thread.start() raise RuntimeError/OSError → get_default_pool().release(wid) được gọi ngay.
+· Proxy không bị leak khi thread không thể khởi động.
+
+§13.8. REGISTER_SIGNAL_HANDLERS NON-MAIN THREAD
+· Nếu gọi từ non-main thread → SIGTERM/SIGINT handlers không được register (Python limitation).
+· Thêm _logger.debug() rõ ràng để tracing.
+· atexit hook vẫn được register từ mọi thread.
+
+Synchronization Matrix (§11) — thêm entries mới:
+· Spec §13 (Runtime Lifecycle Safety) ↔ Blueprint §13: Status: ✓ ĐỒNG BỘ

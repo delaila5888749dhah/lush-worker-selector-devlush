@@ -65,11 +65,21 @@ Các điều kiện bắt buộc phải PASS trước khi bắt đầu staging:
 - [ ] SCALE_UP trigger khi success_rate ≥ 70%, error_rate ≤ 5%
 - [ ] SCALE_DOWN trigger khi error_rate > 5% hoặc restarts > 3/hr
 - [ ] Cooldown 30s giữa các quyết định
+- [ ] Khi metrics unavailable → log "metrics_unavailable_scaling_deferred" và defer scaling (không silent)
+
+### CP-11 — Runtime Lifecycle Safety (PR 13)
+- [ ] stop_worker() CRITICAL_SECTION safe: không bị force-stop, chờ CS hoàn thành
+- [ ] stop() bounded shutdown: 30% budget cho loop, 70% cho workers; stragglers được log
+- [ ] reset() production guard: raise RuntimeError nếu RUNNING + behavior delay enabled
+- [ ] _pending_restarts capped tại max(1, len(_workers)) khi worker fail
+- [ ] proxy released khi Thread.start() fail trong start_worker()
+- [ ] register_signal_handlers() không crash từ non-main thread; log debug khi skip
 
 ### CP-9 — Logging & Traceability (Guard 3.5)
 - [ ] Log format đúng: timestamp | worker_id | trace_id | state | action | status
 - [ ] trace_id unique per lifecycle
 - [ ] Tất cả error paths được log
+- [ ] log_sink.emit() failure được đếm (runtime._log_sink_error_count) và log WARNING
 
 ### CP-10 — Stability Metrics (24h run)
 - [ ] success_rate ≥ 70%
