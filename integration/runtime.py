@@ -70,6 +70,7 @@ _BILLING_CB_THRESHOLD = max(1, int(os.environ.get("BILLING_CB_THRESHOLD", "3")))
 _BILLING_CB_PAUSE = max(1, int(os.environ.get("BILLING_CB_PAUSE", "120")))
 _consecutive_billing_failures = 0
 _billing_throttled_until: float = 0.0
+_log_sink_error_count = 0  # incremented on log_sink.emit() failure
 def _is_billing_throttled() -> bool:
     """Return True if billing circuit breaker is active (must hold _lock)."""
     return time.monotonic() < _billing_throttled_until
@@ -79,6 +80,7 @@ def _should_stop_worker(worker_id):
         return True
     return worker_id not in _workers or worker_id in _stop_requests or _state == "STOPPING"
 def _log_event(worker_id, state, action, metrics=None) -> None:
+    global _log_sink_error_count
     with _trace_lock:
         tid = _trace_id or _NO_TRACE
     _logger.info(
@@ -90,13 +92,21 @@ def _log_event(worker_id, state, action, metrics=None) -> None:
         action,
         metrics or "",
     )
-    log_sink.emit({
-        "ts": time.time(),
-        "source": worker_id,
-        "level": state,
-        "event": action,
-        "data": metrics if isinstance(metrics, dict) else {},
-    })
+    try:
+        log_sink.emit({
+            "ts": time.time(),
+            "source": worker_id,
+            "level": state,
+            "event": action,
+            "data": metrics if isinstance(metrics, dict) else {},
+        })
+    except Exception:  # pylint: disable=broad-except  # prevent runtime crash on sink failure
+        with _lock:
+            _log_sink_error_count += 1
+            sink_fail_count = _log_sink_error_count
+        _logger.warning(
+            "log_sink.emit() failed (total sink failures: %d)", sink_fail_count, exc_info=True
+        )
 def _sanitize_error(exc: Exception) -> str:
     """Redact card-like digit sequences from exception messages before logging."""
     return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
@@ -116,8 +126,17 @@ def _transition_worker_state_locked(worker_id, new_state):
     if new_state not in _VALID_TRANSITIONS.get(current, set()):
         raise ValueError(f"Invalid worker state transition: {current} -> {new_state} for {worker_id}")
     _worker_states[worker_id] = new_state
+def _increment_pending_restarts_locked(worker_id):
+    """Increment _pending_restarts for a failed worker, capped at current worker count.
+
+    Must be called while holding _lock.  No-op if the worker is not registered
+    or already has a stop request (natural exit, not a failure restart).
+    """
+    global _pending_restarts
+    if worker_id in _workers and worker_id not in _stop_requests:
+        _pending_restarts = min(_pending_restarts + 1, max(1, len(_workers)))
 def _worker_fn(worker_id, task_fn, persona):
-    global _pending_restarts, _restart_delay, _consecutive_billing_failures, _billing_throttled_until
+    global _restart_delay, _consecutive_billing_failures, _billing_throttled_until
     with _lock:
         delay_enabled = _behavior_delay_enabled
     if delay_enabled and persona is not None:
@@ -178,8 +197,7 @@ def _worker_fn(worker_id, task_fn, persona):
                         _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
                         _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
                         _consecutive_billing_failures = 0
-                    if worker_id in _workers and worker_id not in _stop_requests:
-                        _pending_restarts += 1
+                    _increment_pending_restarts_locked(worker_id)
                 err_data: dict = {"error": _sanitize_error(exc)}
                 if persona_type_tag is not None:
                     err_data["persona_type"] = persona_type_tag
@@ -194,8 +212,7 @@ def _worker_fn(worker_id, task_fn, persona):
                     _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
                 get_autoscaler().record_failure(worker_id)
                 with _lock:
-                    if worker_id in _workers and worker_id not in _stop_requests:
-                        _pending_restarts += 1
+                    _increment_pending_restarts_locked(worker_id)
                 err_data: dict = {"error": _sanitize_error(exc)}
                 if persona_type_tag is not None:
                     err_data["persona_type"] = persona_type_tag
@@ -262,6 +279,10 @@ def start_worker(task_fn):
         with _lock:
             _workers.pop(wid, None)
             _worker_states.pop(wid, None)
+        try:
+            get_default_pool().release(wid)
+        except Exception:  # pylint: disable=broad-except  # proxy release must not suppress original exception
+            _logger.warning("Failed to release proxy for worker %s after thread start failure", wid, exc_info=True)
         raise
     return wid
 def stop_worker(worker_id, timeout=None):
@@ -387,7 +408,10 @@ def _runtime_loop(task_fn, interval):
             try:
                 metrics = monitor.get_metrics()
             except Exception as exc:
-                _log_event("runtime", "warning", "monitor_unavailable", {"error": _sanitize_error(exc)}); _safe_sleep(interval); continue
+                _log_event("runtime", "warning", "metrics_unavailable_scaling_deferred", {"error": _sanitize_error(exc)})
+                _logger.warning("Metrics unavailable; scaling decision deferred for this tick")
+                _safe_sleep(interval)
+                continue
             metrics_exporter.export_metrics(metrics)
             _alerts = alerting.evaluate_alerts(metrics)
             for _alert_msg in _alerts:
@@ -448,10 +472,20 @@ def _handle_shutdown(signum, frame):
     _logger.info("Received signal %d, initiating graceful shutdown...", signum)
     stop(timeout=_WORKER_TIMEOUT)
 def register_signal_handlers():
-    """Register SIGTERM/SIGINT handlers and atexit hook for graceful shutdown."""
+    """Register SIGTERM/SIGINT handlers and atexit hook for graceful shutdown.
+
+    Signal handler registration is skipped when called from a non-main thread
+    (Python only allows signal handlers on the main thread). The atexit hook
+    is always registered regardless of calling thread.
+    """
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, _handle_shutdown)
         signal.signal(signal.SIGINT, _handle_shutdown)
+    else:
+        _logger.debug(
+            "register_signal_handlers() called from non-main thread; "
+            "SIGTERM/SIGINT handlers not registered (atexit hook still active)"
+        )
     atexit.register(stop, timeout=_WORKER_TIMEOUT)
 
 
@@ -724,8 +758,18 @@ def get_worker_browser_profile(worker_id: str):  # -> Optional[str]
 
 
 def reset():
-    """Reset all runtime state. Intended for testing."""
-    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until
+    """Reset all runtime state. Intended for testing.
+
+    Raises RuntimeError if called while the runtime is actively running
+    in production mode (behavior delay enabled). Call stop() first.
+    """
+    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until, _log_sink_error_count
+    with _lock:
+        if _state == "RUNNING" and _behavior_delay_enabled:
+            raise RuntimeError(
+                "reset() called while runtime is actively running in production mode; "
+                "call stop() first."
+            )
     stop(timeout=2)
     with _lock:
         _state = "INIT"; _loop_thread = None; _workers = {}; _worker_states = {}; _worker_counter = 0
@@ -733,6 +777,7 @@ def reset():
         _behavior_delay_enabled = False
         _loop_error_count = 0; _restart_delay = 0
         _consecutive_billing_failures = 0; _billing_throttled_until = 0.0
+        _log_sink_error_count = 0
     with _trace_lock:
         _trace_id = None
     _stop_event.clear()
