@@ -65,7 +65,7 @@ modules/delay/temporal.py — apply_micro_variation():
   result = max(0.0, base_delay * uniform(0.90, 1.10))
   → result is always non-negative
 ```
-**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to [0.0, MAX]. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator.
+**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator.
 
 ---
 ```
