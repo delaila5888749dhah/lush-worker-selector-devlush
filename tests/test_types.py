@@ -26,6 +26,18 @@ class TestWorkerTaskIdNoneRejected(unittest.TestCase):
                 task_id=None,
             )
 
+    def test_task_id_blank_raises_value_error(self):
+        """A whitespace-only task_id must raise ValueError."""
+        card = _make_card()
+        with self.assertRaises(ValueError):
+            WorkerTask(
+                recipient_email="test@example.com",
+                amount=100,
+                primary_card=card,
+                order_queue=(),
+                task_id="   ",
+            )
+
 
 class TestWorkerTaskOrderQueueImmutability(unittest.TestCase):
     """WorkerTask.order_queue must be a tuple to preserve immutability."""
@@ -100,6 +112,17 @@ class TestWorkerTaskFieldValidation(unittest.TestCase):
                 order_queue=(),
             )
 
+    def test_non_string_recipient_email_raises_value_error(self):
+        """A non-string recipient_email must raise ValueError."""
+        card = _make_card()
+        with self.assertRaises(ValueError):
+            WorkerTask(
+                recipient_email=None,
+                amount=100,
+                primary_card=card,
+                order_queue=(),
+            )
+
     def test_zero_amount_raises_value_error(self):
         """Zero amount must raise ValueError."""
         card = _make_card()
@@ -118,6 +141,17 @@ class TestWorkerTaskFieldValidation(unittest.TestCase):
             WorkerTask(
                 recipient_email="test@example.com",
                 amount=-1,
+                primary_card=card,
+                order_queue=(),
+            )
+
+    def test_bool_amount_raises_value_error(self):
+        """A bool amount must raise ValueError even though bool is an int subclass."""
+        card = _make_card()
+        with self.assertRaises(ValueError):
+            WorkerTask(
+                recipient_email="test@example.com",
+                amount=True,
                 primary_card=card,
                 order_queue=(),
             )
