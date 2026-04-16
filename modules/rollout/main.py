@@ -139,9 +139,12 @@ def try_scale_up():
             # failing save; for deeper concurrent consistency a generation
             # counter would be required, but that complexity is out of scope
             # for this PR's minimal-locking mandate.
-            if _current_step_index in (new_step, prev_step):
-                if _current_step_index == new_step:
-                    _current_step_index = prev_step
+            if _current_step_index == new_step:
+                _current_step_index = prev_step
+                # Save failed before any other state change; fully restore the
+                # pre-scale window.
+                _rollback_applied = prev_rollback_applied
+            elif _current_step_index == prev_step:
                 # A concurrent force_rollback() may have already returned the
                 # tentative scale-up to the previous step while save_fn() was
                 # running. Restore the guard for the reverted window so the
