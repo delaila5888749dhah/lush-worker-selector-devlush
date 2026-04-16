@@ -15,6 +15,8 @@ from modules.rollout.main import (
     try_scale_up,
 )
 
+TEST_TIMEOUT = 1
+
 
 class RolloutResetMixin:
     def setUp(self):
@@ -423,7 +425,7 @@ class TestRollbackAtomicity(RolloutResetMixin, unittest.TestCase):
         def blocking_failing_save():
             """Block until the test triggers a save failure."""
             save_started.set()
-            if not allow_failure.wait(timeout=1):
+            if not allow_failure.wait(timeout=TEST_TIMEOUT):
                 raise RuntimeError("timed out waiting to trigger save failure")
             raise RuntimeError("save error")
 
@@ -442,7 +444,7 @@ class TestRollbackAtomicity(RolloutResetMixin, unittest.TestCase):
 
         thread = threading.Thread(target=scale_worker)
         thread.start()
-        self.assertTrue(save_started.wait(timeout=1))
+        self.assertTrue(save_started.wait(timeout=TEST_TIMEOUT))
 
         # Roll back the tentative step 1 → 2 scale-up while save_fn() is pending.
         force_rollback("concurrent-rollback")
