@@ -102,7 +102,84 @@ SCALE_STEPS = (1, 3, 5, 10)   (modules/rollout/main.py:11)
 
 ---
 
-### INV-ORCHESTRATOR-01 — handle_outcome() CDP Error Isolation (Fixed: BUG-003)
+### INV-ORCHESTRATOR-02 — handle_outcome() state=None Observability
+```
+integration/orchestrator.py — handle_outcome(state=None, ...) logs a WARNING
+before returning "retry". Silent return was replaced with explicit logging
+to make upstream FSM anomalies (page-state detection failure, or
+run_payment_step returning without a state transition) observable.
+```
+**Rule:** `handle_outcome()` MUST log a warning when called with `state=None`.
+The return value "retry" is unchanged. No exception is raised.
+
+---
+
+### INV-ORCHESTRATOR-03 — Dual Notify Race Safety (first-notify-wins)
+```
+integration/orchestrator.py — _notified_workers_this_cycle: set[str]
+Protected by _network_listener_lock.
+Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
+```
+**Rule:** Both the `Network.responseReceived` callback path and the DOM fallback
+path call `_notify_total_from_dom()`. Only the first caller to acquire
+`_network_listener_lock` for a given worker_id in a given cycle may call
+`watchdog.notify_total()`. Subsequent calls are silently skipped. This prevents
+value-overwrite races on `session.total_value` in the watchdog.
+
+---
+
+### INV-ORCHESTRATOR-04 — Submitted-State Crash Safety
+```
+integration/orchestrator.py — _submitted_task_ids persisted before wait_for_total.
+On reload, a WARNING is emitted if submitted tasks are found (crash-recovery path).
+```
+**Rule:** Once a task_id is recorded as "submitted" (payment sent, result
+unconfirmed), it MUST block re-execution on next load to prevent double-charge.
+On `_load_idempotency_store()`, if `_submitted_task_ids` is non-empty after
+loading, a WARNING log MUST be emitted. The timeout path that fires after
+`mark_submitted()` MUST log a distinct "AFTER payment submission" message to
+distinguish it from pre-submission failures.
+
+---
+
+### INV-CDP-EXEC-01 — Executor Saturation Observability
+```
+integration/orchestrator.py — _cdp_orphaned_threads: int
+Incremented on each caller-side timeout (thread may still occupy executor slot).
+Reported via get_cdp_metrics()['orphaned_cdp_threads'].
+```
+**Rule:** Every caller-side CDP timeout MUST increment `_cdp_orphaned_threads`.
+`get_cdp_metrics()` MUST include `orphaned_cdp_threads` in its return dict.
+When `orphaned_cdp_threads` approaches `CDP_EXECUTOR_MAX_WORKERS`, executor
+saturation risk is high — new submissions will queue rather than start immediately.
+
+---
+
+### INV-CDP-SHUTDOWN-01 — Executor Shutdown Bounded and Observable
+```
+integration/orchestrator.py — _shutdown_cdp_executor() uses wait=False.
+Logs active_cdp_requests and _cdp_orphaned_threads before shutdown.
+```
+**Rule:** Shutdown MUST NOT block indefinitely on hung CDP calls (`wait=False`).
+Active/orphaned thread counts MUST be logged before `shutdown()` is called so
+operational state is visible at process exit.
+
+---
+
+### INV-REDIS-01 — Redis Idempotency Store Failure Semantics
+```
+integration/orchestrator.py — _RedisIdempotencyStore
+is_duplicate() failure → fail-safe: return True (treat as duplicate)
+mark_submitted() failure → re-raise (critical payment checkpoint)
+mark_completed() failure → log WARNING, do not re-raise
+```
+**Rule:** Redis failures in `is_duplicate()` MUST be treated as duplicates to
+prevent double-charge (fail-safe). Failures in `mark_submitted()` MUST propagate
+(the submitted checkpoint must be reliable). Failures in `mark_completed()` MUST
+be logged as WARNING but NOT re-raised (task is already submitted; completion
+recording failure is non-critical).
+
+---
 ```
 integration/orchestrator.py — cdp.clear_card_fields() in vbv_3ds branch is wrapped
 in try/except. A CDP failure during VBV handling does NOT prevent "await_3ds" from

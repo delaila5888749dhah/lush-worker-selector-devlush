@@ -12,6 +12,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -148,10 +149,16 @@ _cdp_executor_lock = threading.Lock()
 
 _cdp_timeout_count: int = 0          # total CDP calls that timed out (caller-side)
 _active_cdp_requests: int = 0        # orchestration-level tracking only
-_cdp_metric_lock = threading.Lock()  # protects _cdp_timeout_count and _active_cdp_requests
+_cdp_orphaned_threads: int = 0       # timed-out threads that may still occupy executor slots
+# protects the three counters above
+_cdp_metric_lock = threading.Lock()  # pylint: disable=invalid-name
 # Guards watchdog.notify_total() calls that may be triggered concurrently from
 # both the CDP callback path and the pre-wait DOM fallback path.
 _network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
+# First-notify-wins guard: tracks workers that have already received a total this cycle.
+# Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
+# Protected by _network_listener_lock.
+_notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptable-object
 _CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
 
 # NOTE on _active_cdp_requests:
@@ -197,6 +204,13 @@ def _load_idempotency_store() -> None:
                     _submitted_task_ids[str(s)] = now_mono
             elif isinstance(submitted, dict):
                 _restore_entries(submitted, _submitted_task_ids, now_wall, now_mono)
+            if _submitted_task_ids:
+                _logger.warning(
+                    "Crash-recovery: %d submitted task(s) reloaded from idempotency store. "
+                    "These tasks had payment submitted but not confirmed before the last "
+                    "process exit. They will be treated as duplicates to prevent double-charge.",
+                    len(_submitted_task_ids),
+                )
     except Exception:
         _logger.warning(
             "Failed to load idempotency store from %s; starting fresh.",
@@ -345,14 +359,33 @@ class _RedisIdempotencyStore(_IdempotencyStore):
     def is_duplicate(self, task_id: str) -> bool:
         # SET NX returns True when the key was set (first time → not a duplicate).
         # Returns None/False when the key already exists → duplicate.
-        result = self._redis.set(self._key(task_id), "inflight", nx=True, ex=_IDEMPOTENCY_TTL)
-        return result is None or result is False
+        try:
+            result = self._redis.set(self._key(task_id), "inflight", nx=True, ex=_IDEMPOTENCY_TTL)
+            return result is None or result is False
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.error(
+                "RedisIdempotencyStore.is_duplicate failed for task_id=%s: %s; "
+                "treating as duplicate (fail-safe) to prevent double-charge.", task_id, exc,
+            )
+            return True  # fail-safe: treat as duplicate
 
     def mark_submitted(self, task_id: str) -> None:
-        self._redis.set(self._key(task_id), "submitted", ex=_IDEMPOTENCY_TTL)
+        try:
+            self._redis.set(self._key(task_id), "submitted", ex=_IDEMPOTENCY_TTL)
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.error(
+                "RedisIdempotencyStore.mark_submitted failed for task_id=%s: %s", task_id, exc,
+            )
+            raise
 
     def mark_completed(self, task_id: str) -> None:
-        self._redis.set(self._key(task_id), "completed", ex=_IDEMPOTENCY_TTL)
+        try:
+            self._redis.set(self._key(task_id), "completed", ex=_IDEMPOTENCY_TTL)
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "RedisIdempotencyStore.mark_completed failed for task_id=%s: %s", task_id, exc,
+            )
+            # Do not re-raise: completion-recording failure is not critical; task already submitted.
 
     def release_inflight(self, task_id: str) -> None:
         pass  # Key persists with TTL; no explicit cleanup needed.
@@ -413,9 +446,24 @@ def _flush_idempotency_store() -> None:
 
 
 def _shutdown_cdp_executor() -> None:
-    """Shutdown the shared CDP executor. Called on graceful shutdown or process exit."""
+    """Shutdown the shared CDP executor. Called on graceful shutdown or process exit.
+
+    Uses ``wait=False`` so this function returns immediately and never blocks
+    on hung CDP calls. In-flight threads continue running until their CDP call
+    completes or the process terminates. The ``_cdp_orphaned_threads`` metric
+    gives a best-estimate of how many threads may still be running at shutdown.
+    """
     with _cdp_executor_lock:
+        with _cdp_metric_lock:
+            _snap_active = _active_cdp_requests
+            _snap_orphaned = _cdp_orphaned_threads
+        _logger.info(
+            "Shutting down CDP executor (active_cdp_requests=%d, orphaned_threads=%d). "
+            "In-flight threads will continue running until natural completion.",
+            _snap_active, _snap_orphaned,
+        )
         _cdp_executor.shutdown(wait=False, cancel_futures=True)
+        _logger.info("CDP executor shutdown issued.")
 
 atexit.register(_shutdown_cdp_executor)
 
@@ -462,7 +510,9 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
         SessionFlaggedError: If the call does not complete within *timeout*
             seconds, or if the executor is unavailable (e.g. after shutdown).
     """
-    global _cdp_timeout_count, _active_cdp_requests
+    global _cdp_timeout_count  # pylint: disable=global-statement,invalid-name
+    global _active_cdp_requests  # pylint: disable=global-statement,invalid-name
+    global _cdp_orphaned_threads  # pylint: disable=global-statement,invalid-name
     fn_name = getattr(fn, "__name__", repr(fn))
 
     with _cdp_metric_lock:
@@ -481,17 +531,21 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
             future.cancel()  # Best-effort; no-op if the task is already running.
             with _cdp_metric_lock:
                 _cdp_timeout_count += 1
+                _cdp_orphaned_threads += 1  # thread may still occupy an executor slot
                 _snapshot_active = _active_cdp_requests
                 _snapshot_timeouts = _cdp_timeout_count
+                _snapshot_orphaned = _cdp_orphaned_threads
             _logger.warning(
                 "[trace=%s] CDP call '%s' timed out after %.1fs "
-                "(active_cdp_requests=%d, total_timeouts=%d). "
-                "Note: the underlying thread may still be running.",
+                "(active_cdp_requests=%d, total_timeouts=%d, orphaned_threads=%d). "
+                "Note: the underlying thread may still be running; "
+                "executor saturation risk if orphaned_threads approaches max_workers.",
                 _get_trace_id(),
                 fn_name,
                 timeout,
                 _snapshot_active,
                 _snapshot_timeouts,
+                _snapshot_orphaned,
             )
             raise SessionFlaggedError(
                 f"CDP call '{fn_name}' timed out after {timeout}s for worker"
@@ -513,19 +567,27 @@ def get_cdp_metrics() -> dict:
                 Incremented before ``_cdp_executor.submit()`` and
                 decremented in the ``finally`` block — always on the
                 **caller's** thread.
+            ``orphaned_cdp_threads``: cumulative count of CDP threads that
+                timed out and may still be occupying an executor slot.
+                After a timeout, ``future.cancel()`` is a no-op for running
+                tasks, so the thread may continue running. When
+                ``orphaned_cdp_threads`` approaches ``CDP_EXECUTOR_MAX_WORKERS``,
+                the executor is likely saturated — new calls will queue rather
+                than start immediately.
 
                 .. warning::
                     After a timeout, the caller's ``finally`` block
-                    decrements this counter immediately, but the underlying
-                    executor thread may still be running the CDP call.
+                    decrements ``active_cdp_requests`` immediately, but the
+                    underlying executor thread may still be running the CDP call.
                     ``active_cdp_requests == 0`` does NOT mean all executor
-                    threads are idle. To detect executor saturation, monitor
-                    ``total_timeouts`` growth rate relative to request volume.
+                    threads are idle. Monitor ``orphaned_cdp_threads`` growth
+                    relative to ``CDP_EXECUTOR_MAX_WORKERS`` for saturation risk.
     """
     with _cdp_metric_lock:
         return {
             "total_timeouts": _cdp_timeout_count,
             "active_cdp_requests": _active_cdp_requests,
+            "orphaned_cdp_threads": _cdp_orphaned_threads,
         }
 
 
@@ -593,16 +655,45 @@ def _emit_billing_audit_event(
         )
 
 
+def _validated_notify_total(worker_id: str, value: float) -> bool:
+    """Validate *value* is finite and do a first-notify-wins call to watchdog.
+
+    Acquires ``_network_listener_lock`` internally. Must NOT be called while
+    the caller already holds that lock.
+
+    Returns:
+        ``True`` if ``watchdog.notify_total()`` was called, ``False`` if the
+        value was rejected (non-finite) or a notification was already sent for
+        this worker in the current cycle.
+    """
+    if not math.isfinite(value):
+        _logger.warning(
+            "[trace=%s] DOM total for worker=%s is non-finite (%s); skipping.",
+            _get_trace_id(), worker_id, value,
+        )
+        return False
+    with _network_listener_lock:
+        if worker_id in _notified_workers_this_cycle:
+            return False
+        watchdog.notify_total(worker_id, value)
+        _notified_workers_this_cycle.add(worker_id)
+    return True
+
+
 def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
-    """Fallback: read total from DOM and notify watchdog."""
+    """Fallback: read total from DOM and notify watchdog.
+
+    First-notify-wins: if a total has already been notified for *worker_id* in
+    the current cycle, subsequent calls are silently skipped under
+    ``_network_listener_lock`` to prevent value overwrite races.
+    """
     try:
         result = driver_obj.execute_script(
             "var el = document.querySelector('.order-total, .checkout-total, [data-total]');"
             "return el ? el.innerText : null;"
         )
         if isinstance(result, (int, float)):
-            with _network_listener_lock:
-                watchdog.notify_total(worker_id, float(result))
+            _validated_notify_total(worker_id, float(result))
             return
         if isinstance(result, str) and result:
             cleaned = result.replace(',', '')
@@ -612,8 +703,7 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
                 # Handle accounting-style negative numbers, e.g. "(49.99)".
                 if "(" in cleaned and ")" in cleaned and value > 0:
                     value = -value
-                with _network_listener_lock:
-                    watchdog.notify_total(worker_id, value)
+                _validated_notify_total(worker_id, value)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
 
@@ -687,7 +777,11 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     if driver_obj is None:
         raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
     _setup_network_total_listener(driver_obj, worker_id)
+    # Reset first-notify-wins guard for this worker's new cycle before enabling the watchdog.
+    with _network_listener_lock:
+        _notified_workers_this_cycle.discard(worker_id)
     watchdog.enable_network_monitor(worker_id)
+    _submitted_before_wait = False
     try:
         _cdp_call_with_timeout(
             cdp.fill_payment_and_billing,
@@ -700,9 +794,26 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         _task_id = getattr(task, "task_id", None)
         if _task_id is not None:
             _get_idempotency_store().mark_submitted(_task_id)
+            _submitted_before_wait = True
         # Fallback: read total from DOM to unblock watchdog
         _notify_total_from_dom(driver_obj, worker_id)
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
+    except SessionFlaggedError as exc:
+        _task_id_log = getattr(task, "task_id", None)
+        if _submitted_before_wait:
+            _logger.error(
+                "[trace=%s] Watchdog timeout AFTER payment submission for worker=%s, task_id=%s. "
+                "Payment may have been processed; task marked submitted. Do NOT retry blindly: %s",
+                _get_trace_id(), worker_id, _task_id_log, exc,
+            )
+        else:
+            _logger.error(
+                "[trace=%s] Watchdog timeout BEFORE payment submission "
+                "for worker=%s, task_id=%s: %s",
+                _get_trace_id(), worker_id, _task_id_log, exc,
+            )
+        watchdog.reset_session(worker_id)
+        raise
     except Exception as exc:
         _logger.error(
             "[trace=%s] Payment step failed for worker=%s, task_id=%s: %s",
@@ -730,6 +841,13 @@ def handle_outcome(state, order_queue, worker_id: str = "default"):
         One of: "complete", "retry", "retry_new_card", "await_3ds".
     """
     if state is None:
+        _logger.warning(
+            "[trace=%s] handle_outcome called with state=None for worker=%s: "
+            "FSM was never transitioned — upstream anomaly (page-state detection failed "
+            "or run_payment_step returned without a state transition). Returning 'retry'.",
+            _get_trace_id(),
+            worker_id,
+        )
         return "retry"
     if state.name == "success":
         return "complete"

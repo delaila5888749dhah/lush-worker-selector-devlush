@@ -51,9 +51,12 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
 | `spec/deployment.md` | 1.0 | 2026-04-04 |
-| `spec/cdp-timeout-contract.md` | 1.0 | 2026-04-07 |
+| `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v1.1 (2026-04-16) — ADDITIVE
+- `spec/cdp-timeout-contract.md`: Added INV-CDP-EXEC-01 (executor saturation, orphaned threads), INV-CDP-NOTIFY-01 (first-notify-wins dual-notify race safety), INV-CDP-SHUTDOWN-01 (bounded shutdown observability), and executor health metrics table
 
 ### v5.0 (2026-04-08) — BREAKING
 - CDP functions (`detect_page_state`, `fill_card`, `fill_billing`, `clear_card_fields`) now require `worker_id` parameter for multi-worker deployment safety

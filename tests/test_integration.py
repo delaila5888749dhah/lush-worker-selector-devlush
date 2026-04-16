@@ -866,14 +866,15 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
         )
 
     def test_get_cdp_metrics_returns_expected_keys(self):
-        """get_cdp_metrics() must return a dict with exactly two keys."""
+        """get_cdp_metrics() must return a dict with exactly three keys."""
         m = get_cdp_metrics()
         self.assertEqual(
             set(m.keys()),
-            {"total_timeouts", "active_cdp_requests"},
+            {"total_timeouts", "active_cdp_requests", "orphaned_cdp_threads"},
         )
         self.assertIsInstance(m["total_timeouts"], int)
         self.assertIsInstance(m["active_cdp_requests"], int)
+        self.assertIsInstance(m["orphaned_cdp_threads"], int)
 
 
 class CDPPoolSaturationTests(unittest.TestCase):
