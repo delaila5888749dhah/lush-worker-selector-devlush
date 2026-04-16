@@ -245,11 +245,11 @@ def check_rollback_needed():
     if metrics["error_rate"] > ERROR_RATE_THRESHOLD:
         reasons.append(f"error rate {metrics['error_rate']:.1%} exceeds 5%")
 
-    # Check memory.  A value of 0 means the reading was unavailable
-    # (degraded/unsupported platform); skip the threshold check in that
-    # case so we do not suppress a real breach on a zero-RSS system and
-    # do not fire a false positive when the metric is simply missing.
-    if metrics["memory_usage_bytes"] > 0 and metrics["memory_usage_bytes"] > _MEMORY_LIMIT_BYTES:
+    # Check memory.  When the reading is unavailable (degraded/unsupported
+    # platform) get_memory_usage_bytes() returns 0, which is always less
+    # than _MEMORY_LIMIT_BYTES so the threshold is safely skipped — no
+    # false positive, no silent suppression of a real breach.
+    if metrics["memory_usage_bytes"] > _MEMORY_LIMIT_BYTES:
         mb = metrics["memory_usage_bytes"] / (1024 * 1024)
         reasons.append(f"memory usage {mb:.0f} MB exceeds 2048 MB")
 
