@@ -77,6 +77,21 @@ class TestStartWorkerProxyLeak(RuntimeSafetyResetMixin, unittest.TestCase):
         # Pool.release must have been called with the worker id
         self.assertEqual(len(released), 1, "proxy must be released exactly once on start failure")
 
+    def test_proxy_released_on_thread_start_oserror(self):
+        """If Thread.start() raises OSError, the proxy must also be released."""
+        released = []
+
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value = MagicMock()
+        mock_pool.release.side_effect = lambda wid: released.append(wid)
+
+        with patch("integration.runtime.get_default_pool", return_value=mock_pool):
+            with patch("threading.Thread.start", side_effect=OSError("thread limit")):
+                with self.assertRaises(OSError):
+                    start_worker(lambda _: None)
+
+        self.assertEqual(len(released), 1, "proxy must be released on OSError from Thread.start()")
+
     def test_worker_registry_cleaned_on_thread_start_failure(self):
         """Worker must not remain registered when Thread.start() raises."""
         with patch("threading.Thread.start", side_effect=RuntimeError("cannot start")):
@@ -231,17 +246,14 @@ class TestMetricsUnavailableLogging(RuntimeSafetyResetMixin, unittest.TestCase):
 
     def test_metrics_unavailable_logs_deferred(self):
         """When monitor.get_metrics() fails, loop logs scaling_deferred explicitly."""
-        # Directly patch monitor.get_metrics in the runtime module reference
-        original_get_metrics = runtime.monitor.get_metrics
-        try:
-            runtime.monitor.get_metrics = MagicMock(side_effect=RuntimeError("unavailable"))
+        with patch("integration.runtime.monitor.get_metrics",
+                   side_effect=RuntimeError("unavailable")):
             with self.assertLogs("integration.runtime", level="WARNING") as cm:
-                # Manually execute one iteration of the runtime loop logic
+                # Directly emit the two log calls that _runtime_loop makes
+                # when monitor.get_metrics() raises.
                 runtime._log_event("runtime", "warning", "metrics_unavailable_scaling_deferred",
                                    {"error": "unavailable"})
                 runtime._logger.warning("Metrics unavailable; scaling decision deferred for this tick")
-        finally:
-            runtime.monitor.get_metrics = original_get_metrics
 
         found = any("metrics_unavailable_scaling_deferred" in m or
                     "Metrics unavailable" in m for m in cm.output)

@@ -101,9 +101,11 @@ def _log_event(worker_id, state, action, metrics=None) -> None:
             "data": metrics if isinstance(metrics, dict) else {},
         })
     except Exception:  # pylint: disable=broad-except
-        _log_sink_error_count += 1
+        with _lock:
+            _log_sink_error_count += 1
+            sink_fail_count = _log_sink_error_count
         _logger.warning(
-            "log_sink.emit() failed (total sink failures: %d)", _log_sink_error_count, exc_info=True
+            "log_sink.emit() failed (total sink failures: %d)", sink_fail_count, exc_info=True
         )
 def _sanitize_error(exc: Exception) -> str:
     """Redact card-like digit sequences from exception messages before logging."""
@@ -124,6 +126,15 @@ def _transition_worker_state_locked(worker_id, new_state):
     if new_state not in _VALID_TRANSITIONS.get(current, set()):
         raise ValueError(f"Invalid worker state transition: {current} -> {new_state} for {worker_id}")
     _worker_states[worker_id] = new_state
+def _increment_pending_restarts_locked(worker_id):
+    """Increment _pending_restarts for a failed worker, capped at current worker count.
+
+    Must be called while holding _lock.  No-op if the worker is not registered
+    or already has a stop request (natural exit, not a failure restart).
+    """
+    global _pending_restarts
+    if worker_id in _workers and worker_id not in _stop_requests:
+        _pending_restarts = min(_pending_restarts + 1, max(1, len(_workers)))
 def _worker_fn(worker_id, task_fn, persona):
     global _pending_restarts, _restart_delay, _consecutive_billing_failures, _billing_throttled_until
     with _lock:
@@ -186,8 +197,7 @@ def _worker_fn(worker_id, task_fn, persona):
                         _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
                         _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
                         _consecutive_billing_failures = 0
-                    if worker_id in _workers and worker_id not in _stop_requests:
-                        _pending_restarts = min(_pending_restarts + 1, max(1, len(_workers)))
+                    _increment_pending_restarts_locked(worker_id)
                 err_data: dict = {"error": _sanitize_error(exc)}
                 if persona_type_tag is not None:
                     err_data["persona_type"] = persona_type_tag
@@ -202,8 +212,7 @@ def _worker_fn(worker_id, task_fn, persona):
                     _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
                 get_autoscaler().record_failure(worker_id)
                 with _lock:
-                    if worker_id in _workers and worker_id not in _stop_requests:
-                        _pending_restarts = min(_pending_restarts + 1, max(1, len(_workers)))
+                    _increment_pending_restarts_locked(worker_id)
                 err_data: dict = {"error": _sanitize_error(exc)}
                 if persona_type_tag is not None:
                     err_data["persona_type"] = persona_type_tag
