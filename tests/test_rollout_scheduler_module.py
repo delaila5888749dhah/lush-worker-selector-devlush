@@ -26,7 +26,7 @@ class TestClampInterval(SchedulerModuleResetMixin, unittest.TestCase):
     def test_clamp_interval_clamps_out_of_range_values(self):
         self.assertEqual(scheduler._clamp_interval(0), 1.0)
         self.assertEqual(scheduler._clamp_interval(999999), 86400.0)
-        self.assertEqual(scheduler._clamp_interval(math.nan), 1.0)
+        self.assertEqual(scheduler._clamp_interval(math.inf), 1.0)
 
 
 class TestLifecycle(SchedulerModuleResetMixin, unittest.TestCase):
@@ -118,6 +118,14 @@ class TestAdvanceStep(SchedulerModuleResetMixin, unittest.TestCase):
 
         self.assertTrue(status["advance_eligible"])
         self.assertEqual(status["seconds_until_advance"], 0.0)
+
+    def test_get_status_reports_remaining_window_before_eligibility(self):
+        scheduler._stable_since = time.monotonic()
+
+        status = scheduler.get_status()
+
+        self.assertFalse(status["advance_eligible"])
+        self.assertGreater(status["seconds_until_advance"], 0.0)
 
 
 if __name__ == "__main__":
