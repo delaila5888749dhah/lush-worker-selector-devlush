@@ -202,7 +202,10 @@ class WatchdogTests(unittest.TestCase):
 
         notify_total(_WID, 1.0)
         thread.join(timeout=2)
-        self.assertFalse(thread.is_alive(), "Waiter thread did not finish after notify — possible hang")
+        self.assertFalse(
+            thread.is_alive(),
+            "Waiter thread did not finish after notify — possible hang",
+        )
 
     def test_notify_after_reset_session_is_noop(self):
         """notify_total() after reset_session() is a side-effect-free no-op."""
