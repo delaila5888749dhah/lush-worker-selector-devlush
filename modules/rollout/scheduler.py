@@ -8,15 +8,15 @@ from typing import Optional, Tuple
 
 from modules.rollout import main as rollout
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 STABLE_DURATION_SECONDS: float = 43200.0
 _MIN_INTERVAL: float = 1.0
 _MAX_INTERVAL: float = 86400.0
 _DEFAULT_INTERVAL: float = 300.0
 
-_lock = threading.Lock()
-_stop_event = threading.Event()
+_lock = threading.Lock()  # pylint: disable=invalid-name
+_stop_event = threading.Event()  # pylint: disable=invalid-name
 _scheduler_thread: Optional[threading.Thread] = None  # pylint: disable=invalid-name
 # Stable-window anchor (time.monotonic() when stable); all reads/writes must hold _lock.
 _stable_since: Optional[float] = None  # pylint: disable=invalid-name
