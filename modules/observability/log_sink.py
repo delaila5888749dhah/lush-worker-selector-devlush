@@ -11,7 +11,7 @@ Production usage
 ----------------
 Call ``register_sink(fn)`` to forward events to your monitoring/alerting
 pipeline (e.g. Datadog, Sentry, a structured log aggregator). Multiple
-sinks can be registered; each receives a shallow copy-safe ``dict``.
+sinks can be registered; each receives an independent deep-copied ``dict``.
 
 Example::
 
@@ -24,6 +24,7 @@ Example::
 
 Sink failures are caught and logged at WARNING; they do not propagate.
 """
+import copy
 import json
 import logging
 import threading
@@ -74,7 +75,7 @@ def emit(event: dict) -> None:
                 _logger.warning("log_sink: default backend failed: %s", exc)
         for fn in sinks:
             try:
-                fn(event.copy())
+                fn(copy.deepcopy(event))
             except Exception as exc:
                 _logger.warning("log_sink: sink %r raised: %s", fn, exc)
     except Exception as exc:

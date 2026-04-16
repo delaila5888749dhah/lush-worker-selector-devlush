@@ -13,6 +13,7 @@ _logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _exporters: list = []  # list of callable(metrics: dict) -> None
 _export_count: int = 0
+_exporter_failure_count: int = 0
 _log_export_enabled = True  # default log-based exporter enabled
 
 
@@ -46,7 +47,7 @@ def export_metrics(metrics: dict) -> None:
     Args:
         metrics: dict from monitor.get_metrics().
     """
-    global _export_count
+    global _export_count, _exporter_failure_count
     with _lock:
         exporters = list(_exporters)
         log_enabled = _log_export_enabled
@@ -58,23 +59,34 @@ def export_metrics(metrics: dict) -> None:
                 _logger.debug(json.dumps(payload))
         except Exception as exc:
             _logger.warning("metrics_exporter: log backend failed: %s", exc)
+    failures = 0
     for fn in exporters:
         try:
             fn(metrics)
         except Exception as exc:
+            failures += 1
             _logger.warning("metrics_exporter: exporter %r raised: %s", fn, exc)
+    if failures:
+        with _lock:
+            _exporter_failure_count += failures
 
 
 def get_status() -> dict:
     """Return exporter status snapshot."""
     with _lock:
-        return {"exporter_count": len(_exporters), "export_count": _export_count, "log_export_enabled": _log_export_enabled}
+        return {
+            "exporter_count": len(_exporters),
+            "export_count": _export_count,
+            "exporter_failure_count": _exporter_failure_count,
+            "log_export_enabled": _log_export_enabled,
+        }
 
 
 def reset() -> None:
     """Reset all exporter state. Intended for testing."""
-    global _exporters, _export_count, _log_export_enabled
+    global _exporters, _export_count, _exporter_failure_count, _log_export_enabled
     with _lock:
         _exporters = []
         _export_count = 0
+        _exporter_failure_count = 0
         _log_export_enabled = True

@@ -142,6 +142,24 @@ class TestSinkMutationIsolation(unittest.TestCase):
         self.assertNotIn("injected", received_b[0])
         self.assertEqual(received_b[0]["data"], {"worker_id": "w-1"})
 
+    def test_nested_mutation_by_sink_does_not_leak(self):
+        """In-place mutation of a nested dict by one sink must not affect the next."""
+        received_b = []
+
+        def sink_a(event):
+            event["data"]["injected"] = "mutated"
+
+        def sink_b(event):
+            received_b.append(dict(event))
+
+        log_sink.register_sink(sink_a)
+        log_sink.register_sink(sink_b)
+        log_sink.emit(_SAMPLE_EVENT)
+
+        self.assertEqual(len(received_b), 1)
+        self.assertNotIn("injected", received_b[0]["data"])
+        self.assertEqual(received_b[0]["data"], {"worker_id": "w-1"})
+
 
 if __name__ == "__main__":
     unittest.main()

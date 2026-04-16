@@ -99,7 +99,24 @@ class TestExporterRegistry(unittest.TestCase):
         status = metrics_exporter.get_status()
         self.assertEqual(status["exporter_count"], 0)
         self.assertEqual(status["export_count"], 0)
+        self.assertEqual(status["exporter_failure_count"], 0)
         self.assertTrue(status["log_export_enabled"])
+
+    def test_exporter_failure_count_increments(self):
+        """exporter_failure_count in get_status() increments on each exporter exception."""
+        def bad_fn(m):
+            raise ValueError("fail")
+
+        metrics_exporter.register_exporter(bad_fn)
+        metrics_exporter.export_metrics(_SAMPLE)
+        metrics_exporter.export_metrics(_SAMPLE)
+        self.assertEqual(metrics_exporter.get_status()["exporter_failure_count"], 2)
+
+    def test_exporter_failure_count_zero_on_success(self):
+        """exporter_failure_count remains zero when exporters succeed."""
+        metrics_exporter.register_exporter(lambda m: None)
+        metrics_exporter.export_metrics(_SAMPLE)
+        self.assertEqual(metrics_exporter.get_status()["exporter_failure_count"], 0)
 
 
 if __name__ == "__main__":
