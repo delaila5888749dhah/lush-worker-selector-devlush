@@ -80,6 +80,7 @@ class TestConsecutiveFailures(AutoScalerResetMixin, unittest.TestCase):
             mock_scale_down_worker.assert_any_call("w3")
 
     def test_evaluate_scale_down_failure_preserves_counter(self):
+        """If _evaluate_scale_down raises during worker scale-down, counter must be preserved."""
         scaler = autoscaler_module.AutoScaler()
         scaler._consecutive_failures = {"w1": 5}  # pylint: disable=protected-access
         with patch.object(
