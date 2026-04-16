@@ -1,9 +1,11 @@
 import threading
+import time
 import unittest
 
 from modules.watchdog.main import (
     notify_total,
     reset,
+    reset_session,
     enable_network_monitor,
     wait_for_total,
 )
@@ -158,3 +160,111 @@ class WatchdogTests(unittest.TestCase):
         # --- Phase 3: session B must still be alive in the registry ---
         result = wait_for_total(_WID, timeout=1)
         self.assertEqual(result, 77.0)
+
+    def test_event_wait_is_outside_registry_lock(self):
+        """Prove event.wait() is called without holding _registry_lock.
+
+        If wait_for_total() held _registry_lock during event.wait(), a
+        concurrent notify_total() would deadlock trying to acquire it.
+        This test verifies the lock is acquirable while the waiter sleeps.
+        """
+        from modules.watchdog.main import _watchdog_registry, _registry_lock
+
+        enable_network_monitor(_WID)
+        wait_entered = threading.Event()
+
+        with _registry_lock:
+            session = _watchdog_registry[_WID]
+
+        original_wait = session.event.wait
+
+        def instrumented_wait(timeout=None):
+            wait_entered.set()
+            return original_wait(timeout=timeout)
+
+        session.event.wait = instrumented_wait
+
+        def do_wait():
+            try:
+                wait_for_total(_WID, timeout=2.0)
+            except SessionFlaggedError:
+                pass
+
+        t = threading.Thread(target=do_wait)
+        t.start()
+
+        self.assertTrue(wait_entered.wait(timeout=2), "Thread did not reach event.wait()")
+
+        # The lock must be free while the waiter is sleeping in event.wait()
+        acquired = _registry_lock.acquire(blocking=True, timeout=0.5)
+        self.assertTrue(acquired, "_registry_lock was held during event.wait() — deadlock risk")
+        if acquired:
+            _registry_lock.release()
+
+        notify_total(_WID, 1.0)
+        t.join(timeout=2)
+        self.assertFalse(t.is_alive(), "Waiter thread did not finish after notify — possible hang")
+
+    def test_notify_after_reset_session_is_noop(self):
+        """notify_total() after reset_session() is a side-effect-free no-op."""
+        enable_network_monitor(_WID)
+        reset_session(_WID)
+        # Late notify must not create a session or raise
+        notify_total(_WID, 42.0)
+        with self.assertRaises(RuntimeError):
+            wait_for_total(_WID, timeout=0.01)
+
+    def test_stale_notify_from_thread_after_reset_is_harmless(self):
+        """Late notify_total() from another thread after reset leaves no trace."""
+        enable_network_monitor(_WID)
+        notify_ready = threading.Event()
+        reset_done = threading.Event()
+
+        def late_notify():
+            notify_ready.set()
+            reset_done.wait(timeout=2)
+            # session is already gone at this point
+            notify_total(_WID, 99.9)
+
+        t = threading.Thread(target=late_notify)
+        t.start()
+
+        notify_ready.wait(timeout=1)
+        reset_session(_WID)
+        reset_done.set()
+
+        t.join(timeout=2)
+        self.assertFalse(t.is_alive(), "Late-notify thread did not finish — possible hang")
+
+        # No session must remain; notify must have been a no-op
+        with self.assertRaises(RuntimeError):
+            wait_for_total(_WID, timeout=0.01)
+
+    def test_recreate_after_reset_gives_fresh_isolated_session(self):
+        """enable_network_monitor() after reset_session() always gives a fresh session.
+
+        A pre-signalled old session must not bleed into the new one.
+        """
+        enable_network_monitor(_WID)
+        notify_total(_WID, 1.0)   # pre-signal session A
+        reset_session(_WID)       # discard session A before it is consumed
+
+        enable_network_monitor(_WID)  # fresh session B
+        notify_total(_WID, 2.0)
+        result = wait_for_total(_WID, timeout=1)
+        self.assertEqual(result, 2.0)
+
+    def test_worker_isolation_notify_does_not_cross_workers(self):
+        """notify_total() for worker A must never signal worker B's session."""
+        wid_a = "worker-iso-a"
+        wid_b = "worker-iso-b"
+        enable_network_monitor(wid_a)
+        enable_network_monitor(wid_b)
+
+        notify_total(wid_a, 10.0)
+        # wid_b must still be waiting (no spurious signal)
+        with self.assertRaises(SessionFlaggedError):
+            wait_for_total(wid_b, timeout=0.05)
+
+        result_a = wait_for_total(wid_a, timeout=1)
+        self.assertEqual(result_a, 10.0)

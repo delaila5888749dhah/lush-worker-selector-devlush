@@ -62,12 +62,18 @@ def notify_total(worker_id: str, value) -> None:
 
     Safe to call from ANY thread, including the browser CDP event thread.
     No-op if no session exists for worker_id (idempotent).
+
+    event.set() is called **outside** _registry_lock so that this thread
+    can never be blocked by a waiter that is sleeping in event.wait().
     """
     with _registry_lock:
         session = _watchdog_registry.get(worker_id)
-        if session is not None:
-            session.total_value = value
-            session.event.set()
+        if session is None:
+            return
+        session.total_value = value
+    # Signal outside the lock: guarantees the notifier is never blocked by
+    # the waiter's finally-cleanup path which re-acquires _registry_lock.
+    session.event.set()
 
 
 def _reset_session(worker_id: str) -> None:
