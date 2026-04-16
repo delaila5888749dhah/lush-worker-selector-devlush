@@ -292,7 +292,7 @@ class BillingHardeningTests(unittest.TestCase):
             result = billing._pool_dir()
         self.assertTrue(str(result).endswith("billing_pool"))
 
-    def test_similar_prefix_billing_pool_dir_falls_back_to_default(self):
+    def test_lookalike_path_prefix_rejected(self):
         """Paths like /tmpx/... must not be treated as if they were under /tmp."""
         with patch.dict(os.environ, {"BILLING_POOL_DIR": "/tmpx/not-allowed"}):
             result = billing._pool_dir()
@@ -361,7 +361,7 @@ class BillingHardeningTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             billing._find_matching_index("10001")
 
-    def test_find_matching_index_returns_match_when_lock_held(self):
+    def test_find_matching_index_returns_correct_index_with_lock(self):
         """Holding _lock preserves the normal index-selection contract."""
         profiles = [
             BillingProfile(
