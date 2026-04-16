@@ -12,6 +12,7 @@ from modules.common.exceptions import CycleExhaustedError
 from modules.common.types import BillingProfile
 
 _lock = threading.Lock()
+_load_lock = threading.Lock()  # serializes cold-start pool loading; exactly one thread reads disk
 _local_fill_rng = threading.local()  # pylint: disable=invalid-name
 _profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
@@ -76,10 +77,7 @@ def _pool_dir() -> Path:
         resolved = Path(override).resolve()
         project_root = Path(__file__).resolve().parents[2]
         allowed_prefixes = (project_root, Path("/data"), Path("/tmp"))
-        if not any(
-            resolved == prefix or str(resolved).startswith(str(prefix) + os.sep)
-            for prefix in allowed_prefixes
-        ):
+        if not any(resolved.is_relative_to(prefix) for prefix in allowed_prefixes):
             _logger.warning(
                 "BILLING_POOL_DIR resolves outside allowed prefixes %s;"
                 " using default billing_pool.",
@@ -92,17 +90,27 @@ def _pool_dir() -> Path:
 
 def _reset_state() -> None:
     global _profiles
-    with _lock:
-        _profiles = collections.deque()
+    with _load_lock:
+        with _lock:
+            _profiles = collections.deque()
 
 
 def _normalize_zip(zip_code: str | int | None) -> str:
+    """Return a canonical string form of *zip_code*.
+
+    Both the string ``"12345"`` and the integer ``12345`` normalize to the
+    same value (``"12345"``), so callers may pass either type and receive
+    identical results for logically equivalent inputs.  Leading/trailing
+    whitespace in string values is stripped.
+    """
     if zip_code is None:
         return ""
     if isinstance(zip_code, bool):
         raise ValueError("zip_code must be str or int")
-    if isinstance(zip_code, (int, str)):
-        return str(zip_code).strip()
+    if isinstance(zip_code, int):
+        return str(zip_code)
+    if isinstance(zip_code, str):
+        return zip_code.strip()
     raise ValueError("zip_code must be str or int")
 
 
@@ -134,13 +142,13 @@ def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
     """Read and parse profiles from disk. Must be called without holding _lock.
 
     Cold-start concurrency note:
-    Multiple threads may call this function simultaneously during cold-start.
-    This is intentional — redundant disk reads are cheaper than holding _lock
-    during I/O. The double-check publish-under-lock pattern in select_profile()
-    ensures only the first loaded result is used.
+    This function is only called by select_profile() while the caller holds
+    ``_load_lock``, ensuring exactly one thread performs disk I/O during cold
+    start.  The ``_load_lock`` serialization guarantee means this function
+    never runs concurrently with itself.
 
     Each call creates a local Random instance for shuffle to avoid contending
-    on the global random module's internal state lock under concurrent cold-start.
+    on the global random module's internal state lock.
     """
     pool_dir = _pool_dir()
     profiles: list[BillingProfile] = []
@@ -217,8 +225,9 @@ def _find_matching_index(zip_code: str) -> int | None:
     .. warning::
         This function reads module-level ``_profiles`` without acquiring
         ``_lock``.  It **MUST** only be called while the caller already holds
-        ``_lock``.
+        ``_lock``.  A runtime assertion enforces this contract.
     """
+    assert _lock.locked(), "_find_matching_index() must be called while holding _lock"
     if not zip_code:
         return None
     for index, profile in enumerate(_profiles):
@@ -262,15 +271,17 @@ def select_profile(zip_code: str | int | None = None) -> BillingProfile:
         needs_load = not _profiles
 
     if needs_load:
-        # Do filesystem I/O outside the lock so other threads are not blocked.
-        # Multiple threads may load concurrently on a cold start; the redundant
-        # work is intentional — it trades a small amount of extra disk reads for
-        # significantly lower lock contention on large pools.
-        loaded = _read_profiles_from_disk()
-        # Publish under the lock; double-check in case another thread loaded first
-        with _lock:
-            if not _profiles and loaded:
-                _profiles = loaded
+        # Serialize cold-start loading: only the first thread entering this block
+        # reads from disk.  Subsequent threads wait on _load_lock and then
+        # re-check _profiles under _lock; if already populated they skip I/O.
+        with _load_lock:
+            with _lock:
+                needs_load = not _profiles
+            if needs_load:
+                loaded = _read_profiles_from_disk()
+                with _lock:
+                    if not _profiles and loaded:
+                        _profiles = loaded
 
     with _lock:
         if not _profiles:
