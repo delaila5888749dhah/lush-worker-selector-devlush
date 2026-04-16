@@ -12,7 +12,7 @@ from modules.common.exceptions import CycleExhaustedError
 from modules.common.types import BillingProfile
 
 _lock = threading.Lock()
-_load_lock = threading.Lock()  # serializes cold-start pool loading; exactly one thread reads disk
+_LOAD_LOCK = threading.Lock()  # serializes cold-start pool loading; exactly one thread reads disk
 _local_fill_rng = threading.local()  # pylint: disable=invalid-name
 _profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
@@ -77,7 +77,10 @@ def _pool_dir() -> Path:
         resolved = Path(override).resolve()
         project_root = Path(__file__).resolve().parents[2]
         allowed_prefixes = (project_root, Path("/data"), Path("/tmp"))
-        if not any(resolved.is_relative_to(prefix) for prefix in allowed_prefixes):
+        if not any(
+            resolved == prefix or str(resolved).startswith(str(prefix) + os.sep)
+            for prefix in allowed_prefixes
+        ):
             _logger.warning(
                 "BILLING_POOL_DIR resolves outside allowed prefixes %s;"
                 " using default billing_pool.",
@@ -90,7 +93,7 @@ def _pool_dir() -> Path:
 
 def _reset_state() -> None:
     global _profiles
-    with _load_lock:
+    with _LOAD_LOCK:
         with _lock:
             _profiles = collections.deque()
 
@@ -143,8 +146,8 @@ def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
 
     Cold-start concurrency note:
     This function is only called by select_profile() while the caller holds
-    ``_load_lock``, ensuring exactly one thread performs disk I/O during cold
-    start.  The ``_load_lock`` serialization guarantee means this function
+    ``_LOAD_LOCK``, ensuring exactly one thread performs disk I/O during cold
+    start.  The ``_LOAD_LOCK`` serialization guarantee means this function
     never runs concurrently with itself.
 
     Each call creates a local Random instance for shuffle to avoid contending
@@ -225,9 +228,10 @@ def _find_matching_index(zip_code: str) -> int | None:
     .. warning::
         This function reads module-level ``_profiles`` without acquiring
         ``_lock``.  It **MUST** only be called while the caller already holds
-        ``_lock``.  A runtime assertion enforces this contract.
+        ``_lock``.  A runtime check enforces this contract.
     """
-    assert _lock.locked(), "_find_matching_index() must be called while holding _lock"
+    if not _lock.locked():  # pylint: disable=no-member
+        raise RuntimeError("_find_matching_index() must be called while holding _lock")
     if not zip_code:
         return None
     for index, profile in enumerate(_profiles):
@@ -272,9 +276,9 @@ def select_profile(zip_code: str | int | None = None) -> BillingProfile:
 
     if needs_load:
         # Serialize cold-start loading: only the first thread entering this block
-        # reads from disk.  Subsequent threads wait on _load_lock and then
+        # reads from disk.  Subsequent threads wait on _LOAD_LOCK and then
         # re-check _profiles under _lock; if already populated they skip I/O.
-        with _load_lock:
+        with _LOAD_LOCK:
             with _lock:
                 needs_load = not _profiles
             if needs_load:
