@@ -32,8 +32,10 @@ WATCHDOG_HEADROOM    = ≥3.0s  (7.0 - max behavioral delay = 3.0s minimum)
 ```
 BehaviorStateMachine states {VBV, POST_ACTION} → is_safe_for_delay() = False → delay = 0.0
 _in_critical_section = True                    → is_safe_for_delay() = False → delay = 0.0
+BehaviorStateMachine states {VBV, POST_ACTION} → is_critical_context() = True
+_in_critical_section = True                    → is_critical_context() = True
 ```
-**Rule:** No behavioral delay may ever be injected when the worker is in VBV, POST_ACTION, or flagged as CRITICAL_SECTION. This is enforced by `DelayEngine.is_delay_permitted()`.
+**Rule:** No behavioral delay may ever be injected when the worker is in VBV, POST_ACTION, or flagged as CRITICAL_SECTION. This is enforced by `DelayEngine.is_delay_permitted()`. `is_critical_context()` now reflects both FSM critical states and the `_in_critical_section` flag. Callers that need the authoritative delay-permission decision should use `is_safe_for_delay()` (via the engine) instead.
 
 ---
 
@@ -41,12 +43,31 @@ _in_critical_section = True                    → is_safe_for_delay() = False �
 ```
 modules/delay/wrapper.py — _wrapped() always calls engine.reset_step_accumulator()
 and sm.reset() in a finally block, even when task_fn() raises an exception.
+
+Both injection points are protected:
+  - Injection point 1 (typing): inject_step_delay() is inside the try block so
+    cleanup runs on exception or interruption from the delay call itself.
+  - Injection point 2 (thinking): wrapped in its own try/finally so accumulator
+    and SM are reset even if the post-success thinking delay raises.
 ```
-**Rule:** The `BehaviorStateMachine` for a worker must always return to `IDLE` after each cycle invocation. The `try/finally` pattern in `wrap()` is the enforcing mechanism.
+**Rule:** The `BehaviorStateMachine` for a worker must always return to `IDLE` after each cycle invocation. The `try/finally` pattern in `wrap()` is the enforcing mechanism for both injection points.
 
 ---
 
-### INV-WATCHDOG-01 — Per-Worker Session Registry (Fixed: BUG-002)
+### INV-DELAY-04 — Temporal Modifier Bounded Output
+```
+modules/delay/temporal.py — apply_temporal_modifier():
+  base_delay <= 0          → returns 0.0 immediately (no-op guard)
+  any action_type, NIGHT   → return value ∈ [0.0, MAX_*_DELAY]
+  any action_type, DAY     → return value ∈ [0.0, MAX_*_DELAY]
+
+modules/delay/temporal.py — apply_micro_variation():
+  result = max(0.0, base_delay * uniform(0.90, 1.10))
+  → result is always non-negative
+```
+**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator.
+
+---
 ```
 modules/watchdog/main.py — _watchdog_registry: dict[worker_id → _WatchdogSession]
 ```
@@ -162,6 +183,8 @@ Any PR that modifies the following files MUST include an update to this document
 - `modules/fsm/main.py` (ALLOWED_STATES)
 - `modules/delay/engine.py` (hard constraints)
 - `modules/delay/wrapper.py` (SAFE ZONE logic)
+- `modules/delay/temporal.py` (temporal modifier bounds)
+- `modules/delay/state.py` (FSM states, critical-context semantics)
 - `modules/watchdog/main.py` (registry architecture)
 - `integration/orchestrator.py` (wiring + outcome logic)
 - `integration/runtime.py` (worker state transitions)

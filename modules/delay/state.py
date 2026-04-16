@@ -90,9 +90,15 @@ class BehaviorStateMachine:
             return self._state
 
     def is_critical_context(self) -> bool:
-        """Return *True* when in VBV or POST_ACTION (zero-delay zones)."""
+        """Return *True* when in VBV or POST_ACTION (zero-delay zones), or when
+        the worker is flagged as being in a Phase-9 CRITICAL_SECTION.
+
+        For full delay-safety evaluation (FSM state + critical-section flag),
+        prefer :meth:`is_safe_for_delay` which is the authoritative check used
+        by the delay engine.
+        """
         with self._lock:
-            return self._state in _CRITICAL_CONTEXTS
+            return self._state in _CRITICAL_CONTEXTS or self._in_critical_section
 
     def is_safe_for_delay(self) -> bool:
         """Return *True* when delay injection is permitted.

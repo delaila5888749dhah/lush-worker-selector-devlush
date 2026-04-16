@@ -40,10 +40,14 @@ class TemporalModel:
     ) -> float:
         """Apply day/night scaling to *base_delay*, clamped by action type.
 
+        Returns 0.0 immediately when *base_delay* is zero or negative (no-op guard).
+
         NIGHT mode applies different penalties per action type:
         - typing: slowed by ``night_penalty_factor`` (15–30%, Blueprint §10)
         - thinking: increased by ``NIGHT_HESITATION_INCREASE_RANGE`` (20–40%)
         """
+        if base_delay <= 0:
+            return 0.0
         if self.get_time_state(utc_offset_hours) == "NIGHT":
             if action_type == "thinking":
                 with self._rnd_lock:
@@ -54,10 +58,10 @@ class TemporalModel:
         else:
             modified = base_delay
         if action_type == "typing":
-            return min(modified, MAX_TYPING_DELAY)
+            return max(0.0, min(modified, MAX_TYPING_DELAY))
         if action_type == "thinking":
-            return min(modified, MAX_HESITATION_DELAY)
-        return min(modified, MAX_STEP_DELAY)
+            return max(0.0, min(modified, MAX_HESITATION_DELAY))
+        return max(0.0, min(modified, MAX_STEP_DELAY))
 
     def apply_fatigue(self, base_delay: float, cycle_count: int) -> float:
         """Increase delay after fatigue threshold cycles, clamped to hard limit."""
@@ -67,9 +71,9 @@ class TemporalModel:
         return min(base_delay + min(extra, 1.0), MAX_STEP_DELAY)
 
     def apply_micro_variation(self, base_delay: float) -> float:
-        """Add ±10% noise to *base_delay*."""
+        """Add ±10% noise to *base_delay*, clamped to a non-negative result."""
         with self._rnd_lock:
-            return base_delay * self._rnd.uniform(0.90, 1.10)
+            return max(0.0, base_delay * self._rnd.uniform(0.90, 1.10))
 
     def get_current_modifiers(self) -> dict:
         """Return a dict describing the current modifier configuration."""

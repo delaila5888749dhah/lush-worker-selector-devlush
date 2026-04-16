@@ -197,9 +197,11 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
     @functools.wraps(task_fn)
     def _wrapped(*args, **kwargs):
         # Injection point 1: typing delay before form interaction.
+        # Both the delay injection and task_fn are inside the try so that
+        # the finally cleanup always runs, even if inject_step_delay raises.
         sm.transition("FILLING_FORM")
-        inject_step_delay(engine, temporal, "typing", stop_event)
         try:
+            inject_step_delay(engine, temporal, "typing", stop_event)
             result = task_fn(*args, **kwargs)
         finally:
             _log.debug(
@@ -213,10 +215,14 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
         # (before submit click).  Only reached when task_fn succeeded.
         # Re-enter FILLING_FORM; accumulator was reset above so the
         # thinking delay is not blocked by the earlier typing delay.
+        # try/finally ensures accumulator and SM are always cleaned up
+        # even if the thinking delay injection raises or is interrupted.
         sm.transition("FILLING_FORM")
-        inject_step_delay(engine, temporal, "thinking", stop_event)
-        engine.reset_step_accumulator()
-        sm.reset()
+        try:
+            inject_step_delay(engine, temporal, "thinking", stop_event)
+        finally:
+            engine.reset_step_accumulator()
+            sm.reset()
 
         return result
 

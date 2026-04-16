@@ -68,6 +68,38 @@ class TestWrapPropagatesExceptions(unittest.TestCase):
         mock_reset_acc.assert_called_once()
         mock_sm_reset.assert_called_once()
 
+    def test_cleanup_runs_when_typing_delay_raises(self):
+        persona = PersonaProfile(42)
+        with (
+            patch(
+                "modules.delay.wrapper.inject_step_delay",
+                side_effect=RuntimeError("typing-delay-boom"),
+            ),
+            patch("modules.delay.wrapper.DelayEngine.reset_step_accumulator") as mock_reset_acc,
+            patch("modules.delay.wrapper.BehaviorStateMachine.reset") as mock_sm_reset,
+        ):
+            wrapped = wrap(_dummy_task, persona)
+            with self.assertRaises(RuntimeError):
+                wrapped("w-1")
+        mock_reset_acc.assert_called_once()
+        mock_sm_reset.assert_called_once()
+
+    def test_cleanup_runs_when_thinking_delay_raises(self):
+        persona = PersonaProfile(42)
+        with (
+            patch(
+                "modules.delay.wrapper.inject_step_delay",
+                side_effect=[0.1, RuntimeError("thinking-delay-boom")],
+            ),
+            patch("modules.delay.wrapper.DelayEngine.reset_step_accumulator") as mock_reset_acc,
+            patch("modules.delay.wrapper.BehaviorStateMachine.reset") as mock_sm_reset,
+        ):
+            wrapped = wrap(_dummy_task, persona)
+            with self.assertRaises(RuntimeError):
+                wrapped("w-1")
+        self.assertEqual(mock_reset_acc.call_count, 2)
+        self.assertEqual(mock_sm_reset.call_count, 2)
+
 
 class TestCriticalSectionBypass(unittest.TestCase):
     """Verify zero delay when BehaviorStateMachine is in a critical context."""
