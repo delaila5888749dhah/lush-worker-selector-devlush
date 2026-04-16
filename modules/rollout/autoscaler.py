@@ -71,7 +71,7 @@ class AutoScaler:
             )
             try:
                 self._scale_down_worker(worker_id)
-            except Exception:  # pylint: disable=broad-except
+            except Exception:  # noqa: BLE001  # pylint: disable=broad-except
                 _logger.exception(
                     "scale-down for worker %s failed; failure count retained for retry",
                     worker_id,
