@@ -52,6 +52,24 @@ class BillingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             billing.select_profile({"zip": "10001"})
 
+    def test_select_profile_int_zip_matches_string_profile(self):
+        """Integer ZIP input must match profiles stored with string ZIPs."""
+        profile = BillingProfile(
+            first_name="Ana",
+            last_name="Bell",
+            address="123 Main St",
+            city="New York",
+            state="NY",
+            zip_code="10001",
+            phone="2125550100",
+            email="ana.bell@example.com",
+        )
+        self._set_profiles([profile])
+
+        result = billing.select_profile(10001)
+
+        self.assertEqual(result, profile)
+
     def test_rotation_order_without_zip_match(self):
         """Non-matching zip rotates profiles: first goes to back, second comes front."""
         p1 = BillingProfile(
@@ -274,6 +292,12 @@ class BillingHardeningTests(unittest.TestCase):
             result = billing._pool_dir()
         self.assertTrue(str(result).endswith("billing_pool"))
 
+    def test_lookalike_path_prefix_rejected(self):
+        """Paths like /tmpx/... must not be treated as if they were under /tmp."""
+        with patch.dict(os.environ, {"BILLING_POOL_DIR": "/tmpx/not-allowed"}):
+            result = billing._pool_dir()
+        self.assertTrue(str(result).endswith("billing_pool"))
+
     def test_min_pool_threshold_raises_when_below(self):
         """select_profile raises CycleExhaustedError when pool is below MIN_BILLING_PROFILES."""
         p = BillingProfile(
@@ -326,6 +350,34 @@ class BillingHardeningTests(unittest.TestCase):
         self.assertIsNotNone(summary, "Expected load summary log")
         self.assertIn("accepted=1", summary)
         self.assertIn("rejected=1", summary)
+
+    def test_normalize_zip_rejects_bool(self):
+        """Boolean ZIP input must be rejected instead of coercing to 1/0."""
+        with self.assertRaises(ValueError):
+            billing._normalize_zip(True)
+
+    def test_find_matching_index_requires_lock(self):
+        """Direct callers must hold _lock before scanning the shared pool."""
+        with self.assertRaises(RuntimeError):
+            billing._find_matching_index("10001")
+
+    def test_find_matching_index_returns_correct_index_with_lock(self):
+        """Holding _lock preserves the normal index-selection contract."""
+        profiles = [
+            BillingProfile(
+                first_name="A", last_name="L", address="1 St",
+                city="City", state="NY", zip_code="99999",
+                phone="2125550001", email="a@e.com",
+            ),
+            BillingProfile(
+                first_name="B", last_name="L", address="2 St",
+                city="City", state="NY", zip_code="10001",
+                phone="2125550002", email="b@e.com",
+            ),
+        ]
+        with billing._lock:
+            billing._profiles = collections.deque(profiles)
+            self.assertEqual(billing._find_matching_index("10001"), 1)
 
 
 class ZipAffinityTests(unittest.TestCase):
