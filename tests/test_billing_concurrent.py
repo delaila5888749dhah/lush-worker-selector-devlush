@@ -162,11 +162,9 @@ class ColdStartConcurrentTests(unittest.TestCase):
                     for t in threads:
                         t.join()
 
-            # Multiple reads are acceptable (the double-check prevents overwriting)
             self.assertEqual(errors, [])
-            self.assertLessEqual(load_count[0], 8)
+            self.assertEqual(load_count[0], 1)
             with billing._lock:
-                # Pool must be non-empty after cold start
                 self.assertGreater(len(billing._profiles), 0)
 
 
