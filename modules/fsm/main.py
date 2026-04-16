@@ -74,7 +74,7 @@ def transition_for_worker(worker_id: str, target_state: str) -> State:
     with _registry_lock:
         entry = _registry.get(worker_id)
         if entry is None:
-            raise ValueError(f"worker '{worker_id}' not initialized")
+            raise InvalidTransitionError(f"worker '{worker_id}' not initialized")
         if target_state not in entry["states"]:
             raise InvalidTransitionError(f"state '{target_state}' not registered for worker '{worker_id}'")
         current = entry["current"]

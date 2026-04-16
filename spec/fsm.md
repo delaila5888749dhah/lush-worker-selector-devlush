@@ -1,6 +1,6 @@
 # FSM Specification
 
-spec-version: 1.1
+spec-version: 1.0
 
 ## ALLOWED_STATES (Tập đóng)
 - ui_lock
@@ -47,7 +47,7 @@ spec-version: 1.1
 | state_name already exists in registry             | ValueError             |
 | target_state not in ALLOWED_STATES                | InvalidStateError      |
 | target_state not registered for worker            | InvalidTransitionError |
-| worker not initialized (entry is None)            | ValueError             |
+| worker not initialized (entry is None)            | InvalidTransitionError |
 | transition attempted from a terminal state        | ValueError             |
 | transition not in _VALID_PAYMENT_TRANSITIONS      | ValueError             |
 
