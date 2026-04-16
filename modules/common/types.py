@@ -46,3 +46,25 @@ class WorkerTask:
             )
         if len(self.task_id.strip()) == 0:
             raise ValueError("task_id must not be blank or whitespace-only")
+        if not isinstance(self.recipient_email, str) or not self.recipient_email.strip():
+            raise ValueError(
+                f"recipient_email must be a non-empty string, got {self.recipient_email!r}"
+            )
+        if not isinstance(self.amount, int) or isinstance(self.amount, bool) or self.amount <= 0:
+            raise ValueError(
+                f"amount must be a positive integer, got {self.amount!r}"
+            )
+        if not isinstance(self.primary_card, CardInfo):
+            raise ValueError(
+                f"primary_card must be a CardInfo instance, got {type(self.primary_card)!r}"
+            )
+        if not isinstance(self.order_queue, tuple):
+            raise TypeError(
+                "order_queue must be a tuple to preserve immutability, "
+                f"got {type(self.order_queue)!r}"
+            )
+        for i, card in enumerate(self.order_queue):
+            if not isinstance(card, CardInfo):
+                raise TypeError(
+                    f"order_queue[{i}] must be a CardInfo instance, got {type(card)!r}"
+                )
