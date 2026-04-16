@@ -105,7 +105,7 @@ class TestConsecutiveFailures(AutoScalerResetMixin, unittest.TestCase):
         scaler = autoscaler_module.AutoScaler()
         call_count = {"n": 0}
 
-        def flaky_scale_down(worker_id):  # pylint: disable=unused-argument
+        def flaky_scale_down(_):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise RuntimeError("transient failure")

@@ -78,7 +78,11 @@ class AutoScaler:
                 )
                 return
             with self._lock:
-                self._consecutive_failures[worker_id] = 0
+                # Only reset if no new failures arrived during the scale-down
+                # call; if new failures came in, leave the count as-is so the
+                # signal is preserved for the next trigger.
+                if self._consecutive_failures.get(worker_id, 0) == current_count:
+                    self._consecutive_failures[worker_id] = 0
 
     def record_success(self, worker_id: str) -> None:
         """Reset consecutive failure counter on success."""
