@@ -11,7 +11,7 @@ Production usage
 ----------------
 Call ``register_sink(fn)`` to forward events to your monitoring/alerting
 pipeline (e.g. Datadog, Sentry, a structured log aggregator). Multiple
-sinks can be registered; each receives a shallow copy-safe ``dict``.
+sinks can be registered; each receives an independent deep-copied ``dict``.
 
 Example::
 
