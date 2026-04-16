@@ -11,6 +11,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import os
+import re as _re
 import secrets
 import time
 import datetime
@@ -54,6 +55,35 @@ except ImportError:
     _BehaviorStateMachine = _DelayEngine = None
 
 _log = logging.getLogger(__name__)
+
+# ── PII redaction patterns ────────────────────────────────────────────────
+# Matches 16-digit PAN-like sequences in plain (4111111111111111),
+# space-separated (4111 1111 1111 1111), and dash-separated
+# (4111-1111-1111-1111) formats.
+_CARD_PAN_RE = _re.compile(r"(?<!\d)\d{4}(?:[ -]?\d{4}){3}(?!\d)")
+_CVV_RE = _re.compile(r"\bcvv\s*=\s*\d{3,4}\b", _re.IGNORECASE)
+_EMAIL_RE = _re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
+def _sanitize_error(msg: str) -> str:
+    """Redact PAN-like card numbers, CVV patterns, and emails from *msg*.
+
+    Handles card numbers in plain (``4111111111111111``), space-separated
+    (``4111 1111 1111 1111``), and dash-separated (``4111-1111-1111-1111``)
+    formats so that sensitive data is never exposed in logs or re-raised
+    exception messages from the driver layer.
+
+    Args:
+        msg: The raw message that may contain PII.
+
+    Returns:
+        The message with all recognised PII replaced by placeholder tokens.
+    """
+    msg = _CARD_PAN_RE.sub("[REDACTED-CARD]", msg)
+    msg = _CVV_RE.sub("[REDACTED-CVV]", msg)
+    msg = _EMAIL_RE.sub("[REDACTED-EMAIL]", msg)
+    return msg
+
 
 # ── URL constants ─────────────────────────────────────────────────────────
 URL_GEO_CHECK = "https://lumtest.com/myip.json"
@@ -146,8 +176,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
                 if offset is None:
                     return None
                 return int(offset.total_seconds() // 3600)
-    except (OSError, ValueError, AttributeError,
-            _ZoneInfoNotFoundError) as exc:
+    except Exception as exc:
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None
 
@@ -431,6 +460,12 @@ class GivexDriver:
     def bounding_box_click(self, selector: str) -> None:
         """Click using randomized bounding-box coordinates, with safe fallbacks.
 
+        Strict mode (the default) suppresses the plain ``.click()`` fallback
+        **only** when CDP dispatch itself fails — not when the element rect or
+        the randomness helper is unavailable.  In those cases a WARNING is
+        emitted so the condition is never silent, and a plain ``.click()``
+        executes as a safe fallback regardless of strict mode.
+
         Args:
             selector: CSS selector for the element to click.
 
@@ -450,45 +485,67 @@ class GivexDriver:
                 elements[0],
             )
         except Exception:
-            _log.debug("bounding_box_click: getBoundingClientRect failed, using plain click", exc_info=True)
+            _log.warning(
+                "bounding_box_click: getBoundingClientRect raised for selector %r;"
+                " falling back to plain click",
+                selector,
+                exc_info=True,
+            )
             elements[0].click()
             return
 
-        if rect and self._rnd is not None:
-            rnd = self._rnd
-            night_factor = 1.0
-            if self._temporal is not None:
-                try:
-                    if self._temporal.get_time_state(self._utc_offset_hours) == "NIGHT":
-                        night_factor = 1.0 + getattr(self._persona, "night_penalty_factor", 0.0)
-                except Exception:
-                    _log.debug("bounding_box_click: unable to read temporal state; using default night_factor")
-            ox = rnd.uniform(-15, 15) * night_factor
-            oy = rnd.uniform(-5, 5) * night_factor
-            ox = max(-15.0, min(15.0, ox))
-            oy = max(-5.0, min(5.0, oy))
-            center_x = rect["left"] + rect["width"] / 2
-            center_y = rect["top"] + rect["height"] / 2
-            abs_x = max(rect["left"], min(center_x + ox, rect["left"] + rect["width"]))
-            abs_y = max(rect["top"], min(center_y + oy, rect["top"] + rect["height"]))
+        if not rect:
+            _log.warning(
+                "bounding_box_click: rect is falsy for selector %r;"
+                " falling back to plain click",
+                selector,
+            )
+            elements[0].click()
+            return
+
+        if self._rnd is None:
+            _log.warning(
+                "bounding_box_click: rnd unavailable for selector %r;"
+                " falling back to plain click",
+                selector,
+            )
+            elements[0].click()
+            return
+
+        rnd = self._rnd
+        night_factor = 1.0
+        if self._temporal is not None:
             try:
-                for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
-                    self._driver.execute_cdp_cmd(
-                        "Input.dispatchMouseEvent",
-                        {
-                            "type": event_type,
-                            "x": abs_x,
-                            "y": abs_y,
-                            "button": "left",
-                            "clickCount": 1,
-                        },
-                    )
-                return
+                if self._temporal.get_time_state(self._utc_offset_hours) == "NIGHT":
+                    night_factor = 1.0 + getattr(self._persona, "night_penalty_factor", 0.0)
             except Exception:
-                if self._strict:
-                    _log.warning("bounding_box_click: CDP failed (strict mode)")
-                    return
-                _log.debug("bounding_box_click: CDP failed, .click() fallback", exc_info=True)
+                _log.debug("bounding_box_click: unable to read temporal state; using default night_factor")
+        ox = rnd.uniform(-15, 15) * night_factor
+        oy = rnd.uniform(-5, 5) * night_factor
+        ox = max(-15.0, min(15.0, ox))
+        oy = max(-5.0, min(5.0, oy))
+        center_x = rect["left"] + rect["width"] / 2
+        center_y = rect["top"] + rect["height"] / 2
+        abs_x = max(rect["left"], min(center_x + ox, rect["left"] + rect["width"]))
+        abs_y = max(rect["top"], min(center_y + oy, rect["top"] + rect["height"]))
+        try:
+            for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+                self._driver.execute_cdp_cmd(
+                    "Input.dispatchMouseEvent",
+                    {
+                        "type": event_type,
+                        "x": abs_x,
+                        "y": abs_y,
+                        "button": "left",
+                        "clickCount": 1,
+                    },
+                )
+            return
+        except Exception:
+            if self._strict:
+                _log.warning("bounding_box_click: CDP failed (strict mode)")
+                return
+            _log.debug("bounding_box_click: CDP failed, .click() fallback", exc_info=True)
         elements[0].click()
 
     def cdp_click_absolute(self, x: float, y: float) -> None:
@@ -538,6 +595,16 @@ class GivexDriver:
     def preflight_geo_check(self) -> str:
         """Navigate to geo-check URL and assert the IP is US-based.
 
+        When the primary geo-check API fails, falls back to MaxMind GeoLite2
+        for UTC-offset detection.  If the GeoLite2 database is unavailable,
+        malformed, or any other error occurs during the fallback, the offset
+        defaults to 0 (UTC) and the method returns ``"UNKNOWN"`` rather than
+        raising so that the calling flow can continue safely.
+
+        Returns:
+            ``"US"`` when the primary API confirms a US IP, or ``"UNKNOWN"``
+            when the API is unavailable and the fallback is used.
+
         Raises:
             RuntimeError: if the detected country is not ``"US"``.
         """
@@ -553,22 +620,29 @@ class GivexDriver:
                 "preflight_geo_check: API failed, trying MaxMind fallback: %s",
                 exc,
             )
-            detected_ip = _get_current_ip_best_effort()
-            if detected_ip:
-                detected_offset = _lookup_maxmind_utc_offset(detected_ip)
-                if detected_offset is None:
+            utc_offset = 0
+            try:
+                detected_ip = _get_current_ip_best_effort()
+                if detected_ip:
+                    detected_offset = _lookup_maxmind_utc_offset(detected_ip)
+                    if detected_offset is None:
+                        _log.warning(
+                            "preflight_geo_check: MaxMind fallback "
+                            "unavailable for IP %s; using UTC offset 0",
+                            detected_ip,
+                        )
+                    utc_offset = detected_offset or 0
+                else:
                     _log.warning(
-                        "preflight_geo_check: MaxMind fallback "
-                        "unavailable for IP %s; using UTC offset 0",
-                        detected_ip,
+                        "preflight_geo_check: unable to detect "
+                        "public IP; using UTC offset 0",
                     )
-                utc_offset = detected_offset or 0
-            else:
+            except Exception as fallback_exc:
                 _log.warning(
-                    "preflight_geo_check: unable to detect "
-                    "public IP; using UTC offset 0",
+                    "preflight_geo_check: MaxMind fallback raised unexpectedly: %s;"
+                    " using UTC offset 0",
+                    fallback_exc,
                 )
-                utc_offset = 0
             self.set_proxy_utc_offset(utc_offset)
             return "UNKNOWN"
         if country != "US":
