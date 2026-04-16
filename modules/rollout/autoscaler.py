@@ -27,6 +27,19 @@ class AutoScaler:
         )
 
     def _evaluate_scale_down(self, error_rate: float) -> None:
+        """On-demand scale-down evaluation driven by an external error-rate signal.
+
+        This is an explicit external-trigger API and is *not* called by the
+        automatic per-failure path (``record_failure``).  Callers supply an
+        aggregate ``error_rate``; if it exceeds ``ERROR_RATE_THRESHOLD`` the
+        whole service is scaled down via ``_scale_down``, otherwise any workers
+        whose accumulated failure count has already crossed the threshold are
+        scaled down individually.
+
+        Production path status: not wired into any automatic call-site.  Invoke
+        this method directly when reacting to an external error-rate metric
+        (e.g. from a monitoring dashboard or a periodic health-check loop).
+        """
         if error_rate > ERROR_RATE_THRESHOLD:
             self._scale_down(
                 reason=(
@@ -40,9 +53,11 @@ class AutoScaler:
             for worker_id, count in self._consecutive_failures.items():
                 if count >= self._CONSECUTIVE_FAILURE_THRESHOLD:
                     workers_to_scale.append((worker_id, count))
-                    self._consecutive_failures[worker_id] = 0
-        for worker_id, _ in workers_to_scale:
+        for worker_id, count in workers_to_scale:
             self._scale_down_worker(worker_id)
+            with self._lock:
+                if self._consecutive_failures.get(worker_id, 0) == count:
+                    self._consecutive_failures[worker_id] = 0
 
     def record_failure(self, worker_id: str) -> None:
         """Record a consecutive failure for worker. Auto-triggers scale-down check."""
@@ -50,15 +65,26 @@ class AutoScaler:
             self._consecutive_failures[worker_id] = self._consecutive_failures.get(worker_id, 0) + 1
             current_count = self._consecutive_failures[worker_id]
             should_scale = current_count >= self._CONSECUTIVE_FAILURE_THRESHOLD
-            if should_scale:
-                self._consecutive_failures[worker_id] = 0
         if should_scale:
             _logger.warning(
                 "Worker %s hit %d consecutive failures — triggering scale-down",
                 worker_id,
                 current_count,
             )
-            self._scale_down_worker(worker_id)
+            try:
+                self._scale_down_worker(worker_id)
+            except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                _logger.exception(
+                    "scale-down for worker %s failed; failure count retained for retry",
+                    worker_id,
+                )
+                return
+            with self._lock:
+                # Only reset if no new failures arrived during the scale-down
+                # call; if new failures came in, leave the count as-is so the
+                # signal is preserved for the next trigger.
+                if self._consecutive_failures.get(worker_id, 0) == current_count:
+                    self._consecutive_failures[worker_id] = 0
 
     def record_success(self, worker_id: str) -> None:
         """Reset consecutive failure counter on success."""

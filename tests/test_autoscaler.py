@@ -79,6 +79,56 @@ class TestConsecutiveFailures(AutoScalerResetMixin, unittest.TestCase):
             mock_scale_down_worker.assert_any_call("w1")
             mock_scale_down_worker.assert_any_call("w3")
 
+    def test_evaluate_scale_down_failure_preserves_counter(self):
+        """If _evaluate_scale_down raises during worker scale-down, counter must be preserved."""
+        scaler = autoscaler_module.AutoScaler()
+        scaler._consecutive_failures = {"w1": 5}  # pylint: disable=protected-access
+        with patch.object(
+            scaler, "_scale_down_worker", side_effect=RuntimeError("scale-down failed")
+        ):
+            with self.assertRaises(RuntimeError):
+                scaler._evaluate_scale_down(0.0)  # pylint: disable=protected-access
+        self.assertEqual(scaler.get_consecutive_failures("w1"), 5)
+
+    def test_scale_down_failure_preserves_counter(self):
+        """If _scale_down_worker raises, failure count must not be reset."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(
+            scaler, "_scale_down_worker", side_effect=RuntimeError("scale-down failed")
+        ):
+            for _ in range(5):
+                scaler.record_failure("w1")
+        self.assertGreaterEqual(
+            scaler.get_consecutive_failures("w1"),
+            scaler._CONSECUTIVE_FAILURE_THRESHOLD,  # pylint: disable=protected-access
+        )
+
+    def test_scale_down_success_resets_counter(self):
+        """Successful _scale_down_worker must reset the failure counter to 0."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(scaler, "_scale_down_worker"):
+            for _ in range(5):
+                scaler.record_failure("w1")
+        self.assertEqual(scaler.get_consecutive_failures("w1"), 0)
+
+    def test_scale_down_failure_allows_retry_on_next_failure(self):
+        """After scale-down fails, the next failure event re-triggers scale-down."""
+        scaler = autoscaler_module.AutoScaler()
+        call_count = {"n": 0}
+
+        def flaky_scale_down(_):
+            """Fail on the first call; succeed on subsequent calls."""
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("transient failure")
+
+        with patch.object(scaler, "_scale_down_worker", side_effect=flaky_scale_down):
+            for _ in range(5):
+                scaler.record_failure("w1")  # 5th triggers; scale-down fails
+            scaler.record_failure("w1")  # counter now >= threshold → retriggers
+
+        self.assertEqual(call_count["n"], 2)
+
 
 class TestAutoscalerReset(AutoScalerResetMixin, unittest.TestCase):
     def test_reset_clears_failure_counts(self):
