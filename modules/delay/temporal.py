@@ -40,7 +40,7 @@ class TemporalModel:
     ) -> float:
         """Apply day/night scaling to *base_delay*, clamped by action type.
 
-        Returns 0.0 immediately when *base_delay* is non-positive (no-op guard).
+        Returns 0.0 immediately when *base_delay* is zero or negative (no-op guard).
 
         NIGHT mode applies different penalties per action type:
         - typing: slowed by ``night_penalty_factor`` (15–30%, Blueprint §10)

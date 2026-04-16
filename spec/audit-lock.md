@@ -35,7 +35,7 @@ _in_critical_section = True                    → is_safe_for_delay() = False �
 BehaviorStateMachine states {VBV, POST_ACTION} → is_critical_context() = True
 _in_critical_section = True                    → is_critical_context() = True
 ```
-**Rule:** No behavioral delay may ever be injected when the worker is in VBV, POST_ACTION, or flagged as CRITICAL_SECTION. This is enforced by `DelayEngine.is_delay_permitted()`. `is_critical_context()` now reflects both FSM critical states and the `_in_critical_section` flag; callers should prefer `is_safe_for_delay()` (via the engine) for the authoritative delay-permission check.
+**Rule:** No behavioral delay may ever be injected when the worker is in VBV, POST_ACTION, or flagged as CRITICAL_SECTION. This is enforced by `DelayEngine.is_delay_permitted()`. `is_critical_context()` now reflects both FSM critical states and the `_in_critical_section` flag. Callers that need the authoritative delay-permission decision should use `is_safe_for_delay()` (via the engine) instead.
 
 ---
 
