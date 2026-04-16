@@ -142,6 +142,33 @@ class TestSendAlert(unittest.TestCase):
         except Exception as exc:
             self.fail(f"send_alert propagated exception from bad handler: {exc}")
 
+    def test_custom_handler_exception_logged_as_warning(self):
+        """Exception from a custom handler must be logged as a WARNING."""
+        def bad_handler(msg):
+            raise RuntimeError("handler failure")
+
+        alerting.register_alert_handler(bad_handler)
+        with self.assertLogs("modules.observability.alerting", level="WARNING") as cm:
+            alerting.send_alert("trigger bad handler")
+        self.assertTrue(any("handler" in line and "handler failure" in line for line in cm.output))
+
+    def test_handler_failure_count_increments(self):
+        """handler_failure_count in get_status() increments on each handler exception."""
+        def bad_handler(msg):
+            raise RuntimeError("fail")
+
+        alerting.register_alert_handler(bad_handler)
+        alerting.send_alert("msg1")
+        alerting.send_alert("msg2")
+        status = alerting.get_status()
+        self.assertEqual(status["handler_failure_count"], 2)
+
+    def test_handler_failure_count_zero_on_success(self):
+        """handler_failure_count remains zero when handlers succeed."""
+        alerting.register_alert_handler(lambda msg: None)
+        alerting.send_alert("ok")
+        self.assertEqual(alerting.get_status()["handler_failure_count"], 0)
+
     def test_alert_count_increments(self):
         """get_status returns incremented alert_count after send_alert calls."""
         alerting.send_alert("msg1")
@@ -173,17 +200,22 @@ class TestAlertingRegistry(unittest.TestCase):
         status = alerting.get_status()
         self.assertEqual(status["handler_count"], 0)
         self.assertEqual(status["alert_count"], 0)
+        self.assertEqual(status["handler_failure_count"], 0)
         self.assertTrue(status["log_alert_enabled"])
 
     def test_reset_clears_all_state(self):
-        """reset() clears handlers, alert_count, and restores log_alert_enabled."""
-        alerting.register_alert_handler(lambda msg: None)
+        """reset() clears handlers, alert_count, handler_failure_count, and restores log_alert_enabled."""
+        def bad_handler(msg):
+            raise RuntimeError("fail")
+
+        alerting.register_alert_handler(bad_handler)
         alerting.send_alert("msg")
         alerting.set_log_alert_enabled(False)
         alerting.reset()
         status = alerting.get_status()
         self.assertEqual(status["handler_count"], 0)
         self.assertEqual(status["alert_count"], 0)
+        self.assertEqual(status["handler_failure_count"], 0)
         self.assertTrue(status["log_alert_enabled"])
 
 

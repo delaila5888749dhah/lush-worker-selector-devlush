@@ -38,6 +38,20 @@ def get_health(status_fn=None) -> dict:
         return {**_UNKNOWN, "errors": [str(exc)]}
 
 
+def _build_response(path: str, status_fn) -> tuple:
+    """Build the HTTP response for a given request path.
+
+    Returns a (status_code: int, body: bytes) tuple.  Extracted at module
+    level so that the response logic can be unit-tested without standing up
+    a live HTTP server.
+    """
+    if path == "/health":
+        body = json.dumps(get_health(status_fn)).encode()
+        return 200, body
+    body = json.dumps({"error": "not found"}).encode()
+    return 404, body
+
+
 def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, status_fn=None) -> bool:
     """Start health check server in daemon thread. Returns True if started."""
     global _server_thread, _server_instance
@@ -67,9 +81,8 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, status_fn=None) -> bool:
             return False
         class _Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                ok = self.path == "/health"
-                body = json.dumps(get_health(status_fn) if ok else {"error": "not found"}).encode()
-                self.send_response(200 if ok else 404)
+                code, body = _build_response(self.path, status_fn)
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(body)

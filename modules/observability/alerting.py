@@ -16,6 +16,7 @@ _logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _alert_handlers: list = []  # list of callable(message: str) -> None
 _alert_count: int = 0
+_handler_failure_count: int = 0
 _log_alert_enabled = True
 
 
@@ -60,7 +61,7 @@ def send_alert(message: str) -> None:
     Exceptions from individual handlers are caught and logged as warnings.
     Never raises.
     """
-    global _alert_count
+    global _alert_count, _handler_failure_count
     try:
         with _lock:
             handlers = list(_alert_handlers)
@@ -68,11 +69,16 @@ def send_alert(message: str) -> None:
             _alert_count += 1
         if log_enabled:
             _logger.warning("ALERT: %s", message)
+        failures = 0
         for fn in handlers:
             try:
                 fn(message)
             except Exception as exc:
+                failures += 1
                 _logger.warning("alerting: handler %r raised: %s", fn, exc)
+        if failures:
+            with _lock:
+                _handler_failure_count += failures
     except Exception as exc:
         _logger.warning("alerting: send_alert failed: %s", exc)
 
@@ -106,14 +112,16 @@ def get_status() -> dict:
         return {
             "handler_count": len(_alert_handlers),
             "alert_count": _alert_count,
+            "handler_failure_count": _handler_failure_count,
             "log_alert_enabled": _log_alert_enabled,
         }
 
 
 def reset() -> None:
     """Reset all alerting state. Intended for testing."""
-    global _alert_handlers, _alert_count, _log_alert_enabled
+    global _alert_handlers, _alert_count, _handler_failure_count, _log_alert_enabled
     with _lock:
         _alert_handlers = []
         _alert_count = 0
+        _handler_failure_count = 0
         _log_alert_enabled = True
