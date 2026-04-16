@@ -38,7 +38,7 @@ def get_health(status_fn=None) -> dict:
         return {**_UNKNOWN, "errors": [str(exc)]}
 
 
-def _build_response(path: str, status_fn) -> tuple:
+def build_response(path: str, status_fn) -> tuple:
     """Build the HTTP response for a given request path.
 
     Returns a (status_code: int, body: bytes) tuple.  Extracted at module
@@ -81,7 +81,7 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, status_fn=None) -> bool:
             return False
         class _Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                code, body = _build_response(self.path, status_fn)
+                code, body = build_response(self.path, status_fn)
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()

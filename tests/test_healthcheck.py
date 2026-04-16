@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 from modules.observability import healthcheck
 from modules.observability.healthcheck import (
+    build_response,
     get_health,
     is_running,
     reset,
@@ -76,38 +77,38 @@ class TestGetHealth(unittest.TestCase):
 
 
 class TestBuildResponse(unittest.TestCase):
-    """Unit tests for _build_response without standing up a live HTTP server."""
+    """Unit tests for build_response without standing up a live HTTP server."""
 
     def test_health_path_returns_200(self):
         fn = MagicMock(return_value=_make_status(running=True, consecutive_rollbacks=0,
                                                   metrics={"error_rate": 0.0}))
-        code, body = healthcheck._build_response("/health", fn)
+        code, body = build_response("/health", fn)
         self.assertEqual(code, 200)
         data = json.loads(body)
         self.assertIn("status", data)
 
     def test_health_path_body_contains_status_and_errors(self):
         fn = MagicMock(return_value=_make_status(running=True))
-        _, body = healthcheck._build_response("/health", fn)
+        _, body = build_response("/health", fn)
         data = json.loads(body)
         self.assertIn("status", data)
         self.assertIn("errors", data)
 
     def test_unknown_path_returns_404(self):
-        code, body = healthcheck._build_response("/unknown", None)
+        code, body = build_response("/unknown", None)
         self.assertEqual(code, 404)
         data = json.loads(body)
         self.assertIn("error", data)
 
     def test_health_path_status_fn_none_returns_200_unknown(self):
-        code, body = healthcheck._build_response("/health", None)
+        code, body = build_response("/health", None)
         self.assertEqual(code, 200)
         data = json.loads(body)
         self.assertEqual(data["status"], "unknown")
 
     def test_body_is_valid_json_bytes(self):
         fn = MagicMock(return_value=_make_status())
-        _, body = healthcheck._build_response("/health", fn)
+        _, body = build_response("/health", fn)
         self.assertIsInstance(body, bytes)
         json.loads(body)  # must not raise
 
