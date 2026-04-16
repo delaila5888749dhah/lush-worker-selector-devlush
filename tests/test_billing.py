@@ -361,6 +361,24 @@ class BillingHardeningTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             billing._find_matching_index("10001")
 
+    def test_find_matching_index_returns_match_when_lock_held(self):
+        """Holding _lock preserves the normal index-selection contract."""
+        profiles = [
+            BillingProfile(
+                first_name="A", last_name="L", address="1 St",
+                city="City", state="NY", zip_code="99999",
+                phone="2125550001", email="a@e.com",
+            ),
+            BillingProfile(
+                first_name="B", last_name="L", address="2 St",
+                city="City", state="NY", zip_code="10001",
+                phone="2125550002", email="b@e.com",
+            ),
+        ]
+        with billing._lock:
+            billing._profiles = collections.deque(profiles)
+            self.assertEqual(billing._find_matching_index("10001"), 1)
+
 
 class ZipAffinityTests(unittest.TestCase):
     """Tests for zip-affinity rotation in billing selection."""
