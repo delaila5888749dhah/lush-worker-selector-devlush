@@ -109,6 +109,19 @@ class FSMTransitionGraphTests(unittest.TestCase):
             s = transition_for_worker(_WID, state_name)
             self.assertEqual(s.name, state_name)
 
+    def test_uninitialized_worker_raises_explicit_invalid_transition_error(self):
+        """Uninitialized workers must fail with the dedicated guard message."""
+        worker_id = "worker-not-initialized"
+        cleanup_worker(worker_id)
+
+        with self.assertRaises(InvalidTransitionError) as ctx:
+            transition_for_worker(worker_id, "success")
+
+        self.assertEqual(
+            str(ctx.exception),
+            f"worker '{worker_id}' not initialized",
+        )
+
     def test_invalid_ui_lock_to_ui_lock(self):
         """ui_lock -> ui_lock is not in the transition graph."""
         transition_for_worker(_WID, "ui_lock")
@@ -128,7 +141,10 @@ class FSMTransitionGraphTests(unittest.TestCase):
         transition_for_worker(_WID, "success")
         with self.assertRaises(ValueError) as ctx:
             transition_for_worker(_WID, "vbv_3ds")
-        self.assertIn("Invalid transition from success to vbv_3ds", str(ctx.exception))
+        self.assertEqual(
+            str(ctx.exception),
+            "Invalid transition from success to vbv_3ds: 'success' is a terminal state",
+        )
 
     def test_invalid_success_to_declined(self):
         """success -> declined is not valid."""
