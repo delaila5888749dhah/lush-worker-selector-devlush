@@ -1,22 +1,4 @@
-"""Local rollout scheduler: stable-window tracking and interval management.
-
-Responsibilities
-----------------
-* Manage the stable-window anchor (``_stable_since``) used to decide when the
-  rollout is eligible to advance.
-* Ensure **all mutations** to ``_stable_since`` are performed while holding
-  ``_lock`` so that concurrent callers (e.g. ``advance_step()`` called from
-  outside while the loop is running) cannot produce a TOCTOU window.
-* Clamp the polling interval to a finite, positive range so that edge-case
-  values (NaN, ±infinity, negative numbers) cannot silently produce unsafe
-  scheduling behavior.
-
-Cross-module isolation
-----------------------
-This module must not import from any other ``modules.*`` package except
-``modules.rollout``.  All external behaviour (health / stability checking)
-is injected through :func:`configure`.
-"""
+"""Rollout scheduler: stable-window tracking and interval management."""
 
 import logging
 import math
@@ -28,51 +10,21 @@ from modules.rollout import main as rollout
 
 _logger = logging.getLogger(__name__)
 
-# ── Tunables ──────────────────────────────────────────────────────────────────
-
 STABLE_DURATION_SECONDS: float = 43200.0
-"""Duration of uninterrupted stability required before advancing (12 h)."""
-
 _MIN_INTERVAL: float = 1.0
-"""Minimum allowed polling interval in seconds."""
-
 _MAX_INTERVAL: float = 86400.0
-"""Maximum allowed polling interval in seconds (24 h)."""
-
 _DEFAULT_INTERVAL: float = 300.0
-"""Fallback polling interval used when the supplied value is not usable."""
-
-# ── Module-level state ────────────────────────────────────────────────────────
 
 _lock = threading.Lock()
 _stop_event = threading.Event()
 _scheduler_thread: Optional[threading.Thread] = None  # pylint: disable=invalid-name
-
-# Stable-window anchor.  Set to ``time.monotonic()`` when health is first
-# confirmed; reset to ``None`` on any scaling event or instability.
-# ALL reads and writes MUST be performed while holding ``_lock``.
+# Stable-window anchor; all reads/writes must hold _lock.
 _stable_since: Optional[float] = None  # pylint: disable=invalid-name
-
-# Injected callback: ``() -> bool`` — returns True when the system is stable.
 _is_stable_fn = None  # pylint: disable=invalid-name
 
 
-# ── Interval clamping ─────────────────────────────────────────────────────────
-
 def _clamp_interval(interval) -> float:
-    """Return *interval* clamped to ``[_MIN_INTERVAL, _MAX_INTERVAL]``.
-
-    NaN, ±infinity, non-numeric, and out-of-range values are all handled
-    explicitly so that the scheduler loop is never started with an unsafe
-    or undefined polling period.
-
-    Args:
-        interval: Candidate polling interval (seconds).  Any type accepted;
-            non-convertible values fall back to :data:`_DEFAULT_INTERVAL`.
-
-    Returns:
-        A finite float in ``[_MIN_INTERVAL, _MAX_INTERVAL]``.
-    """
+    """Clamp *interval* to [_MIN_INTERVAL, _MAX_INTERVAL]; handles NaN/inf."""
     try:
         interval_val = float(interval)
     except (TypeError, ValueError):
@@ -82,26 +34,15 @@ def _clamp_interval(interval) -> float:
     return min(interval_val, _MAX_INTERVAL)
 
 
-# ── Dependency injection ──────────────────────────────────────────────────────
-
 def configure(is_stable_fn=None) -> None:
-    """Inject the stability-check callback used by the scheduler loop.
-
-    Args:
-        is_stable_fn: Callable ``() -> bool`` returning *True* when the
-            current system state is considered stable.  Pass ``None`` to
-            disable proactive advance (the scheduler runs but never marks
-            the window as stable).
-    """
+    """Inject the stability-check callback used by the scheduler loop."""
     global _is_stable_fn  # pylint: disable=global-statement,invalid-name
     with _lock:
         _is_stable_fn = is_stable_fn
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
-
 def _reset_stable_locked() -> None:
-    """Reset the stable-window anchor.  Caller **must** hold ``_lock``."""
+    """Reset the stable-window anchor. Caller must hold _lock."""
     global _stable_since  # pylint: disable=global-statement,invalid-name
     _stable_since = None
 
@@ -122,24 +63,13 @@ def _do_advance() -> None:
         _logger.info("rollout complete: at max workers")
         return
     else:
-        # Unknown action returned by try_scale_up — do not reset the stable
-        # window; no scaling event has occurred.
         return
-    # Reset stable window after a known scaling event (scaled_up or rollback).
     with _lock:
         _reset_stable_locked()
 
 
 def _scheduler_loop(interval: float) -> None:
-    """Main scheduler loop — runs in a background daemon thread.
-
-    Stable-window semantics (serialized)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    All reads **and** the eligibility decision for ``_stable_since`` are
-    performed within a single ``_lock`` acquisition.  This eliminates the
-    TOCTOU window that would exist if the lock were released between reading
-    the anchor and deciding to advance.
-    """
+    """Main scheduler loop; eligibility decided under lock (no TOCTOU)."""
     global _stable_since  # pylint: disable=global-statement,invalid-name
     while not _stop_event.is_set():
         try:
@@ -151,19 +81,11 @@ def _scheduler_loop(interval: float) -> None:
                 with _lock:
                     _reset_stable_locked()
             else:
-                # Serialize the read-modify-check of _stable_since so that no
-                # concurrent advance_step() or reset() call can produce a TOCTOU
-                # window between reading the anchor and acting on the result.
                 with _lock:
                     if _stable_since is None:
                         _stable_since = now
                     snap = _stable_since
                     eligible = (now - snap) >= STABLE_DURATION_SECONDS
-                # can_scale_up() is a cheap pre-check: it avoids calling
-                # try_scale_up() when the rollout is already at max.  A
-                # concurrent advance_step() could change the step between
-                # this check and the call to _do_advance(); try_scale_up()
-                # handles that case gracefully (returning "at_max").
                 if eligible and rollout.can_scale_up():
                     _do_advance()
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
@@ -171,19 +93,8 @@ def _scheduler_loop(interval: float) -> None:
         _stop_event.wait(timeout=interval)
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
-
 def start(interval: float = _DEFAULT_INTERVAL) -> bool:
-    """Start the scheduler loop in a background daemon thread.
-
-    Args:
-        interval: Polling interval in seconds.  NaN, ±infinity, negative, and
-            out-of-range values are clamped to the valid range
-            ``[_MIN_INTERVAL, _MAX_INTERVAL]`` by :func:`_clamp_interval`.
-
-    Returns:
-        ``True`` if started; ``False`` if already running.
-    """
+    """Start the scheduler loop in a background daemon thread."""
     global _scheduler_thread  # pylint: disable=global-statement,invalid-name
     safe_interval = _clamp_interval(interval)
     with _lock:
@@ -201,11 +112,7 @@ def start(interval: float = _DEFAULT_INTERVAL) -> bool:
 
 
 def stop(timeout: float = 10.0) -> bool:
-    """Stop the scheduler loop.
-
-    Returns:
-        ``True`` if stopped cleanly; ``False`` if timed out or not running.
-    """
+    """Stop the scheduler loop."""
     with _lock:
         thread = _scheduler_thread
     if thread is None or not thread.is_alive():
@@ -245,14 +152,7 @@ def get_status() -> dict:
 
 
 def advance_step() -> Tuple[bool, str]:
-    """Manually trigger advance to the next rollout step.
-
-    The stable-window anchor is reset under ``_lock`` immediately after any
-    scaling event to keep scheduler state consistent.
-
-    Returns:
-        ``(success, reason)`` pair.
-    """
+    """Manually trigger advance to the next rollout step."""
     global _stable_since  # pylint: disable=global-statement,invalid-name
     if not rollout.can_scale_up():
         return False, "at max step"
@@ -269,7 +169,7 @@ def advance_step() -> Tuple[bool, str]:
 
 
 def reset() -> None:
-    """Reset all scheduler state.  Intended for testing."""
+    """Reset all scheduler state. Intended for testing."""
     global _scheduler_thread, _stable_since  # pylint: disable=global-statement,invalid-name
     _stop_event.set()
     with _lock:
