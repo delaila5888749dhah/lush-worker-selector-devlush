@@ -22,7 +22,7 @@ _rollback_history = []
 _ROLLBACK_HISTORY_LIMIT = 200
 
 # Guard: at most one forced rollback per scale-up window.
-# Reset to False each time try_scale_up() successfully increments the step.
+# Reset to False at the start of every try_scale_up() call.
 _rollback_applied = False
 
 
@@ -189,7 +189,7 @@ def force_rollback(reason="manual"):
     caller already applied a forced rollback in the current window,
     subsequent calls are treated as idempotent and return the current worker
     count without decrementing ``_current_step_index`` again.  The window
-    resets each time ``try_scale_up()`` successfully increments the step.
+    resets at the start of every ``try_scale_up()`` call.
 
     Args:
         reason: Description of why the rollback was forced.
