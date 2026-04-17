@@ -331,7 +331,7 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
         def stuck_task(wid):
             set_worker_state(wid, "CRITICAL_SECTION")
             cs_entered.set()
-            release_worker.wait(timeout=3)
+            release_worker.wait(timeout=CLEANUP_TIMEOUT)
 
         wid = start_worker(stuck_task)
         self.assertTrue(
