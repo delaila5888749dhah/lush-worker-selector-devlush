@@ -4,6 +4,8 @@ import json
 import logging
 import threading
 
+from modules.common.thresholds import ERROR_RATE_THRESHOLD
+
 _logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _server_thread = None
@@ -27,7 +29,7 @@ def get_health(status_fn=None) -> dict:
         if ds.get("consecutive_rollbacks", 0) > 0:
             errors.append(f"consecutive_rollbacks={ds['consecutive_rollbacks']}")
         m = ds.get("metrics") or {}
-        if m.get("error_rate", 0) > 0.05:
+        if m.get("error_rate", 0) > ERROR_RATE_THRESHOLD:
             errors.append(f"error_rate={m['error_rate']:.1%}")
         return {"status": "healthy" if not errors else "degraded",
                 "running": ds.get("running", False), "state": ds.get("state", "unknown"),

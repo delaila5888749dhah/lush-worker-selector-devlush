@@ -409,20 +409,36 @@ def is_safe_to_control():
     with _lock:
         return _is_safe_locked()
 def _apply_scale(target_count, task_fn):
+    # CPP-RUNTIME fix: snapshot worker ids, compute count, and plan the
+    # scale action (restart budget consumption or scale-down stop list)
+    # atomically under a single _lock block so that a worker exiting
+    # between the read and the plan cannot cause over/under-scale.
     global _pending_restarts
-    with _lock: current_ids = list(_workers.keys())
-    current_count = len(current_ids)
-    if target_count > current_count:
-        with _lock:
-            restarted = min(_pending_restarts, target_count - current_count); _pending_restarts -= restarted
+    with _lock:
+        current_ids = list(_workers.keys())
+        current_count = len(current_ids)
+        if target_count > current_count:
+            delta = target_count - current_count
+            restarted = min(_pending_restarts, delta)
+            _pending_restarts -= restarted
+            direction = "up"
+            stop_ids: list = []
+        elif target_count < current_count:
+            delta = 0
+            restarted = 0
+            _pending_restarts = 0
+            direction = "down"
+            stop_ids = list(current_ids[target_count:])
+        else:
+            return
+    if direction == "up":
         for i in range(target_count - current_count):
             start_worker(task_fn)
             if i < restarted: monitor.record_restart()
         _log_event("runtime", "scaling", "scale_up", {"from": current_count, "to": target_count})
-    elif target_count < current_count:
-        for wid in current_ids[target_count:]:
+    else:
+        for wid in stop_ids:
             stop_worker(wid, timeout=5)
-        with _lock: _pending_restarts = 0
         _log_event("runtime", "scaling", "scale_down", {"from": current_count, "to": target_count})
 def _runtime_loop(task_fn, interval):
     global _consecutive_rollbacks, _loop_error_count
@@ -826,14 +842,17 @@ def get_worker_browser_profile(worker_id: str):  # -> Optional[str]
 def reset():
     """Reset all runtime state. Intended for testing.
 
-    Raises RuntimeError if called while the runtime is actively running
-    in production mode (behavior delay enabled). Call stop() first.
+    Raises RuntimeError if called while the production runtime loop is
+    actively alive. The check looks at the live ``_loop_thread`` rather
+    than ``_behavior_delay_enabled``, so toggling that flag can no longer
+    bypass the production guard (NAQ-RUNTIME-02). Call stop() first.
     """
     global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until, _log_sink_error_count
     with _lock:
-        if _state == "RUNNING" and _behavior_delay_enabled:
+        loop_alive = _loop_thread is not None and _loop_thread.is_alive()
+        if _state == "RUNNING" and loop_alive:
             raise RuntimeError(
-                "reset() called while runtime is actively running in production mode; "
+                "reset() called while runtime is actively running; "
                 "call stop() first."
             )
     stop(timeout=2)

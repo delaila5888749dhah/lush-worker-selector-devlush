@@ -16,6 +16,7 @@ from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import (
     cleanup_worker,
     get_current_state_for_worker,
+    initialize_for_worker,
     reset_states,
     transition_for_worker,
 )
@@ -126,6 +127,55 @@ class HandleOutcomeTests(unittest.TestCase):
 
     def test_unknown_state_returns_retry(self):
         self.assertEqual(handle_outcome(State("unknown_state"), []), "retry")
+
+
+class VbvDelayIntegrationTests(unittest.TestCase):
+    """Phase-5 gap: assert delay == 0.0 when orchestrator FSM is ``vbv_3ds``.
+
+    ``vbv_3ds`` is the orchestrator/CDP FSM state (``modules.fsm``). The
+    behavioral delay engine (``modules.delay``) enforces the zero-delay
+    invariant via its own ``BehaviorStateMachine`` ``VBV`` context. This
+    test wires the two layers together and asserts that, once a worker's
+    FSM state is ``vbv_3ds`` and the behavior SM has transitioned to
+    ``VBV``, **all** delay calculators return exactly ``0.0`` — covering
+    typing, thinking, and dispatched ``calculate_delay("...")`` calls.
+    This closes the integration-layer coverage gap noted in Phase 5 Q9.2.
+    """
+
+    def setUp(self):
+        reset_states()
+        cleanup_worker("vbv_worker")
+
+    def tearDown(self):
+        cleanup_worker("vbv_worker")
+
+    def test_delay_is_zero_when_fsm_state_is_vbv_3ds(self):
+        from modules.delay.main import (
+            BehaviorStateMachine, DelayEngine, PersonaProfile,
+        )
+        # Drive the orchestrator-level FSM to vbv_3ds via the documented
+        # transition path (None -> ui_lock -> vbv_3ds).
+        initialize_for_worker("vbv_worker")
+        transition_for_worker("vbv_worker", "ui_lock")
+        fsm_state = transition_for_worker("vbv_worker", "vbv_3ds")
+        self.assertEqual(fsm_state.name, "vbv_3ds")
+
+        # The behavior delay engine must report the VBV context as unsafe
+        # for delay injection, and every delay API must return 0.0.
+        persona = PersonaProfile(200)
+        bsm = BehaviorStateMachine()
+        engine = DelayEngine(persona, bsm)
+        bsm.transition("FILLING_FORM")
+        bsm.transition("PAYMENT")
+        bsm.transition("VBV")
+
+        self.assertFalse(engine.is_delay_permitted())
+        self.assertEqual(engine.calculate_typing_delay(0), 0.0)
+        self.assertEqual(engine.calculate_thinking_delay(), 0.0)
+        self.assertEqual(engine.calculate_delay("typing"), 0.0)
+        self.assertEqual(engine.calculate_delay("thinking"), 0.0)
+        # Accumulator must not have advanced.
+        self.assertEqual(engine.get_step_accumulated_delay(), 0.0)
 
 
 class RunPaymentStepTests(unittest.TestCase):

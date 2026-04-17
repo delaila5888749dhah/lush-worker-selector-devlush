@@ -436,7 +436,71 @@ class TestCDPModifiersAndIsKeypad(unittest.TestCase):
                 self.assertIsInstance(call[0][1]["code"], str)
 
 
-class TestFieldTypoCapAmount(unittest.TestCase):
+class TestCardCvvPiiMasking(unittest.TestCase):
+    """Phase-5 gap: fallback log paths must mask per-character PAN/CVV digits.
+
+    ``_dispatch`` logs ``ch`` on both the send_keys-fallback WARNING and
+    the completely-failed DEBUG/WARNING path. For sensitive field kinds
+    (``card_number``, ``cvv``), those characters must never appear in log
+    records; instead they are masked to ``'*'``.
+    """
+
+    def _type_with_failing_cdp(self, field_kind, value, *, strict=False,
+                               fail_fallback=False):
+        drv = _mock_driver()
+        drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
+        el = MagicMock()
+        if fail_fallback:
+            el.send_keys.side_effect = RuntimeError("fallback gone")
+        with patch("time.sleep"):
+            level = "DEBUG" if (fail_fallback and not strict) else "WARNING"
+            with self.assertLogs("modules.cdp.keyboard", level=level) as cm:
+                type_value(drv, el, value, _rnd(), typo_rate=0.0,
+                           field_kind=field_kind, strict=strict)
+        return cm.output
+
+    def _assert_digits_masked(self, log_output, value):
+        joined = "\n".join(log_output)
+        for digit in set(value):
+            # Allow the digit to appear only as part of strict=False/True
+            # suffix; actual PAN chars must be redacted. Verify no quoted
+            # digit literal (e.g. "'4'") leaks into the log line.
+            self.assertNotIn(f"'{digit}'", joined,
+                             f"PAN/CVV digit '{digit}' leaked into log")
+        # A masked representation must be present for the fallback path.
+        self.assertIn("'*'", joined)
+
+    def test_card_number_fallback_log_masks_digits(self):
+        pan = "4111111111111111"
+        output = self._type_with_failing_cdp("card_number", pan)
+        self._assert_digits_masked(output, pan)
+
+    def test_cvv_fallback_log_masks_digits(self):
+        cvv = "123"
+        output = self._type_with_failing_cdp("cvv", cvv)
+        self._assert_digits_masked(output, cvv)
+
+    def test_card_number_total_failure_log_masks_digits(self):
+        pan = "4111111111111111"
+        output = self._type_with_failing_cdp(
+            "card_number", pan, strict=True, fail_fallback=True,
+        )
+        self._assert_digits_masked(output, pan)
+
+    def test_non_sensitive_field_preserves_char_in_log(self):
+        """text/name fields keep char in log for debuggability."""
+        drv = _mock_driver()
+        drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
+        el = MagicMock()
+        with patch("time.sleep"):
+            with self.assertLogs("modules.cdp.keyboard", level="WARNING") as cm:
+                type_value(drv, el, "A", _rnd(), typo_rate=0.0,
+                           field_kind="name")
+        joined = "\n".join(cm.output)
+        self.assertIn("'A'", joined)
+
+
+
     """amount field type cap is 0.0 — never inject typos."""
 
     def test_amount_has_zero_typo_cap(self):
