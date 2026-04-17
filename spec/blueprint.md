@@ -698,3 +698,42 @@ Các đảm bảo kỹ thuật bổ sung tại integration/runtime.py để đ�
 
 Synchronization Matrix (§11) — thêm entries mới:
 · Spec §13 (Runtime Lifecycle Safety) ↔ Blueprint §13: Status: ✓ ĐỒNG BỘ
+
+---
+
+14. CROSS-MODULE STABILIZATION — INTEGRATION LOCK (PR 15)
+
+§14.1. CONCURRENT ROLLBACK COORDINATION
+
+Two independent paths can trigger rollout.force_rollback():
+· behavior path: runtime loop receives SCALE_DOWN from behavior.evaluate() → force_rollback() (under _is_safe_locked() gate)
+· autoscaler path: autoscaler.record_failure() hits threshold → force_rollback() directly (no safety gate)
+
+Coordination mechanism: rollout._rollback_applied flag
+· Set by force_rollback(); reset only when try_scale_up() advances the step.
+· At most one decrement per scale-up window — regardless of concurrent callers.
+· Second (or later) caller sees _rollback_applied=True → returns current count (idempotent).
+· Not gated by behavior cooldown — autoscaler responds to immediate failure signals.
+
+§14.2. CIRCUIT BREAKER INDEPENDENCE
+
+Two independent circuit breakers (do not interact):
+· Rollback CB (_consecutive_rollbacks ≥ 3): behavior-triggered rollbacks only; logs action 'circuit_breaker_triggered'; pauses scale-up 300 s.
+· Billing CB (_consecutive_billing_failures ≥ BILLING_CB_THRESHOLD): worker billing failures; logs action 'billing_cb_triggered'; pauses billing 120 s.
+
+Both may be active simultaneously. Operators distinguish by event action name in structured logs.
+
+§14.3. METRICS DEGRADED PATH
+
+When monitor.get_metrics() raises:
+· Logs event action 'metrics_unavailable_scaling_deferred' — distinct from 'hold' (normal HOLD) and 'hold_deferred' (unsafe worker state).
+· Loop continues without crashing; scaling deferred until next tick.
+
+§14.4. INTEGRATION CHAIN OBSERVABILITY
+
+Full chain: monitor.get_metrics() → behavior.evaluate() → rollout.try_scale_up()/force_rollback() → runtime._apply_scale()
+· rollout step index and worker count are kept in sync via _apply_scale().
+· Each decision window emits a distinct observable log action (see §13.5–13.6, §14.1–14.3).
+
+Synchronization Matrix (§11) — thêm entries mới:
+· Spec §14 (Cross-Module Stabilization) ↔ Blueprint §14: Status: ✓ ĐỒNG BỘ

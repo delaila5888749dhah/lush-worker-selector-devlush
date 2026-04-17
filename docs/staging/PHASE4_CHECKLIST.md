@@ -88,6 +88,12 @@ Các điều kiện bắt buộc phải PASS trước khi bắt đầu staging:
 - [ ] zero double-consume incidents
 - [ ] error_rate ≤ 30%
 
+### CP-12 — Cross-Module Stabilization (PR 15)
+- [ ] Concurrent behavior SCALE_DOWN + autoscaler threshold breach: only one rollback occurs per scale-up window regardless of concurrent triggers (validated by test)
+- [ ] Full chain monitor→behavior→rollout→_apply_scale: consistent under concurrent ticks (validated by test)
+- [ ] Rollback CB ('circuit_breaker_triggered') and billing CB ('billing_cb_triggered') emit distinct, independently observable log events
+- [ ] Metrics unavailable: emits 'metrics_unavailable_scaling_deferred', distinct from 'hold' and 'hold_deferred'
+
 ---
 
 ## Kill-Switch Verification (Guard 3.7)
