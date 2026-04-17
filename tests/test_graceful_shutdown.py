@@ -331,7 +331,7 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
         def stuck_task(wid):
             set_worker_state(wid, "CRITICAL_SECTION")
             cs_entered.set()
-            release_worker.wait(timeout=CLEANUP_TIMEOUT)
+            release_worker.wait()
 
         wid = start_worker(stuck_task)
         self.assertTrue(
@@ -348,7 +348,11 @@ class TestStopHardTimeout(GracefulShutdownResetMixin, unittest.TestCase):
         finally:
             release_worker.set()
             self.assertTrue(
-                _wait_until(lambda: wid not in runtime.get_active_workers(), timeout=CLEANUP_TIMEOUT),
+                _wait_until(
+                    lambda: wid not in runtime.get_active_workers()
+                    and wid not in get_all_worker_states(),
+                    timeout=CLEANUP_TIMEOUT,
+                ),
                 "straggler worker did not exit after release",
             )
 
