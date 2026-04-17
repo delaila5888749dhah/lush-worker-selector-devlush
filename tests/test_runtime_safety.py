@@ -177,10 +177,12 @@ class TestResetProductionGuard(RuntimeSafetyResetMixin, unittest.TestCase):
 
     @staticmethod
     def _runtime_private(name):
+        """Access a runtime module private attribute by name via ``__dict__``."""
         return runtime.__dict__[name]
 
     @staticmethod
     def _set_runtime_private(name, value):
+        """Set a runtime module private attribute by name via ``__dict__``."""
         runtime.__dict__[name] = value
 
     def test_reset_raises_when_running_in_production_mode(self):
