@@ -108,18 +108,21 @@ class SanitizeErrorTests(unittest.TestCase):
         self.assertIn("[REDACTED-CVV]", result)
 
     def test_redacts_cvv_with_colon_separator(self):
+        """CVV followed by a colon separator must be redacted."""
         msg = "Field cvv: 321 was rejected"
         result = _sanitize_error(msg)
         self.assertNotIn("321", result)
         self.assertIn("[REDACTED-CVV]", result)
 
     def test_redacts_cvv_with_space_only_separator(self):
+        """CVV followed by whitespace only must be redacted."""
         msg = "card cvv 654 invalid"
         result = _sanitize_error(msg)
         self.assertNotIn("654", result)
         self.assertIn("[REDACTED-CVV]", result)
 
     def test_redacts_cvv_with_hyphen_separator(self):
+        """CVV followed by a hyphen separator must be redacted."""
         msg = "header cvv-2345 declined"
         result = _sanitize_error(msg)
         self.assertNotIn("2345", result)
