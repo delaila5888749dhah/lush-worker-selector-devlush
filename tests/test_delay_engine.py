@@ -169,8 +169,8 @@ class TestEngineModuleImport(unittest.TestCase):
         from modules.delay.engine import (
             MAX_HESITATION_DELAY as MHD,
             MAX_STEP_DELAY as MSD,
-            WATCHDOG_HEADROOM as WH,
         )
+        from modules.delay.config import WATCHDOG_HEADROOM as WH
         from modules.delay.persona import PersonaProfile as PP
         from modules.delay.persona import MAX_TYPING_DELAY as MTD
         from modules.delay.state import BehaviorStateMachine as BSM

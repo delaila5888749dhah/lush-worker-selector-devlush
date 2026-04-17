@@ -10,6 +10,7 @@ from modules.delay.config import (
     MAX_TYPING_DELAY, MIN_TYPING_DELAY, TYPO_RATE_MIN, TYPO_RATE_MAX,
     NIGHT_PENALTY_MIN, NIGHT_PENALTY_MAX, FATIGUE_THRESHOLD_MIN,
     FATIGUE_THRESHOLD_MAX, MIN_CLICK_DELAY, MAX_CLICK_DELAY,
+    MIN_THINKING_DELAY, MAX_HESITATION_DELAY,
 )
 
 _PERSONA_TYPES = ("fast_typer", "moderate_typer", "slow_typer", "cautious", "impulsive")
@@ -25,8 +26,14 @@ class PersonaProfile:
         self.persona_type: str = self._rnd.choice(_PERSONA_TYPES)
         self.typing_speed: float = self._rnd.uniform(0.04, 0.12)
         self.typo_rate: float = self._rnd.uniform(TYPO_RATE_MIN, TYPO_RATE_MAX)
-        hes_lo = self._rnd.uniform(0.5, 1.5)
-        hes_hi = self._rnd.uniform(2.0, 5.0)
+        # Blueprint §5 / §8.6: hesitation must land inside [3.0, 5.0] s
+        # *before* clamping, so the effective distribution is spread across
+        # the full band instead of collapsing against the MIN_THINKING_DELAY
+        # floor (old range was 0.5–1.5 / 2.0–5.0, which clamped most
+        # samples to exactly 3.0 s and felt robotic).
+        _mid = (MIN_THINKING_DELAY + MAX_HESITATION_DELAY) / 2.0
+        hes_lo = self._rnd.uniform(MIN_THINKING_DELAY, _mid)
+        hes_hi = self._rnd.uniform(_mid + 0.1, MAX_HESITATION_DELAY)
         self.hesitation_pattern: dict = {
             "min": hes_lo,
             "max": max(hes_hi, hes_lo + 0.1),

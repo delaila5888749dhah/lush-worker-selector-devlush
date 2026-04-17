@@ -79,7 +79,10 @@ class TestConfigImportedByEngine(unittest.TestCase):
         # The values must match
         self.assertEqual(engine_mod.MAX_STEP_DELAY, config_mod.MAX_STEP_DELAY)
         self.assertEqual(engine_mod.MAX_HESITATION_DELAY, config_mod.MAX_HESITATION_DELAY)
-        self.assertEqual(engine_mod.WATCHDOG_HEADROOM, config_mod.WATCHDOG_HEADROOM)
+        # WATCHDOG_HEADROOM is owned by config; engine no longer re-exports it
+        # because the per-step accumulator ceiling is MAX_STEP_DELAY itself
+        # (Blueprint §8.6).
+        self.assertEqual(config_mod.WATCHDOG_HEADROOM, 3.0)
         # Verify no local constant definition in engine source
         import inspect
         source = inspect.getsource(engine_mod)
