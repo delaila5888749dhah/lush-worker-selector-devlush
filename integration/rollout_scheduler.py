@@ -181,7 +181,7 @@ def advance_step() -> tuple[bool, str]:
 
 def reset() -> None:
     """Reset scheduler state. Intended for testing."""
-    global _scheduler_thread, _stable_since, _ROLLOUT_MANAGED_BY_RUNTIME
+    global _scheduler_thread, _stable_since, _ROLLOUT_MANAGED_BY_RUNTIME  # pylint: disable=global-statement,invalid-name
     _stop_event.set()
     with _lock:
         thread = _scheduler_thread
