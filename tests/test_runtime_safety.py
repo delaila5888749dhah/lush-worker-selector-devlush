@@ -177,18 +177,20 @@ class TestResetProductionGuard(RuntimeSafetyResetMixin, unittest.TestCase):
 
     @staticmethod
     def _runtime_private(name):
-        """Access a runtime module private attribute by name via ``__dict__``."""
+        """Access a runtime module private attribute by name for white-box tests."""
         try:
-            return runtime.__dict__[name]
-        except KeyError as exc:
+            return getattr(runtime, name)
+        except AttributeError as exc:
             raise AssertionError(f"missing runtime private attribute: {name}") from exc
 
     @staticmethod
     def _set_runtime_private(name, value):
-        """Set a runtime module private attribute by name via ``__dict__``."""
-        if name not in runtime.__dict__:
-            raise AssertionError(f"missing runtime private attribute: {name}")
-        runtime.__dict__[name] = value
+        """Set a runtime module private attribute by name for white-box tests."""
+        try:
+            getattr(runtime, name)
+        except AttributeError as exc:
+            raise AssertionError(f"missing runtime private attribute: {name}") from exc
+        setattr(runtime, name, value)
 
     def test_reset_raises_when_running_in_production_mode(self):
         """reset() must raise when a live loop thread is running."""
