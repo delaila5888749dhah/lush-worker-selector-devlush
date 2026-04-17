@@ -175,42 +175,50 @@ class TestPendingRestartsCap(RuntimeSafetyResetMixin, unittest.TestCase):
 class TestResetProductionGuard(RuntimeSafetyResetMixin, unittest.TestCase):
     """reset() raises when called while runtime is RUNNING with behavior delay enabled."""
 
+    @staticmethod
+    def _runtime_private(name):
+        return runtime.__dict__[name]
+
+    @staticmethod
+    def _set_runtime_private(name, value):
+        runtime.__dict__[name] = value
+
     def test_reset_raises_when_running_in_production_mode(self):
         """reset() must raise when a live loop thread is running."""
         fake_thread = MagicMock()
         fake_thread.is_alive.return_value = True
-        with runtime._lock:
-            runtime._state = "RUNNING"
-            runtime._loop_thread = fake_thread
-            runtime._behavior_delay_enabled = True
+        with self._runtime_private("_lock"):
+            self._set_runtime_private("_state", "RUNNING")
+            self._set_runtime_private("_loop_thread", fake_thread)
+            self._set_runtime_private("_behavior_delay_enabled", True)
         try:
             with self.assertRaises(RuntimeError) as ctx:
                 reset()
             self.assertIn("running", str(ctx.exception).lower())
         finally:
             # Restore safe state for tearDown
-            with runtime._lock:
-                runtime._state = "STOPPED"
-                runtime._loop_thread = None
-                runtime._behavior_delay_enabled = False
+            with self._runtime_private("_lock"):
+                self._set_runtime_private("_state", "STOPPED")
+                self._set_runtime_private("_loop_thread", None)
+                self._set_runtime_private("_behavior_delay_enabled", False)
 
     def test_reset_raises_when_running_even_if_flag_disabled(self):
         """NAQ-RUNTIME-02: reset() must NOT be bypassable by toggling
         _behavior_delay_enabled=False while a live loop thread is running."""
         fake_thread = MagicMock()
         fake_thread.is_alive.return_value = True
-        with runtime._lock:
-            runtime._state = "RUNNING"
-            runtime._loop_thread = fake_thread
-            runtime._behavior_delay_enabled = False
+        with self._runtime_private("_lock"):
+            self._set_runtime_private("_state", "RUNNING")
+            self._set_runtime_private("_loop_thread", fake_thread)
+            self._set_runtime_private("_behavior_delay_enabled", False)
         try:
             with self.assertRaises(RuntimeError):
                 reset()
         finally:
-            with runtime._lock:
-                runtime._state = "STOPPED"
-                runtime._loop_thread = None
-                runtime._behavior_delay_enabled = False
+            with self._runtime_private("_lock"):
+                self._set_runtime_private("_state", "STOPPED")
+                self._set_runtime_private("_loop_thread", None)
+                self._set_runtime_private("_behavior_delay_enabled", False)
 
     def test_reset_allowed_when_stopped(self):
         """reset() must NOT raise if state is STOPPED."""

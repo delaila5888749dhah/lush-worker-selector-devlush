@@ -7,7 +7,7 @@ _log = logging.getLogger(__name__)
 _SENSITIVE_FIELD_KINDS: Set[str] = {"card_number", "cvv"}
 
 
-def _mask_ch(ch: str, field_kind: str) -> str:
+def _mask_ch(ch: str, field_kind: str) -> str:  # pylint: disable=invalid-name
     """Return a log-safe representation of ``ch`` for the given field kind.
 
     Sensitive fields (card_number, cvv) must not leak per-character PAN
@@ -53,7 +53,7 @@ def adjacent_char(c, rnd):
     n = _ADJACENT.get(c.lower(), "")
     return rnd.choice(n) if n else c
 
-def _dispatch(drv, el, ch, strict, field_kind="text"):
+def _dispatch(drv, el, ch, strict, field_kind="text"):  # pylint: disable=invalid-name
     try:
         vk = _VK_MAP.get(ch, ord(ch))
         mod = 8 if ch in _SHIFT_REQUIRED else 0

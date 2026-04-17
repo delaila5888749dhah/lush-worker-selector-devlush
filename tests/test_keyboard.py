@@ -447,6 +447,7 @@ class TestCardCvvPiiMasking(unittest.TestCase):
 
     def _type_with_failing_cdp(self, field_kind, value, *, strict=False,
                                fail_fallback=False):
+        """Run typing with forced CDP failure and capture emitted logs."""
         drv = _mock_driver()
         drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
         el = MagicMock()
@@ -454,12 +455,13 @@ class TestCardCvvPiiMasking(unittest.TestCase):
             el.send_keys.side_effect = RuntimeError("fallback gone")
         with patch("time.sleep"):
             level = "DEBUG" if (fail_fallback and not strict) else "WARNING"
-            with self.assertLogs("modules.cdp.keyboard", level=level) as cm:
+            with self.assertLogs("modules.cdp.keyboard", level=level) as log_cm:
                 type_value(drv, el, value, _rnd(), typo_rate=0.0,
                            field_kind=field_kind, strict=strict)
-        return cm.output
+        return log_cm.output
 
     def _assert_digits_masked(self, log_output, value):
+        """Assert quoted PAN/CVV digits are absent and masked output is present."""
         joined = "\n".join(log_output)
         for digit in set(value):
             # Allow the digit to appear only as part of strict=False/True
@@ -471,16 +473,19 @@ class TestCardCvvPiiMasking(unittest.TestCase):
         self.assertIn("'*'", joined)
 
     def test_card_number_fallback_log_masks_digits(self):
+        """Fallback warning logs must redact every quoted PAN digit."""
         pan = "4111111111111111"
         output = self._type_with_failing_cdp("card_number", pan)
         self._assert_digits_masked(output, pan)
 
     def test_cvv_fallback_log_masks_digits(self):
+        """Fallback warning logs must redact every quoted CVV digit."""
         cvv = "123"
         output = self._type_with_failing_cdp("cvv", cvv)
         self._assert_digits_masked(output, cvv)
 
     def test_card_number_total_failure_log_masks_digits(self):
+        """Total-failure logs must redact quoted PAN digits in strict mode."""
         pan = "4111111111111111"
         output = self._type_with_failing_cdp(
             "card_number", pan, strict=True, fail_fallback=True,
@@ -493,14 +498,14 @@ class TestCardCvvPiiMasking(unittest.TestCase):
         drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
         el = MagicMock()
         with patch("time.sleep"):
-            with self.assertLogs("modules.cdp.keyboard", level="WARNING") as cm:
+            with self.assertLogs("modules.cdp.keyboard", level="WARNING") as log_cm:
                 type_value(drv, el, "A", _rnd(), typo_rate=0.0,
                            field_kind="name")
-        joined = "\n".join(cm.output)
+        joined = "\n".join(log_cm.output)
         self.assertIn("'A'", joined)
 
 
-
+class TestFieldTypoCapAmount(unittest.TestCase):
     """amount field type cap is 0.0 — never inject typos."""
 
     def test_amount_has_zero_typo_cap(self):
