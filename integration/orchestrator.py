@@ -128,10 +128,30 @@ def _record_autoscaler_failure(worker_id: str) -> None:
 
 # TTL-based idempotency cache with in-flight tracking.
 _IDEMPOTENCY_TTL = 3600  # 1 hour
+_IN_FLIGHT_TTL_SECONDS: int = 300  # 5 minutes — stale in-flight entries evicted after this interval
 _completed_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp
-_in_flight_task_ids: set[str] = set()
 _submitted_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp; payment sent but result unconfirmed
 _idempotency_lock = threading.Lock()
+
+
+class _InFlightTaskIds(dict):  # dict[str, float]
+    """In-flight task ID tracker: maps task_id → monotonic insertion timestamp.
+
+    Subclasses dict so that TTL eviction can inspect insertion times.
+    Provides .add() and .discard() compatibility shims so existing callers
+    (including test helpers that pre-populate the set) continue to work unchanged.
+    """
+
+    def add(self, task_id: str) -> None:
+        """Compatibility shim: record task_id as in-flight with current timestamp."""
+        self[task_id] = time.monotonic()
+
+    def discard(self, task_id: str) -> None:
+        """Compatibility shim: remove task_id if present."""
+        self.pop(task_id, None)
+
+
+_in_flight_task_ids: _InFlightTaskIds = _InFlightTaskIds()
 
 # Persistent idempotency store — survives process restarts to prevent double-charges.
 # Configurable via IDEMPOTENCY_STORE_PATH env var.
@@ -141,16 +161,17 @@ _IDEMPOTENCY_STORE_PATH = Path(
 
 # CDP call timeout — prevents worker threads from blocking indefinitely.
 _CDP_CALL_TIMEOUT = float(os.getenv("CDP_CALL_TIMEOUT_SECONDS", str(_CDP_CALL_TIMEOUT_CONFIG)))
+CDP_EXECUTOR_MAX_WORKERS: int = int(os.getenv("CDP_EXECUTOR_MAX_WORKERS", "8"))
 _cdp_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=int(os.getenv("CDP_EXECUTOR_MAX_WORKERS", "8")),
+    max_workers=CDP_EXECUTOR_MAX_WORKERS,
     thread_name_prefix="cdp-timeout",
 )
 _cdp_executor_lock = threading.Lock()
 
 _cdp_timeout_count: int = 0          # total CDP calls that timed out (caller-side)
 _active_cdp_requests: int = 0        # orchestration-level tracking only
-_cdp_orphaned_threads: int = 0       # timed-out threads that may still occupy executor slots
-# protects the three counters above
+_cdp_orphaned_threads: int = 0       # timed-out threads that may still occupy executor slots; protected by _cdp_executor_lock
+# protects _cdp_timeout_count and _active_cdp_requests
 _cdp_metric_lock = threading.Lock()  # pylint: disable=invalid-name
 # Guards watchdog.notify_total() calls that may be triggered concurrently from
 # both the CDP callback path and the pre-wait DOM fallback path.
@@ -309,7 +330,7 @@ class _FileIdempotencyStore(_IdempotencyStore):
             ):
                 return True
             # Mark as in-flight immediately to block concurrent duplicates.
-            _in_flight_task_ids.add(task_id)
+            _in_flight_task_ids[task_id] = time.monotonic()
             return False
 
     def mark_submitted(self, task_id: str) -> None:
@@ -325,7 +346,7 @@ class _FileIdempotencyStore(_IdempotencyStore):
 
     def release_inflight(self, task_id: str) -> None:
         with _idempotency_lock:
-            _in_flight_task_ids.discard(task_id)
+            _in_flight_task_ids.pop(task_id, None)
 
     def flush(self) -> None:
         with _idempotency_lock:
@@ -357,6 +378,8 @@ class _RedisIdempotencyStore(_IdempotencyStore):
         return f"idempotency:lush-givex:{task_id}"
 
     def is_duplicate(self, task_id: str) -> bool:
+        with _idempotency_lock:
+            _evict_expired_task_ids()
         # SET NX returns True when the key was set (first time → not a duplicate).
         # Returns None/False when the key already exists → duplicate.
         try:
@@ -456,7 +479,7 @@ def _shutdown_cdp_executor() -> None:
     with _cdp_executor_lock:
         with _cdp_metric_lock:
             _snap_active = _active_cdp_requests
-            _snap_orphaned = _cdp_orphaned_threads
+        _snap_orphaned = _cdp_orphaned_threads  # protected by _cdp_executor_lock
         _logger.info(
             "Shutting down CDP executor (active_cdp_requests=%d, orphaned_threads=%d). "
             "In-flight threads will continue running until natural completion.",
@@ -468,6 +491,31 @@ def _shutdown_cdp_executor() -> None:
 atexit.register(_shutdown_cdp_executor)
 
 
+def _get_cdp_executor() -> concurrent.futures.ThreadPoolExecutor:
+    """Return the active CDP executor, replacing it if saturated with orphaned threads.
+
+    Acquires ``_cdp_executor_lock`` internally. When ``_cdp_orphaned_threads``
+    reaches ``CDP_EXECUTOR_MAX_WORKERS``, all slots are likely occupied by hung
+    (timed-out) threads and no new submissions will start immediately. In that
+    case the old executor is discarded (without waiting) and a fresh one is
+    created so that subsequent calls are not permanently queued.
+    """
+    global _cdp_executor, _cdp_orphaned_threads  # pylint: disable=global-statement
+    with _cdp_executor_lock:
+        if _cdp_orphaned_threads >= CDP_EXECUTOR_MAX_WORKERS:
+            _cdp_executor.shutdown(wait=False, cancel_futures=False)
+            _logger.critical(
+                "CDP executor saturated (%d orphans) — replacing executor",
+                _cdp_orphaned_threads,
+            )
+            _cdp_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=CDP_EXECUTOR_MAX_WORKERS,
+                thread_name_prefix="cdp-timeout",
+            )
+            _cdp_orphaned_threads = 0
+        return _cdp_executor
+
+
 def _evict_expired_task_ids() -> None:
     """Remove task_ids that have exceeded the TTL. Must be called while holding _idempotency_lock."""
     cutoff = time.monotonic() - _IDEMPOTENCY_TTL
@@ -477,6 +525,11 @@ def _evict_expired_task_ids() -> None:
     expired_sub = [k for k, ts in _submitted_task_ids.items() if ts < cutoff]
     for k in expired_sub:
         del _submitted_task_ids[k]
+    inflight_cutoff = time.monotonic() - _IN_FLIGHT_TTL_SECONDS
+    stale_inflight = [k for k, ts in _in_flight_task_ids.items() if ts < inflight_cutoff]
+    for k in stale_inflight:
+        del _in_flight_task_ids[k]
+        _logger.warning("Evicting stale in-flight task_id %s — worker likely crashed mid-cycle", k)
 
 
 # ── CDP timeout helper (HIGH-02) ──────────────────────────────────
@@ -514,12 +567,13 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
     global _active_cdp_requests  # pylint: disable=global-statement,invalid-name
     global _cdp_orphaned_threads  # pylint: disable=global-statement,invalid-name
     fn_name = getattr(fn, "__name__", repr(fn))
+    executor = _get_cdp_executor()
 
     with _cdp_metric_lock:
         _active_cdp_requests += 1
     try:
         try:
-            future = _cdp_executor.submit(fn, *args, **kwargs)
+            future = executor.submit(fn, *args, **kwargs)
         except RuntimeError as exc:
             raise SessionFlaggedError(
                 f"CDP call '{fn_name}' could not be scheduled because "
@@ -529,12 +583,13 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
             return future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
             future.cancel()  # Best-effort; no-op if the task is already running.
+            with _cdp_executor_lock:
+                _cdp_orphaned_threads += 1  # thread may still occupy an executor slot
+                _snapshot_orphaned = _cdp_orphaned_threads
             with _cdp_metric_lock:
                 _cdp_timeout_count += 1
-                _cdp_orphaned_threads += 1  # thread may still occupy an executor slot
                 _snapshot_active = _active_cdp_requests
                 _snapshot_timeouts = _cdp_timeout_count
-                _snapshot_orphaned = _cdp_orphaned_threads
             _logger.warning(
                 "[trace=%s] CDP call '%s' timed out after %.1fs "
                 "(active_cdp_requests=%d, total_timeouts=%d, orphaned_threads=%d). "
@@ -584,11 +639,15 @@ def get_cdp_metrics() -> dict:
                     relative to ``CDP_EXECUTOR_MAX_WORKERS`` for saturation risk.
     """
     with _cdp_metric_lock:
-        return {
-            "total_timeouts": _cdp_timeout_count,
-            "active_cdp_requests": _active_cdp_requests,
-            "orphaned_cdp_threads": _cdp_orphaned_threads,
-        }
+        total_timeouts = _cdp_timeout_count
+        active_cdp_requests = _active_cdp_requests
+    with _cdp_executor_lock:
+        orphaned_cdp_threads = _cdp_orphaned_threads
+    return {
+        "total_timeouts": total_timeouts,
+        "active_cdp_requests": active_cdp_requests,
+        "orphaned_cdp_threads": orphaned_cdp_threads,
+    }
 
 
 def initialize_cycle(worker_id: str = "default"):
@@ -813,6 +872,13 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
                 _get_trace_id(), worker_id, _task_id_log, exc,
             )
         watchdog.reset_session(worker_id)
+        if _submitted_before_wait:
+            _logger.critical(
+                "PAYMENT_SUBMITTED_UNCONFIRMED: task_id=%s worker_id=%s — total was never "
+                "confirmed; manual review required before retrying",
+                _task_id_log, worker_id,
+            )
+            # TODO: _get_idempotency_store().mark_unconfirmed(task_id) — hook point for future unconfirmed-state TTL retry
         raise
     except Exception as exc:
         _logger.error(
