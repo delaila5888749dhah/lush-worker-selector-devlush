@@ -183,7 +183,8 @@ def reset_states():
     """Clear the legacy global FSM state.
 
     .. deprecated::
-        Use :func:`cleanup_worker` or :func:`reset_registry` instead.
+        Use :func:`cleanup_worker` to remove state for a specific worker, or
+        :func:`reset_registry` to clear all per-worker state (e.g. in tests).
     """
     global _current_state
     warnings.warn(
