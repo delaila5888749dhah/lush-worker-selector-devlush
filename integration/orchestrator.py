@@ -504,6 +504,10 @@ def _get_cdp_executor() -> concurrent.futures.ThreadPoolExecutor:
     with _cdp_executor_lock:
         if _cdp_orphaned_threads >= CDP_EXECUTOR_MAX_WORKERS:
             _cdp_executor.shutdown(wait=False, cancel_futures=False)
+            # cancel_futures=False is intentional: already-running threads cannot be
+            # interrupted in CPython's ThreadPoolExecutor — they will run to completion
+            # regardless. We only want to stop accepting new submissions on the old
+            # executor and let the OS reclaim resources naturally.
             _logger.critical(
                 "CDP executor saturated (%d orphans) — replacing executor",
                 _cdp_orphaned_threads,
