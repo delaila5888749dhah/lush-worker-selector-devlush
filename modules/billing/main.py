@@ -16,6 +16,8 @@ _LOAD_LOCK = threading.Lock()  # serializes cold-start pool loading; exactly one
 _local_fill_rng = threading.local()  # pylint: disable=invalid-name
 _profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
+_reload_requested: bool = False
+_reload_flag_lock = threading.Lock()
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
 _PHONE_FIRST_DIGITS = "23456789"
@@ -92,10 +94,24 @@ def _pool_dir() -> Path:
 
 
 def _reset_state() -> None:
-    global _profiles
+    global _profiles, _reload_requested
     with _LOAD_LOCK:
         with _lock:
             _profiles = collections.deque()
+    with _reload_flag_lock:
+        _reload_requested = False
+
+
+def request_pool_reload() -> None:
+    """Signal that the profile cache should be invalidated on the next
+    select_profile() call. Thread-safe and idempotent.
+
+    Call this after adding new profiles to BILLING_POOL_DIR so that
+    workers pick up the new files after a circuit-breaker pause expires.
+    """
+    global _reload_requested
+    with _reload_flag_lock:
+        _reload_requested = True
 
 
 def _normalize_zip(zip_code: str | int | None) -> str:
@@ -271,8 +287,21 @@ def _fill_missing(profile: BillingProfile) -> BillingProfile:
 
 
 def select_profile(zip_code: str | int | None = None) -> BillingProfile:
-    global _profiles
+    global _profiles, _reload_requested
     normalized_zip = _normalize_zip(zip_code)
+
+    # Hot-reload: if a reload was requested (e.g., after CB pause), invalidate cache.
+    with _reload_flag_lock:
+        do_reload = _reload_requested
+        if do_reload:
+            _reload_requested = False
+    if do_reload:
+        with _lock:
+            _profiles.clear()
+        _logger.info(
+            "Billing pool cache invalidated by reload request; "
+            "profiles will be re-read from disk."
+        )
 
     # Fast path: check if pool is already loaded before doing any I/O
     with _lock:

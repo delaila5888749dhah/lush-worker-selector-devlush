@@ -165,6 +165,20 @@ def _worker_fn(worker_id, task_fn, persona):
                         if _should_stop_worker(worker_id):
                             break
                     _safe_sleep(min(1.0, max(0, deadline - time.monotonic())))
+                # Request a billing pool reload so profiles added during the
+                # pause window are picked up before workers retry.
+                try:
+                    billing.request_pool_reload()
+                    _logger.info(
+                        "Billing CB pause ended for worker %s; "
+                        "pool reload requested.",
+                        worker_id,
+                    )
+                except Exception:  # pylint: disable=broad-except
+                    _logger.warning(
+                        "Failed to request billing pool reload after CB pause.",
+                        exc_info=True,
+                    )
                 continue
             with _lock:
                 if _should_stop_worker(worker_id):
@@ -191,11 +205,13 @@ def _worker_fn(worker_id, task_fn, persona):
                 with _lock:
                     _consecutive_billing_failures += 1
                     if _consecutive_billing_failures >= _BILLING_CB_THRESHOLD:
-                        pause_dur = int(_BILLING_CB_PAUSE)
-                        fail_count = _consecutive_billing_failures
-                        _billing_throttled_until = time.monotonic() + pause_dur
-                        _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
-                        _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
+                        if not _is_billing_throttled():  # Only arm CB if not already active
+                            pause_dur = int(_BILLING_CB_PAUSE)
+                            fail_count = _consecutive_billing_failures
+                            _billing_throttled_until = time.monotonic() + pause_dur
+                            _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
+                            _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
+                        # Always reset counter to prevent unbounded growth
                         _consecutive_billing_failures = 0
                     _increment_pending_restarts_locked(worker_id)
                 err_data: dict = {"error": _sanitize_error(exc)}
