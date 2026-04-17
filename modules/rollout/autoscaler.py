@@ -18,7 +18,7 @@ class AutoScaler:
         self._consecutive_failures: Dict[str, int] = {}
         self._CONSECUTIVE_FAILURE_THRESHOLD: int = 5
 
-    def _scale_down(self, reason: str) -> int:
+    def _scale_down(self, reason: str) -> int:  # pylint: disable=no-self-use
         return rollout.force_rollback(reason=reason)
 
     def _scale_down_worker(self, worker_id: str) -> None:
