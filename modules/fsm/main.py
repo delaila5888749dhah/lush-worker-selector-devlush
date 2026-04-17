@@ -34,7 +34,7 @@ _registry_lock = threading.Lock()
 # Legacy global state kept for backward compatibility with code that does not
 # pass a worker_id (e.g. single-worker scenarios and existing tests).
 _states: dict = {}
-_legacy_global_lock = threading.Lock()
+_legacy_global_lock = threading.Lock()  # pylint: disable=invalid-name
 _current_state = None
 
 
