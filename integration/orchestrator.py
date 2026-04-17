@@ -128,7 +128,7 @@ def _record_autoscaler_failure(worker_id: str) -> None:
 
 # TTL-based idempotency cache with in-flight tracking.
 _IDEMPOTENCY_TTL = 3600  # 1 hour
-_IN_FLIGHT_TTL_SECONDS: int = 300  # 5 minutes — stale in-flight entries evicted after this interval
+_IN_FLIGHT_TTL_SECONDS: int = 300  # 5 min — stale in-flight eviction
 _completed_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp
 _submitted_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp; payment sent but result unconfirmed
 _idempotency_lock = threading.Lock()
@@ -170,7 +170,9 @@ _cdp_executor_lock = threading.Lock()
 
 _cdp_timeout_count: int = 0          # total CDP calls that timed out (caller-side)
 _active_cdp_requests: int = 0        # orchestration-level tracking only
-_cdp_orphaned_threads: int = 0       # timed-out threads that may still occupy executor slots; protected by _cdp_executor_lock
+# Timed-out threads that may still occupy executor slots.
+# Protected by _cdp_executor_lock (not _cdp_metric_lock).
+_cdp_orphaned_threads: int = 0
 # protects _cdp_timeout_count and _active_cdp_requests
 _cdp_metric_lock = threading.Lock()  # pylint: disable=invalid-name
 # Guards watchdog.notify_total() calls that may be triggered concurrently from
@@ -500,10 +502,12 @@ def _get_cdp_executor() -> concurrent.futures.ThreadPoolExecutor:
     case the old executor is discarded (without waiting) and a fresh one is
     created so that subsequent calls are not permanently queued.
     """
-    global _cdp_executor, _cdp_orphaned_threads  # pylint: disable=global-statement
+    global _cdp_executor, _cdp_orphaned_threads  # pylint: disable=global-statement,invalid-name
     with _cdp_executor_lock:
         if _cdp_orphaned_threads >= CDP_EXECUTOR_MAX_WORKERS:
-            _cdp_executor.shutdown(wait=False, cancel_futures=False)
+            _cdp_executor.shutdown(  # pylint: disable=unexpected-keyword-arg
+                wait=False, cancel_futures=False,
+            )
             # cancel_futures=False is intentional: already-running threads cannot be
             # interrupted in CPython's ThreadPoolExecutor — they will run to completion
             # regardless. We only want to stop accepting new submissions on the old
@@ -882,7 +886,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
                 "confirmed; manual review required before retrying",
                 _task_id_log, worker_id,
             )
-            # TODO: _get_idempotency_store().mark_unconfirmed(task_id) — hook point for future unconfirmed-state TTL retry
+            # TODO: _get_idempotency_store().mark_unconfirmed(task_id)
+            # — hook point for future unconfirmed-state TTL retry
         raise
     except Exception as exc:
         _logger.error(
