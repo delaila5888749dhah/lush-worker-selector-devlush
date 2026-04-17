@@ -29,6 +29,8 @@ _decision_history = []
 
 def _in_cooldown(now=None):
     """Return True if a cooldown period is active."""
+    if _last_decision_time == 0.0:
+        return False
     ts = time.monotonic() if now is None else now
     return (ts - _last_decision_time) < COOLDOWN_SECONDS
 

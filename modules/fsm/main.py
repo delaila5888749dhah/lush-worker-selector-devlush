@@ -7,6 +7,7 @@ import functools
 import inspect
 import logging
 import threading
+import warnings
 
 from modules.common.exceptions import InvalidStateError, InvalidTransitionError
 from modules.common.types import State
@@ -33,7 +34,7 @@ _registry_lock = threading.Lock()
 # Legacy global state kept for backward compatibility with code that does not
 # pass a worker_id (e.g. single-worker scenarios and existing tests).
 _states: dict = {}
-_states_lock = threading.Lock()
+_legacy_global_lock = threading.Lock()  # pylint: disable=invalid-name
 _current_state = None
 
 
@@ -119,9 +120,19 @@ def _legacy_warn(func):
 
 @_legacy_warn
 def add_new_state(state_name):
-    if state_name not in ALLOWED_STATES:
-        raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
-    with _states_lock:
+    """Add *state_name* to the legacy global registry.
+
+    .. deprecated::
+        Use :func:`add_state_for_worker` instead.
+    """
+    warnings.warn(
+        "add_new_state() is deprecated — use add_state_for_worker() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    with _legacy_global_lock:
+        if state_name not in ALLOWED_STATES:
+            raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
         if state_name in _states:
             raise ValueError(f"state '{state_name}' already exists")
         state = State(name=state_name)
@@ -131,16 +142,36 @@ def add_new_state(state_name):
 
 @_legacy_warn
 def get_current_state():
-    with _states_lock:
+    """Return the current legacy global FSM state.
+
+    .. deprecated::
+        Use :func:`get_current_state_for_worker` instead.
+    """
+    warnings.warn(
+        "get_current_state() is deprecated — use get_current_state_for_worker() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    with _legacy_global_lock:
         return _current_state
 
 
 @_legacy_warn
 def transition_to(target_state):
+    """Transition the legacy global FSM to *target_state*.
+
+    .. deprecated::
+        Use :func:`transition_for_worker` instead.
+    """
     global _current_state
-    if target_state not in ALLOWED_STATES:
-        raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
-    with _states_lock:
+    warnings.warn(
+        "transition_to() is deprecated — use transition_for_worker() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    with _legacy_global_lock:
+        if target_state not in ALLOWED_STATES:
+            raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
         if target_state not in _states:
             raise InvalidTransitionError(f"state '{target_state}' not registered")
         _current_state = _states[target_state]
@@ -149,8 +180,19 @@ def transition_to(target_state):
 
 @_legacy_warn
 def reset_states():
+    """Clear the legacy global FSM state.
+
+    .. deprecated::
+        Use :func:`cleanup_worker` to remove state for a specific worker, or
+        :func:`reset_registry` to clear all per-worker state (e.g. in tests).
+    """
     global _current_state
-    with _states_lock:
+    warnings.warn(
+        "reset_states() is deprecated — use cleanup_worker() or reset_registry() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    with _legacy_global_lock:
         _states.clear()
         _current_state = None
 
