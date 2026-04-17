@@ -14,6 +14,7 @@ Validates:
 import threading
 import time
 import unittest
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from integration import runtime
@@ -176,20 +177,18 @@ class TestResetProductionGuard(RuntimeSafetyResetMixin, unittest.TestCase):
     """reset() raises when called while runtime is RUNNING with behavior delay enabled."""
 
     @staticmethod
-    def _runtime_private(name):
-        """Access a runtime module private attribute by name for white-box tests."""
+    def _runtime_private(name: str) -> Any:
+        """Access a named runtime private attribute for white-box tests."""
         try:
             return getattr(runtime, name)
         except AttributeError as exc:
             raise AssertionError(f"missing runtime private attribute: {name}") from exc
 
     @staticmethod
-    def _set_runtime_private(name, value):
-        """Set a runtime module private attribute by name for white-box tests."""
-        try:
-            getattr(runtime, name)
-        except AttributeError as exc:
-            raise AssertionError(f"missing runtime private attribute: {name}") from exc
+    def _set_runtime_private(name: str, value: Any) -> None:
+        """Set a named runtime private attribute for white-box tests."""
+        if not hasattr(runtime, name):
+            raise AssertionError(f"missing runtime private attribute: {name}")
         setattr(runtime, name, value)
 
     def test_reset_raises_when_running_in_production_mode(self):
