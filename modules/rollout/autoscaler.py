@@ -39,6 +39,8 @@ class AutoScaler:
         When called with ``error_rate=0.0`` (the default, used by
         ``get_recommended_scale_down_target``), the global error-rate threshold
         check is skipped and only per-worker failure counts are evaluated.
+        ``error_rate`` is expected to be in the range ``[0.0, 1.0]``; negative
+        values are treated the same as ``0.0`` (threshold check not triggered).
 
         Production path status: not wired into any automatic call-site.  Invoke
         this method directly when reacting to an external error-rate metric
@@ -60,8 +62,8 @@ class AutoScaler:
             for worker_id, count in self._consecutive_failures.items():
                 if count >= self._CONSECUTIVE_FAILURE_THRESHOLD:
                     workers_to_scale.append((worker_id, count))
-        if not workers_to_scale:
-            return None
+            if not workers_to_scale:
+                return None
         for worker_id, count in workers_to_scale:
             self._scale_down_worker(worker_id)
             with self._lock:
