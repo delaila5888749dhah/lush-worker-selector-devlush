@@ -4,11 +4,52 @@
 - Python 3.11+; env vars: `BILLING_POOL_DIR` (optional), `REDIS_URL` (optional)
 
 ## 2. Start
+
+### 2.1 System entrypoint
+
+The canonical way to start the system is via the `app.__main__` module:
+
+```bash
+python -m app
+```
+
+`app/__main__.py` reads the `ENABLE_PRODUCTION_TASK_FN` feature flag, selects the
+appropriate `task_fn` (production or no-op stub), and calls `runtime.start()` on
+your behalf.  **Do not call `runtime.start()` directly with a custom `task_fn`
+outside of the gatekeeper checks in `app/__main__.py`.**  Bypassing the entrypoint
+skips the feature flag, the BitBrowser lifecycle guard, the CDP driver registration,
+and the `add_cdp_listener` probe — all of which must run before any purchase cycle
+begins.
+
+### 2.2 Environment variables
+
+Set the following variables before starting:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ENABLE_PRODUCTION_TASK_FN` | **yes** (production) | `""` (off) | Set to `1`, `true`, or `yes` to activate the production browser lifecycle (`make_task_fn`). Omit or set to any other value to run a no-op stub (safe for staging validation). |
+| `BITBROWSER_API_KEY` | **yes** (production) | — | API key for the BitBrowser automation service. Required when `ENABLE_PRODUCTION_TASK_FN` is on. |
+| `BITBROWSER_ENDPOINT` | no | `http://127.0.0.1:54345` | Base URL for the local BitBrowser API server. |
+| `GIVEX_ENDPOINT` | no | — | Givex service endpoint URL. A warning is logged on startup if unset. |
+| `PROXY_LIST_FILE` | no | — | Path to a newline-delimited proxy list file consumed by the proxy rotator. |
+| `GEOIP_DB_PATH` | no | `data/GeoLite2-City.mmdb` | Path to the MaxMind GeoLite2 City database used for zip-code derivation (F-07). |
+| `REDIS_URL` | no | `""` | Redis connection URL used for deduplication and idempotency. Leave unset to disable Redis-backed idempotency. |
+| `WORKER_COUNT` | no | `1` | Number of concurrent worker threads. Valid range: 1–50. |
+| `BILLING_POOL_DIR` | no | `billing_pool` | Directory containing `.txt` billing profile files. |
+| `BILLING_CB_THRESHOLD` | no | `3` | Number of consecutive billing failures before the circuit breaker trips. |
+| `BILLING_CB_PAUSE` | no | `120` | Seconds the circuit breaker pauses new billing after tripping. |
+| `IDEMPOTENCY_STORE_PATH` | no | `.idempotency_store.json` | File path for the local idempotency store. |
+| `CDP_CALL_TIMEOUT_SECONDS` | no | `10.0` | Timeout (seconds) for synchronous CDP command calls. |
+| `CDP_EXECUTOR_MAX_WORKERS` | no | `8` | Thread-pool size for the CDP command executor. |
+
+### 2.3 Verify deployment
+
+After the process is running, confirm all checks pass:
+
 ```python
-from integration import runtime, rollout_scheduler
-runtime.start(task_fn=my_task, interval=10)
-rollout_scheduler.start_scheduler(interval=300)
-result = runtime.verify_deployment()  # {"passed": True, "checks": {...}, "errors": []}
+from integration import runtime
+result = runtime.verify_deployment()
+# {"passed": True, "checks": {...}, "errors": []}
 ```
 
 ## 3. Stop
@@ -58,4 +99,4 @@ monitor.get_metrics()  # success_rate, error_rate, restarts_last_hour, memory_us
 2. `runtime.stop(timeout=30)`
 3. `runtime.get_deployment_status()`
 4. `runtime.reset()`
-5. Restart from §2.
+5. Restart via `python -m app` (see §2.1).
