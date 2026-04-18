@@ -127,7 +127,10 @@ def _notify_success(task, worker_id: str, total) -> None:
         # Unwrap GivexDriver → raw Selenium WebDriver so get_screenshot_as_png()
         # is invoked on the actual browser session, not the wrapper layer.
         raw_driver = getattr(wrapper, "_driver", wrapper)
-        screenshot = capture_and_blur(raw_driver, task.primary_card.card_number) if raw_driver else None
+        screenshot = (
+            capture_and_blur(raw_driver, task.primary_card.card_number)
+            if raw_driver else None
+        )
         send_success_notification(worker_id, task, total, screenshot)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] success notify failed worker=%s: %s",
