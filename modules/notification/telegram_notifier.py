@@ -33,7 +33,7 @@ def _open_https(req: urllib.request.Request, timeout: int):
     full_url = req.full_url
     if not full_url.lower().startswith("https://"):
         raise ValueError(f"telegram_notifier: refusing non-HTTPS URL {full_url!r}")
-    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 — scheme validated above
+    return urllib.request.urlopen(req, timeout=timeout)  # nosec B310 — scheme validated above  # noqa: S310
 
 
 def _send_message(token: str, chat_id: str, text: str, timeout: int = 10) -> bool:

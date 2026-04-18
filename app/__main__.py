@@ -33,7 +33,7 @@ def _make_stub_task_fn():
 def _wire_telegram_hooks() -> None:
     """Register Telegram alert handler if TELEGRAM_ENABLED."""
     try:
-        from modules.notification.telegram_notifier import register_as_alert_handler  # noqa: PLC0415
+        from modules.notification.telegram_notifier import register_as_alert_handler  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
         register_as_alert_handler()
         _log.info("Telegram alert handler registered.")
     except Exception as exc:  # pylint: disable=broad-except
@@ -48,8 +48,8 @@ def main() -> None:
     )
     if runtime.is_production_task_fn_enabled():
         _log.info("ENABLE_PRODUCTION_TASK_FN=on: loading production task_fn")
-        from integration.task_loader import FileTaskLoader  # noqa: PLC0415
-        from integration.worker_task import make_task_fn  # noqa: PLC0415
+        from integration.task_loader import FileTaskLoader  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        from integration.worker_task import make_task_fn  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
         loader = FileTaskLoader()
         task_fn = make_task_fn(task_source=loader.get_task)
         _wire_telegram_hooks()

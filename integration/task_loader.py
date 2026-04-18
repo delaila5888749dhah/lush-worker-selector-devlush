@@ -9,10 +9,12 @@ Malformed lines are logged as warnings and skipped.
 Env vars:
     TASK_INPUT_FILE  — path to the input file (default: ``tasks/input.txt``)
 """
+from __future__ import annotations
+
 import logging
 import os
 import threading
-from typing import Optional
+from typing import List, Optional
 
 from modules.common.types import CardInfo, WorkerTask
 
@@ -37,7 +39,7 @@ class FileTaskLoader:
             "TASK_INPUT_FILE", _DEFAULT_TASK_FILE
         )
         self._lock = threading.Lock()
-        self._lines: list[str] = []
+        self._lines: List[str] = []
         self._index: int = 0
         self._loaded = False
 
@@ -122,7 +124,7 @@ class FileTaskLoader:
 
         # Parse additional cards for order_queue: groups of 4 fields each
         extra_fields = card_fields[4:]
-        order_queue: list[CardInfo] = []
+        order_queue: List[CardInfo] = []
         while len(extra_fields) >= 4:
             card = CardInfo(
                 card_number=extra_fields[0].strip(),

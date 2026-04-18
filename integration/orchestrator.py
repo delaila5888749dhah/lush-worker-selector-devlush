@@ -113,8 +113,8 @@ def _record_autoscaler_failure(worker_id: str) -> None:
 def _notify_success(task, worker_id: str, total) -> None:
     """Send success screenshot+notification (Blueprint §6 Ngã rẽ 2). Never raises."""
     try:
-        from modules.notification.screenshot_blur import capture_and_blur  # noqa: PLC0415
-        from modules.notification.telegram_notifier import send_success_notification  # noqa: PLC0415
+        from modules.notification.screenshot_blur import capture_and_blur  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        from modules.notification.telegram_notifier import send_success_notification  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
         driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
         screenshot = None
         if driver_obj is not None:
