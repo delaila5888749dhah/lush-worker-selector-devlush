@@ -4,7 +4,7 @@ Asserts the current content of the constant so that drift is caught
 immediately.  The patterns cover both /api/checkout/total (via
 '/checkout/total' substring) and /api/tax (exact).
 """
-# pylint: disable=protected-access,missing-function-docstring,no-self-use
+# pylint: disable=protected-access,no-self-use
 import unittest
 
 from integration import orchestrator

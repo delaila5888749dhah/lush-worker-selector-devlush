@@ -6,9 +6,6 @@ registration or BitBrowser session functions are called anywhere in the module.
 This test will BREAK if someone adds registration wiring before the F-01/F-03
 PRs are reviewed, ensuring that change is not silent.
 """
-# pylint: disable=missing-function-docstring
-from __future__ import annotations
-
 import ast
 import inspect
 import unittest
@@ -18,10 +15,12 @@ from integration import runtime as _runtime_module
 
 
 def _get_runtime_source() -> str:
+    """Return the source text of integration.runtime."""
     return inspect.getsource(_runtime_module)
 
 
 def _get_runtime_ast() -> ast.Module:
+    """Parse integration.runtime into an AST module."""
     return ast.parse(_get_runtime_source())
 
 
@@ -46,6 +45,7 @@ class TestRuntimeWiringPosture(unittest.TestCase):
     BitBrowser-session wiring."""
 
     def setUp(self):
+        """Cache source and call names for each assertion."""
         self._source = _get_runtime_source()
         self._call_names = _call_names_in_ast(_get_runtime_ast())
 
