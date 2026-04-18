@@ -18,7 +18,7 @@ enforced by the caller (``app/__main__.py``).  This module does **not** read
 the flag itself so that tests can import and exercise it freely.
 """
 import logging
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
 from modules.cdp.driver import _get_current_ip_best_effort, maxmind_lookup_zip
@@ -27,7 +27,7 @@ from modules.cdp.fingerprint import BitBrowserSession, get_bitbrowser_client
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-def make_task_fn(task_source: Optional[Callable[[str], object]] = None) -> Callable[[str], None]:
+def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable[[str], None]:
     """Return a production task_fn for ``runtime.start()``.
 
     The returned callable is stateless between calls; all per-cycle

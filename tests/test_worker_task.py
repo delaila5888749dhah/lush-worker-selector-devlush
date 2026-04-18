@@ -654,7 +654,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
         _, mock_task_source, _ = self._run(worker_id="worker-99")
         mock_task_source.assert_called_once_with("worker-99")
 
-    def test_maxmind_lookup_called_with_detected_ip(self):
+    def test_maxmind_lookup_zip_receives_detected_ip_address(self):
         """maxmind_lookup_zip is called with the IP returned by _get_current_ip_best_effort."""
         bb_client = _make_bitbrowser_client()
         selenium_drv = _make_selenium_driver()
