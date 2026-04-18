@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 from modules.common.exceptions import (
@@ -98,7 +98,7 @@ class _StubGivexDriver:
     """
     # pylint: disable=unused-argument
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         worker_id: str,
         final_state: str = "success",
@@ -110,8 +110,8 @@ class _StubGivexDriver:
         self.final_state = final_state
         self.error_at = error_at
         self.dom_total = dom_total
-        self.calls: list[str] = []
-        self._cdp_listeners: dict = {}
+        self.calls: List[str] = []
+        self._cdp_listeners: Dict[str, Callable] = {}
         if enable_cdp_listener:
             def _add_listener(event, callback):
                 self._cdp_listeners[event] = callback
@@ -224,7 +224,7 @@ class _FakeBitBrowserHandler(BaseHTTPRequestHandler):
     """BitBrowser API stub implementing create/open/close/delete endpoints."""
 
     _lock = threading.Lock()
-    _calls: list = []
+    _calls: List[Tuple[str, Dict[str, Any]]] = []
 
     @classmethod
     def reset(cls) -> None:

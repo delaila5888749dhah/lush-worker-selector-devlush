@@ -170,11 +170,13 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
         _cdp_main.register_driver(self.worker_id, stub)
         task = _make_task()
 
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("integration.orchestrator._get_idempotency_store", return_value=store_mock),
-            patch("integration.orchestrator.cdp.run_preflight_and_fill",
-                  side_effect=lambda *_a, **_kw: (call_order.append("prefill"), None)[-1]),
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch(
+            "integration.orchestrator._get_idempotency_store", return_value=store_mock
+        ), patch(
+            "integration.orchestrator.cdp.run_preflight_and_fill",
+            side_effect=lambda *_a, **_kw: (call_order.append("prefill"), None)[-1],
         ):
             run_payment_step(task, worker_id=self.worker_id)
 
@@ -280,10 +282,11 @@ class TestL3OrchestratorScenarios(_IntegrationBase, unittest.TestCase):
         store_mock = MagicMock()
         store_mock.is_duplicate.return_value = False
         try:
-            with (
-                patch("integration.orchestrator.billing", make_mock_billing()),
-                patch("integration.orchestrator._get_idempotency_store",
-                      return_value=store_mock),
+            with patch(
+                "integration.orchestrator.billing", make_mock_billing()
+            ), patch(
+                "integration.orchestrator._get_idempotency_store",
+                return_value=store_mock,
             ):
                 run_cycle(task, worker_id=self.worker_id)
         finally:
@@ -307,10 +310,9 @@ class TestL3OrchestratorScenarios(_IntegrationBase, unittest.TestCase):
                 audit_events.append(msg)
 
         try:
-            with (
-                patch("integration.orchestrator.billing", make_mock_billing()),
-                patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit,
-            ):
+            with patch(
+                "integration.orchestrator.billing", make_mock_billing()
+            ), patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit:
                 mock_audit.info.side_effect = capture_audit
                 run_cycle(task, worker_id=self.worker_id)
         finally:
@@ -358,10 +360,9 @@ class TestL3WatchdogTimeout(_IntegrationBase, unittest.TestCase):
         )
         _cdp_main.register_driver(self.worker_id, stub)
         # Use a very short watchdog timeout so the test doesn't hang.
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("integration.orchestrator._WATCHDOG_TIMEOUT", 0.05),
-        ):
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch("integration.orchestrator._WATCHDOG_TIMEOUT", 0.05):
             with self.assertRaises(SessionFlaggedError):
                 run_payment_step(_make_task(task_id="l3-wd-timeout"), worker_id=self.worker_id)
 
@@ -383,12 +384,15 @@ class TestL3WatchdogTimeout(_IntegrationBase, unittest.TestCase):
         store_mock = MagicMock()
         store_mock.is_duplicate.return_value = False
 
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("integration.orchestrator._WATCHDOG_TIMEOUT", 0.05),
-            patch("integration.orchestrator._logger") as mock_log,
-            patch("integration.orchestrator._get_idempotency_store",
-                  return_value=store_mock),
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch(
+            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
+        ), patch(
+            "integration.orchestrator._logger"
+        ) as mock_log, patch(
+            "integration.orchestrator._get_idempotency_store",
+            return_value=store_mock,
         ):
             mock_log.error.side_effect = capture_error
             with self.assertRaises(SessionFlaggedError):
@@ -419,10 +423,9 @@ class TestL3WatchdogTimeout(_IntegrationBase, unittest.TestCase):
         stub = _StubGivexDriver(self.worker_id, final_state="success", dom_total="50.00")
         _cdp_main.register_driver(self.worker_id, stub)
 
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("modules.watchdog.main.notify_total", side_effect=counting_notify),
-        ):
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch("modules.watchdog.main.notify_total", side_effect=counting_notify):
             run_payment_step(_make_task(task_id="l3-wd-once"), worker_id=self.worker_id)
 
         self.assertLessEqual(
@@ -457,10 +460,11 @@ class TestL3IdempotencyContracts(_IntegrationBase, unittest.TestCase):
 
         mock_billing = make_mock_billing()
 
-        with (
-            patch("integration.orchestrator.billing", mock_billing),
-            patch("integration.orchestrator._get_idempotency_store",
-                  return_value=store_mock),
+        with patch(
+            "integration.orchestrator.billing", mock_billing
+        ), patch(
+            "integration.orchestrator._get_idempotency_store",
+            return_value=store_mock,
         ):
             run_cycle(task, worker_id=self.worker_id)
 
@@ -471,10 +475,11 @@ class TestL3IdempotencyContracts(_IntegrationBase, unittest.TestCase):
         stub2 = _StubGivexDriver(self.worker_id, final_state="success")
         _cdp_main.register_driver(self.worker_id, stub2)
 
-        with (
-            patch("integration.orchestrator.billing", mock_billing),
-            patch("integration.orchestrator._get_idempotency_store",
-                  return_value=store_mock),
+        with patch(
+            "integration.orchestrator.billing", mock_billing
+        ), patch(
+            "integration.orchestrator._get_idempotency_store",
+            return_value=store_mock,
         ):
             action, _state, _total = run_cycle(task, worker_id=self.worker_id)
 
@@ -503,10 +508,11 @@ class TestL3IdempotencyContracts(_IntegrationBase, unittest.TestCase):
         stub.submit_purchase = recording_submit
         _cdp_main.register_driver(self.worker_id, stub)
 
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("integration.orchestrator._get_idempotency_store",
-                  return_value=store_mock),
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch(
+            "integration.orchestrator._get_idempotency_store",
+            return_value=store_mock,
         ):
             run_payment_step(task, worker_id=self.worker_id)
 
@@ -581,12 +587,15 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
         def capture(fmt, *args, **_kwargs):
             log_messages.append(fmt % args if args else fmt)
 
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("integration.orchestrator._WATCHDOG_TIMEOUT", 0.05),
-            patch("integration.orchestrator._logger") as mock_log,
-            patch("integration.orchestrator._get_idempotency_store",
-                  return_value=store_mock),
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch(
+            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
+        ), patch(
+            "integration.orchestrator._logger"
+        ) as mock_log, patch(
+            "integration.orchestrator._get_idempotency_store",
+            return_value=store_mock,
         ):
             mock_log.error.side_effect = capture
             with self.assertRaises(SessionFlaggedError):
@@ -622,10 +631,11 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
         stub = _StubGivexDriver(self.worker_id, error_at="preflight_geo_check")
         _cdp_main.register_driver(self.worker_id, stub)
         autoscaler_mock = MagicMock()
-        with (
-            patch("integration.orchestrator.billing", make_mock_billing()),
-            patch("integration.orchestrator._get_autoscaler",
-                  return_value=autoscaler_mock),
+        with patch(
+            "integration.orchestrator.billing", make_mock_billing()
+        ), patch(
+            "integration.orchestrator._get_autoscaler",
+            return_value=autoscaler_mock,
         ):
             with self.assertRaises(SessionFlaggedError):
                 run_cycle(_make_task(task_id="l3-err-autoscaler"), worker_id=self.worker_id)
@@ -751,15 +761,17 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
             def register_browser_profile(wid, pid):  # pylint: disable=unused-argument
                 """No-op stub for cdp.register_browser_profile."""
 
-        with (
-            patch("integration.worker_task.get_bitbrowser_client",
-                  return_value=bb_client),
-            patch("integration.worker_task._build_remote_driver",
-                  return_value=selenium_drv),
-            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
-            patch("integration.worker_task.cdp", _TrackingCdp()),
-            patch("integration.runtime.probe_cdp_listener_support"),
-        ):
+        with patch(
+            "integration.worker_task.get_bitbrowser_client",
+            return_value=bb_client,
+        ), patch(
+            "integration.worker_task._build_remote_driver",
+            return_value=selenium_drv,
+        ), patch(
+            "modules.cdp.driver.GivexDriver", return_value=givex_drv
+        ), patch(
+            "integration.worker_task.cdp", _TrackingCdp()
+        ), patch("integration.runtime.probe_cdp_listener_support"):
             make_task_fn()(self.worker_id)
 
         register_key = f"register:{self.worker_id}"
@@ -796,16 +808,21 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
             def register_browser_profile(wid, pid):  # pylint: disable=unused-argument
                 """No-op stub for cdp.register_browser_profile."""
 
-        with (
-            patch("integration.worker_task.get_bitbrowser_client",
-                  return_value=bb_client),
-            patch("integration.worker_task._build_remote_driver",
-                  return_value=selenium_drv),
-            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
-            patch("integration.worker_task.cdp", _TrackingCdp()),
-            patch("integration.runtime.probe_cdp_listener_support"),
-            patch("integration.worker_task._get_current_ip_best_effort",
-                  return_value=None),
+        with patch(
+            "integration.worker_task.get_bitbrowser_client",
+            return_value=bb_client,
+        ), patch(
+            "integration.worker_task._build_remote_driver",
+            return_value=selenium_drv,
+        ), patch(
+            "modules.cdp.driver.GivexDriver", return_value=givex_drv
+        ), patch(
+            "integration.worker_task.cdp", _TrackingCdp()
+        ), patch(
+            "integration.runtime.probe_cdp_listener_support"
+        ), patch(
+            "integration.worker_task._get_current_ip_best_effort",
+            return_value=None,
         ):
             task_source = MagicMock(return_value=_make_task())
             # Patch run_cycle in the dynamically-imported orchestrator module.
@@ -831,19 +848,26 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
         def capture_run_cycle(_task, zip_code=None, worker_id="default"):
             run_cycle_kwargs.append({"zip_code": zip_code, "worker_id": worker_id})
 
-        with (
-            patch("integration.worker_task.get_bitbrowser_client",
-                  return_value=bb_client),
-            patch("integration.worker_task._build_remote_driver",
-                  return_value=selenium_drv),
-            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
-            patch("integration.worker_task.cdp"),
-            patch("integration.runtime.probe_cdp_listener_support"),
-            patch("integration.worker_task._get_current_ip_best_effort",
-                  return_value="1.2.3.4"),
-            patch("integration.worker_task.maxmind_lookup_zip", return_value="10001"),
-            patch("integration.orchestrator.run_cycle",
-                  side_effect=capture_run_cycle),
+        with patch(
+            "integration.worker_task.get_bitbrowser_client",
+            return_value=bb_client,
+        ), patch(
+            "integration.worker_task._build_remote_driver",
+            return_value=selenium_drv,
+        ), patch(
+            "modules.cdp.driver.GivexDriver", return_value=givex_drv
+        ), patch(
+            "integration.worker_task.cdp"
+        ), patch(
+            "integration.runtime.probe_cdp_listener_support"
+        ), patch(
+            "integration.worker_task._get_current_ip_best_effort",
+            return_value="1.2.3.4",
+        ), patch(
+            "integration.worker_task.maxmind_lookup_zip", return_value="10001"
+        ), patch(
+            "integration.orchestrator.run_cycle",
+            side_effect=capture_run_cycle,
         ):
             task_source = MagicMock(return_value=_make_task())
             make_task_fn(task_source=task_source)(self.worker_id)
@@ -858,15 +882,17 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
     def test_bitbrowser_lifecycle_order(self):
         """BitBrowser lifecycle must be: create_profile → launch_profile → (close + delete)."""
         bb_client, selenium_drv, givex_drv = self._make_mocks()
-        with (
-            patch("integration.worker_task.get_bitbrowser_client",
-                  return_value=bb_client),
-            patch("integration.worker_task._build_remote_driver",
-                  return_value=selenium_drv),
-            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
-            patch("integration.worker_task.cdp"),
-            patch("integration.runtime.probe_cdp_listener_support"),
-        ):
+        with patch(
+            "integration.worker_task.get_bitbrowser_client",
+            return_value=bb_client,
+        ), patch(
+            "integration.worker_task._build_remote_driver",
+            return_value=selenium_drv,
+        ), patch(
+            "modules.cdp.driver.GivexDriver", return_value=givex_drv
+        ), patch(
+            "integration.worker_task.cdp"
+        ), patch("integration.runtime.probe_cdp_listener_support"):
             make_task_fn()(self.worker_id)
 
         bb_client.create_profile.assert_called_once()

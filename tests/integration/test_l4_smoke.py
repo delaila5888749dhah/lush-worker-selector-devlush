@@ -63,8 +63,6 @@ from integration.orchestrator import (  # noqa: E402  pylint: disable=wrong-impo
 )
 from modules.common.exceptions import SessionFlaggedError  # noqa: E402  pylint: disable=wrong-import-position
 from modules.fsm.main import cleanup_worker, reset_registry  # noqa: E402  pylint: disable=wrong-import-position
-from modules.watchdog.main import reset as _reset_watchdog  # noqa: E402  pylint: disable=wrong-import-position
-
 from _integration_harness import (  # noqa: E402  pylint: disable=wrong-import-position,wrong-import-order
     _IntegrationBase,
     _StubGivexDriver,
@@ -121,9 +119,6 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
         else:
             _smoke_log.info("SMOKE_LOG | mode=STUB")
 
-    def tearDown(self):
-        super().tearDown()
-
     # ── Scenario helpers ───────────────────────────────────────────────────────
 
     def _stub_run_cycle(
@@ -176,10 +171,9 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
         start = time.monotonic()
         exc_caught = None
         try:
-            with (
-                patch("integration.orchestrator.billing", make_mock_billing()),
-                patch("integration.orchestrator._WATCHDOG_TIMEOUT", timeout),
-            ):
+            with patch(
+                "integration.orchestrator.billing", make_mock_billing()
+            ), patch("integration.orchestrator._WATCHDOG_TIMEOUT", timeout):
                 run_payment_step(task, worker_id=self.worker_id)
         except SessionFlaggedError as exc:
             exc_caught = exc
