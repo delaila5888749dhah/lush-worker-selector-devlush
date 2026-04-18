@@ -111,13 +111,23 @@ def _record_autoscaler_failure(worker_id: str) -> None:
 
 
 def _notify_success(task, worker_id: str, total) -> None:
-    """Send success screenshot+notification (Blueprint §6 Ngã rẽ 2). Never raises."""
+    """Send success screenshot+notification (Blueprint §6 Ngã rẽ 2). Never raises.
+
+    The registry stores ``GivexDriver`` wrappers (see ``integration.worker_task``);
+    screenshot capture must use the underlying Selenium WebDriver (``._driver``).
+    """
     # pylint: disable=import-outside-toplevel
     try:
         from modules.notification.screenshot_blur import capture_and_blur  # noqa: PLC0415
         from modules.notification.telegram_notifier import send_success_notification  # noqa: PLC0415
-        driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
-        screenshot = capture_and_blur(driver_obj, task.primary_card.card_number) if driver_obj else None
+        try:
+            wrapper = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+        except RuntimeError:
+            wrapper = None
+        # Unwrap GivexDriver → raw Selenium WebDriver so get_screenshot_as_png()
+        # is invoked on the actual browser session, not the wrapper layer.
+        raw_driver = getattr(wrapper, "_driver", wrapper)
+        screenshot = capture_and_blur(raw_driver, task.primary_card.card_number) if raw_driver else None
         send_success_notification(worker_id, task, total, screenshot)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] success notify failed worker=%s: %s",
