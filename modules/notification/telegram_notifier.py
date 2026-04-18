@@ -5,7 +5,6 @@ Env vars required:
     TELEGRAM_CHAT_ID    — channel/group/user ID to receive notifications
     TELEGRAM_ENABLED    — '1'/'true'/'yes' to enable (default: off)
 """
-import io
 import logging
 import os
 import urllib.error
@@ -18,22 +17,35 @@ from modules.notification.card_masker import mask_card_number
 _logger = logging.getLogger(__name__)
 
 _ENABLED_VALUES = {"1", "true", "yes"}
+_TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
 def _is_telegram_enabled() -> bool:
     return os.environ.get("TELEGRAM_ENABLED", "").strip().lower() in _ENABLED_VALUES
 
 
+def _open_https(req: urllib.request.Request, timeout: int):
+    """Open a Telegram API request, asserting the scheme is HTTPS.
+
+    Hardens against accidental scheme abuse (file://, custom schemes) flagged
+    by Bandit B310.  Raises ValueError if the URL is not HTTPS.
+    """
+    full_url = req.full_url
+    if not full_url.lower().startswith("https://"):
+        raise ValueError(f"telegram_notifier: refusing non-HTTPS URL {full_url!r}")
+    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 — scheme validated above
+
+
 def _send_message(token: str, chat_id: str, text: str, timeout: int = 10) -> bool:
     """Send a plain-text message via Telegram Bot API."""
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    url = f"{_TELEGRAM_API_BASE}/bot{token}/sendMessage"
     data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
     try:
         req = urllib.request.Request(url, data=data, method="POST")
-        with urllib.request.urlopen(req, timeout=timeout):
+        with _open_https(req, timeout=timeout):
             pass
         return True
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
         _logger.warning("telegram_notifier: sendMessage failed: %s", exc)
         return False
 
@@ -46,10 +58,7 @@ def _send_photo(
     timeout: int = 10,
 ) -> bool:
     """Send a photo with caption via Telegram Bot API using multipart/form-data."""
-    import email.mime.multipart  # noqa: PLC0415 — stdlib, always available
-    import email.mime.base  # noqa: PLC0415
-
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    url = f"{_TELEGRAM_API_BASE}/bot{token}/sendPhoto"
     boundary = "----TelegramBoundary"
 
     body_parts = [
@@ -68,10 +77,10 @@ def _send_photo(
             method="POST",
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )
-        with urllib.request.urlopen(req, timeout=timeout):
+        with _open_https(req, timeout=timeout):
             pass
         return True
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
         _logger.warning("telegram_notifier: sendPhoto failed: %s", exc)
         return False
 
@@ -147,6 +156,18 @@ def _send_alert_to_telegram(message: str) -> None:
 
 
 def register_as_alert_handler() -> None:
-    """Register Telegram as an alert handler via the alerting module."""
-    from modules.observability import alerting  # noqa: PLC0415
+    """Register Telegram as an alert handler via the alerting module.
+
+    The import is guarded so this module remains usable in environments where
+    the optional ``modules.observability`` package is unavailable.
+    """
+    try:
+        from modules.observability import alerting  # noqa: PLC0415
+    except ImportError as exc:
+        _logger.warning(
+            "telegram_notifier: cannot register alert handler "
+            "(modules.observability unavailable): %s",
+            exc,
+        )
+        return
     alerting.register_alert_handler(_send_alert_to_telegram)
