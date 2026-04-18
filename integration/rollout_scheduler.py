@@ -1,194 +1,84 @@
-# DEPRECATED: This scheduler is superseded by integration/runtime._runtime_loop().
-# Controlled by the ROLLOUT_MANAGED_BY_RUNTIME environment variable (default: true = disabled).
-"""Automatic rollout scheduler — manages production rollout via ROLLOUT_STEPS."""
+"""DEPRECATED shim — use integration.runtime instead. Removal in next major version.
+
+This module previously hosted the gradual rollout scheduler
+(``ROLLOUT_STEPS`` → 1/3/5/10 workers).  Its responsibilities have been
+absorbed by ``integration.runtime._runtime_loop``, which now owns every
+rollout decision.
+
+The public surface (``start_scheduler``, ``stop_scheduler``,
+``get_scheduler_status``, ``advance_step``, ``reset``) is preserved for
+backward compatibility but every call emits a :class:`DeprecationWarning`
+and either returns a no-op value or delegates to ``integration.runtime``.
+"""
 import logging
-import os as _os
-import threading
-import time
-from modules.monitor import main as monitor
+import warnings
+
 from modules.rollout import main as rollout
 
-_ROLLOUT_MANAGED_BY_RUNTIME: bool = (
-    _os.environ.get("ROLLOUT_MANAGED_BY_RUNTIME", "true").lower() == "true"
-)
-
 _logger = logging.getLogger(__name__)
-# Single source of truth: re-export rollout.SCALE_STEPS so this legacy module
-# cannot drift from the canonical scaling steps defined in modules/rollout/main.py.
+
+# Legacy constants — kept as re-exports so external callers that referenced
+# ``rollout_scheduler.ROLLOUT_STEPS`` continue to observe the canonical
+# scale steps defined in ``modules/rollout/main.py``.
 ROLLOUT_STEPS = rollout.SCALE_STEPS
 STABLE_DURATION_SECONDS = 43200
 MIN_SUCCESS_RATE = 0.70
 MAX_ERROR_RATE = 0.05
 MAX_RESTARTS_PER_HOUR = 3
-_lock = threading.Lock()
-_stop_event = threading.Event()
-_scheduler_thread = None
-_stable_since = None
-_MIN_INTERVAL = 1.0
+
+_DEPRECATION_MSG = (
+    "integration.rollout_scheduler is deprecated; "
+    "use integration.runtime for rollout control. "
+    "This shim will be removed in the next major version."
+)
 
 
-def _is_stable(m):
-    return (m["success_rate"] >= MIN_SUCCESS_RATE
-            and m["error_rate"] <= MAX_ERROR_RATE
-            and m["restarts_last_hour"] <= MAX_RESTARTS_PER_HOUR)
+def _warn_deprecated(api: str) -> None:
+    warnings.warn(
+        "%s: %s" % (api, _DEPRECATION_MSG),
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    _logger.warning("rollout_scheduler.%s called on deprecated shim", api)
 
 
-def _needs_rollback(m):
-    """Check metrics against rollback thresholds, return list of reasons."""
-    reasons = []
-    if m["error_rate"] > MAX_ERROR_RATE:
-        reasons.append(f"error rate {m['error_rate']:.1%} exceeds {MAX_ERROR_RATE:.0%}")
-    if m["restarts_last_hour"] > MAX_RESTARTS_PER_HOUR:
-        reasons.append(f"restarts {m['restarts_last_hour']} exceeds {MAX_RESTARTS_PER_HOUR}/hr")
-    if m["success_rate"] < MIN_SUCCESS_RATE:
-        reasons.append(f"success rate {m['success_rate']:.1%} below {MIN_SUCCESS_RATE:.0%}")
-    return reasons
+def start_scheduler(interval: float = 300.0) -> bool:  # pylint: disable=unused-argument
+    """DEPRECATED: no-op. Rollout is owned by ``integration.runtime``."""
+    _warn_deprecated("start_scheduler")
+    return False
 
 
-def _try_advance():
-    global _stable_since
-    workers, action, reasons = rollout.try_scale_up()
-    if action == "scaled_up":
-        _logger.info("advancing to step %d: %d workers",
-                     rollout.get_current_step_index(), workers)
-        with _lock:
-            _stable_since = None
-    elif action == "rollback":
-        _logger.warning("rollback: %s", "; ".join(reasons))
-        with _lock:
-            _stable_since = None
-    elif action == "at_max":
-        _logger.info("rollout complete: at max workers")
-
-
-def _scheduler_loop(interval):
-    global _stable_since
-    while not _stop_event.is_set():
-        try:
-            metrics = monitor.get_metrics()
-            reasons = _needs_rollback(metrics)
-            now = time.monotonic()
-            if reasons:
-                rollout.force_rollback(reason="; ".join(reasons))
-                with _lock:
-                    _stable_since = None
-            elif _is_stable(metrics):
-                with _lock:
-                    if _stable_since is None:
-                        _stable_since = now
-                    snap = _stable_since
-                if now - snap >= STABLE_DURATION_SECONDS and rollout.can_scale_up():
-                    _try_advance()
-            else:
-                with _lock:
-                    _stable_since = None
-        except Exception:
-            _logger.exception("scheduler loop error")
-        _stop_event.wait(timeout=interval)
-
-
-def start_scheduler(interval: float = 300.0) -> bool:
-    """Start the rollout scheduler loop in a background thread.
-
-    Args:
-        interval: Polling interval in seconds (default 300s = 5 min).
-
-    Returns True if started, False if already running.
-    """
-    with _lock:
-        managed = _ROLLOUT_MANAGED_BY_RUNTIME
-    if managed:
-        _logger.warning(
-            "rollout_scheduler: ROLLOUT_MANAGED_BY_RUNTIME=true — "
-            "this legacy scheduler is disabled. All rollout decisions are "
-            "handled exclusively by integration/runtime._runtime_loop(). "
-            "Set ROLLOUT_MANAGED_BY_RUNTIME=false to re-enable (not recommended)."
-        )
-        return False
-    _logger.info("Scheduler is passive; runtime module owns scaling.")
-    global _scheduler_thread
-    clamped = max(float(interval), _MIN_INTERVAL)
-    with _lock:
-        if _scheduler_thread is not None and _scheduler_thread.is_alive():
-            return False
-        _stop_event.clear()
-        _scheduler_thread = threading.Thread(
-            target=_scheduler_loop, args=(clamped,),
-            daemon=True, name="rollout-scheduler",
-        )
-        _scheduler_thread.start()
-    return True
-
-
-def stop_scheduler(timeout: float = 10.0) -> bool:
-    """Stop the rollout scheduler loop.
-
-    Returns True if stopped cleanly, False if timed out.
-    """
-    with _lock:
-        thread = _scheduler_thread
-    if thread is None or not thread.is_alive():
-        return False
-    _stop_event.set()
-    thread.join(timeout=timeout)
-    return not thread.is_alive()
+def stop_scheduler(timeout: float = 10.0) -> bool:  # pylint: disable=unused-argument
+    """DEPRECATED: no-op. There is no legacy scheduler thread to stop."""
+    _warn_deprecated("stop_scheduler")
+    return False
 
 
 def get_scheduler_status() -> dict:
-    """Return scheduler status snapshot."""
-    with _lock:
-        running = _scheduler_thread is not None and _scheduler_thread.is_alive()
-        stable_since = _stable_since
+    """DEPRECATED: return a status dict shaped like the legacy payload."""
+    _warn_deprecated("get_scheduler_status")
     step = rollout.get_current_step_index()
     workers = rollout.get_current_workers()
     max_idx = len(ROLLOUT_STEPS) - 1
-    complete = step == max_idx
     next_workers = ROLLOUT_STEPS[step + 1] if step < max_idx else None
-    now = time.monotonic()
-    if stable_since is not None:
-        elapsed = now - stable_since
-        seconds_until = max(0.0, STABLE_DURATION_SECONDS - elapsed)
-        eligible = elapsed >= STABLE_DURATION_SECONDS
-    else:
-        seconds_until, eligible = None, False
     return {
-        "running": running, "current_step": step, "current_workers": workers,
-        "next_workers": next_workers, "stable_since": stable_since,
-        "seconds_until_advance": seconds_until, "advance_eligible": eligible,
-        "rollout_complete": complete,
+        "running": False,
+        "current_step": step,
+        "current_workers": workers,
+        "next_workers": next_workers,
+        "stable_since": None,
+        "seconds_until_advance": None,
+        "advance_eligible": False,
+        "rollout_complete": step == max_idx,
     }
 
 
-def advance_step() -> tuple[bool, str]:
-    """Manually trigger advance to next rollout step.
-
-    Returns (success, reason).
-    """
-    global _stable_since
-    if not rollout.can_scale_up():
-        return False, "at max step"
-    workers, action, reasons = rollout.try_scale_up()
-    if action == "scaled_up":
-        with _lock:
-            _stable_since = None
-        return True, f"advanced to {workers} workers"
-    if action == "rollback":
-        with _lock:
-            _stable_since = None
-        return False, "rollback: " + "; ".join(reasons)
-    return False, action
+def advance_step() -> tuple:
+    """DEPRECATED: no-op. Returns ``(False, 'deprecated')``."""
+    _warn_deprecated("advance_step")
+    return False, "deprecated"
 
 
 def reset() -> None:
-    """Reset scheduler state. Intended for testing."""
-    global _scheduler_thread, _stable_since, _ROLLOUT_MANAGED_BY_RUNTIME  # pylint: disable=global-statement,invalid-name
-    _stop_event.set()
-    with _lock:
-        thread = _scheduler_thread
-    if thread is not None:
-        thread.join(timeout=5.0)
-    with _lock:
-        _scheduler_thread = None
-        _stable_since = None
-    _stop_event.clear()
-    _ROLLOUT_MANAGED_BY_RUNTIME = False
+    """DEPRECATED: no-op, retained for backward-compatible tests."""
+    _warn_deprecated("reset")

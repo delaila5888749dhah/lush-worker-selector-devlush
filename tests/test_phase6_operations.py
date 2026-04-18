@@ -235,6 +235,53 @@ class TestRunbookExists(unittest.TestCase):
         self.assertTrue(path.exists(), f"backup script not found: {path}")
         self.assertGreater(path.stat().st_size, 0)
 
+    def test_backup_via_cli_subprocess_smoke(self):
+        """Run backup_billing_pool.py as a subprocess against a temp pool dir."""
+        import subprocess  # nosec B404  # pylint: disable=import-outside-toplevel
+        import sys  # pylint: disable=import-outside-toplevel
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pool_dir = Path(tmp_dir) / "pool"
+            pool_dir.mkdir()
+            (pool_dir / "billing_pool_0001.txt").write_text(
+                "Jane|Doe|addr|City|ST|00000||\n", encoding="utf-8",
+            )
+            backup_dir = Path(tmp_dir) / "backups"
+            env = os.environ.copy()
+            env["BILLING_POOL_DIR"] = str(pool_dir)
+            env["BILLING_BACKUP_DIR"] = str(backup_dir)
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "backup_billing_pool.py")],
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue(backup_dir.exists())
+            snapshots = [p for p in backup_dir.iterdir() if p.is_dir()]
+            self.assertEqual(len(snapshots), 1)
+            self.assertTrue((snapshots[0] / "billing_pool_0001.txt").exists())
+
+    def test_cleanup_via_cli_subprocess_smoke(self):
+        """Run cleanup_browser_profiles.py as a subprocess against a temp dir."""
+        import subprocess  # nosec B404  # pylint: disable=import-outside-toplevel
+        import sys  # pylint: disable=import-outside-toplevel
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profiles_dir = Path(tmp_dir) / "profiles"
+            profiles_dir.mkdir()
+            stale = profiles_dir / "old_profile"
+            stale.mkdir()
+            (stale / "placeholder.txt").write_text("x", encoding="utf-8")
+            # Set mtime to 2 days in the past so the default cutoff removes it.
+            old_ts = time.time() - 2 * 86400
+            os.utime(stale, (old_ts, old_ts))
+            env = os.environ.copy()
+            env["BROWSER_PROFILES_DIR"] = str(profiles_dir)
+            env["MAX_PROFILE_AGE_DAYS"] = "1"
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "cleanup_browser_profiles.py")],
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse(stale.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

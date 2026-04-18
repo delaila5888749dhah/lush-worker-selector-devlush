@@ -434,6 +434,57 @@ class ProxyPoolTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_load_from_file_nonexistent_path_raises_file_not_found(self):
+        """load_from_file on a missing path raises FileNotFoundError."""
+        pool = ProxyPool()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing = os.path.join(tmp_dir, "nope.txt")
+            with self.assertRaises(FileNotFoundError):
+                pool.load_from_file(missing)
+
+    def test_load_from_file_empty_file_returns_zero(self):
+        """An empty file returns 0 and leaves the pool empty."""
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+            path = handle.name
+        try:
+            pool = ProxyPool()
+            self.assertEqual(pool.load_from_file(path), 0)
+            self.assertEqual(pool.available_count(), 0)
+        finally:
+            os.unlink(path)
+
+    def test_load_from_file_called_twice_appends(self):
+        """Calling load_from_file twice appends proxies from both files."""
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+            handle.write("http://p1:8080\n")
+            path1 = handle.name
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+            handle.write("http://p2:8080\nhttp://p3:8080\n")
+            path2 = handle.name
+        try:
+            pool = ProxyPool()
+            first = pool.load_from_file(path1)
+            second = pool.load_from_file(path2)
+            self.assertEqual(first, 1)
+            self.assertEqual(second, 2)
+            self.assertEqual(pool.available_count(), 3)
+        finally:
+            os.unlink(path1)
+            os.unlink(path2)
+
+    def test_init_loads_from_proxy_list_file_env_var(self):
+        """Setting PROXY_LIST_FILE causes ProxyPool() to load that file."""
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+            handle.write("http://env-proxy-1:8080\nhttp://env-proxy-2:8080\n")
+            path = handle.name
+        try:
+            with patch.dict(os.environ, {"PROXY_LIST_FILE": path}, clear=False):
+                pool = ProxyPool()
+            self.assertEqual(pool.available_count(), 2)
+            self.assertEqual(pool.acquire("w1"), "http://env-proxy-1:8080")
+        finally:
+            os.unlink(path)
+
 
 if __name__ == "__main__":
     unittest.main()

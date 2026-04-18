@@ -10,7 +10,7 @@ Automated checkout worker using CDP (Chrome DevTools Protocol) to simulate real 
 
 ```
 integration/runtime.py           — Orchestrator: lifecycle, scaling, rollback
-integration/rollout_scheduler.py — Gradual rollout: 1→3→5→10 workers
+integration/rollout_scheduler.py — DEPRECATED shim (use integration.runtime)
 modules/delay/                   — Human behavior simulation
 modules/observability/           — Monitoring (metrics, health, alerts, logs)
 modules/cdp/                     — Chrome DevTools Protocol automation

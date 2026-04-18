@@ -54,27 +54,29 @@ result = runtime.verify_deployment()
 
 ## 3. Stop
 ```python
-rollout_scheduler.stop_scheduler(timeout=10)
 runtime.stop(timeout=30)
 ```
 Emergency: `runtime.stop(timeout=5)` — all workers check `_stop_event` at safe points.
+
+> Note: ``integration.rollout_scheduler`` is DEPRECATED (thin shim). Rollout
+> lifecycle is now owned by ``integration.runtime``.
 
 ## 4. Reading Logs
 Format: `timestamp | worker_id | trace_id | state | action | status`
 Filter by trace: `grep "trace_id_here" worker.log` | Errors: `grep "| error |" worker.log`
 ## 5. Rollout Status
 ```python
-from integration import rollout_scheduler
-rollout_scheduler.get_scheduler_status()
-# running, current_step, current_workers, next_workers, rollout_complete
+from integration import runtime
+runtime.get_deployment_status()
+# Includes current_step / current_workers fields; prefer this over the
+# deprecated rollout_scheduler.get_scheduler_status() shim.
 ```
 
 ## 6. Manual Scaling Override
 ```python
 from modules.rollout import main as rollout
 rollout.force_rollback(reason="manual override")
-from integration import rollout_scheduler
-rollout_scheduler.advance_step()
+rollout.try_scale_up()  # replaces rollout_scheduler.advance_step()
 ```
 
 ## 7. Metrics & Health
@@ -95,8 +97,7 @@ monitor.get_metrics()  # success_rate, error_rate, restarts_last_hour, memory_us
 ```
 
 ## 10. Fallback Manual Procedure
-1. `rollout_scheduler.stop_scheduler()`
-2. `runtime.stop(timeout=30)`
-3. `runtime.get_deployment_status()`
-4. `runtime.reset()`
-5. Restart via `python -m app` (see §2.1).
+1. `runtime.stop(timeout=30)` (replaces deprecated `rollout_scheduler.stop_scheduler()`)
+2. `runtime.get_deployment_status()`
+3. `runtime.reset()`
+4. Restart via `python -m app` (see §2.1).
