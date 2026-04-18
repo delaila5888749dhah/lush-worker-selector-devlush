@@ -107,7 +107,7 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 if task_source is not None:
                     task = task_source(worker_id)
                     if task is not None:
-                        from integration.orchestrator import run_cycle  # noqa: PLC0415  # pylint: disable=C0415
+                        from integration.orchestrator import run_cycle  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
                         run_cycle(task, zip_code=zip_code, worker_id=worker_id)
                 else:
                     _log.debug(
@@ -130,7 +130,7 @@ def _build_remote_driver(webdriver_url: str):
         RuntimeError: if selenium is not installed.
     """
     try:
-        # pylint: disable=C0415  # import-outside-toplevel; keep selenium optional
+        # pylint: disable=import-outside-toplevel  # keep selenium optional
         from selenium.webdriver import Remote  # type: ignore[import]
         from selenium.webdriver.common.desired_capabilities import (  # type: ignore[import]
             DesiredCapabilities,

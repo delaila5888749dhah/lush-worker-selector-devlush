@@ -162,7 +162,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
     if not os.path.exists(mmdb_path):
         return None
     try:
-        import geoip2.database  # type: ignore  # pylint: disable=C0415
+        import geoip2.database  # type: ignore  # pylint: disable=import-outside-toplevel
     except ImportError:
         return None
     try:
@@ -200,7 +200,7 @@ def maxmind_lookup_zip(ip_addr: str) -> str | None:
     if not os.path.exists(mmdb_path):
         return None
     try:
-        import geoip2.database  # type: ignore  # pylint: disable=C0415
+        import geoip2.database  # type: ignore  # pylint: disable=import-outside-toplevel
     except ImportError:
         return None
     try:
