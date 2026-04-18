@@ -9,7 +9,6 @@ import atexit
 import concurrent.futures
 import datetime
 import hashlib
-import ipaddress
 import json
 import logging
 import math
@@ -20,9 +19,10 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit, urlunsplit
 
 from modules.common.exceptions import SessionFlaggedError
+from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
+from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
 # Import fails gracefully so orchestrator works before that PR lands.
 try:
@@ -51,31 +51,14 @@ _WATCHDOG_TIMEOUT = 30
 _logger = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger(f"{__name__}.audit")
 
-# Redact card-like digit sequences (13–16 consecutive digits) from error messages
-# to prevent PII leakage when CDP exceptions contain card numbers.
-_SENSITIVE_PATTERN = re.compile(r'(?<!\w)(?:\d[ -]?){13,16}(?!\w)')
-
 
 def _sanitize_error(exc: Exception) -> str:
-    """Redact card-like digit sequences from exception messages before logging."""
-    return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
+    """Redact PII from an exception message before logging.
 
-
-def _sanitize_redis_url(redis_url: str) -> str:
-    """Redact credentials from Redis URLs before including them in logs/errors."""
-    parsed = urlsplit(redis_url)
-    if not parsed.password:
-        return redis_url
-    host = parsed.hostname or ""
-    try:
-        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
-            host = f"[{host}]"
-    except ValueError:
-        pass  # Not a valid IP address — regular hostname, no brackets needed.
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    username = f"{parsed.username}:" if parsed.username else ":"
-    safe_netloc = f"{username}[REDACTED]@{host}{port}"
-    return urlunsplit((parsed.scheme, safe_netloc, parsed.path, parsed.query, parsed.fragment))
+    Delegates to the canonical sanitiser in ``modules.common.sanitize``.
+    Accepts an Exception for backward-compatibility with existing call-sites.
+    """
+    return _canonical_sanitize_error(str(exc))
 
 
 def _get_trace_id() -> str:
