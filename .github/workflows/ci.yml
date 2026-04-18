@@ -75,9 +75,6 @@ jobs:
     - name: Unit tests
       run: python -m unittest discover tests
 
-    - name: Integration tests (L3 harness + L4 smoke)
-      run: python -m unittest discover tests/integration -v
-
     - name: Meta audit
       run: python ci/meta_audit.py
       env:
