@@ -611,6 +611,20 @@ def probe_cdp_listener_support(driver_obj: object) -> None:
         )
 
 
+def is_production_task_fn_enabled() -> bool:
+    """Return True when the ``ENABLE_PRODUCTION_TASK_FN`` feature flag is active.
+
+    The flag must be set to one of ``1``, ``true``, or ``yes`` (case-insensitive)
+    to enable the production browser lifecycle wired in PR-04.  Defaults to
+    ``False`` so that new deployments opt-in explicitly.
+    """
+    return os.environ.get("ENABLE_PRODUCTION_TASK_FN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def start(task_fn, interval=None):
     """Start the runtime loop. Returns True if started, False if already running."""
     global _state, _loop_thread, _trace_id
