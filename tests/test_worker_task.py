@@ -462,8 +462,9 @@ class TestIsProductionTaskFnEnabled(unittest.TestCase):
         self._check("", False)
 
     def test_false_when_env_not_set(self):
+        import os
         from integration import runtime
-        env = {k: v for k, v in __import__("os").environ.items()
+        env = {k: v for k, v in os.environ.items()
                if k != "ENABLE_PRODUCTION_TASK_FN"}
         with patch.dict("os.environ", env, clear=True):
             self.assertFalse(runtime.is_production_task_fn_enabled())

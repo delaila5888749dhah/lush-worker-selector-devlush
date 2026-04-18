@@ -124,6 +124,6 @@ def _get_browser_pid(driver) -> Optional[int]:
             proc = getattr(service, "process", None)
             if proc is not None:
                 return int(proc.pid)
-    except Exception:  # pylint: disable=broad-except
+    except (AttributeError, TypeError, ValueError):  # pylint: disable=broad-except
         _log.debug("_get_browser_pid: could not read PID", exc_info=True)
     return None
