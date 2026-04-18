@@ -29,11 +29,23 @@ class TemporalModel:
         self._rnd = random.Random(persona._seed + 1)
         self._rnd_lock = threading.Lock()
 
-    @staticmethod
-    def get_time_state(utc_offset_hours: int) -> str:
-        """Return ``"DAY"`` or ``"NIGHT"`` based on UTC offset."""
+    def get_time_state(self, utc_offset_hours: int = 0) -> str:
+        """Return ``"DAY"`` or ``"NIGHT"`` based on the persona's active
+        hours (Blueprint §10), with midnight wrap-around support.
+
+        DAY is the persona's ``active_hours`` window, inclusive on both
+        ends. If ``start > end`` the window wraps past midnight
+        (e.g. 22→04 → DAY covers 22..23 and 0..4). When the persona
+        exposes no ``active_hours`` attribute, falls back to the global
+        ``DAY_START..DAY_END`` constants.
+        """
         local_hour = (time.gmtime().tm_hour + utc_offset_hours) % 24
-        return "DAY" if DAY_START <= local_hour <= DAY_END else "NIGHT"
+        start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
+        if start <= end:
+            in_day = start <= local_hour <= end
+        else:  # wrap-around through midnight
+            in_day = local_hour >= start or local_hour <= end
+        return "DAY" if in_day else "NIGHT"
 
     def apply_temporal_modifier(
         self, base_delay: float, action_type: str, utc_offset_hours: int = 0

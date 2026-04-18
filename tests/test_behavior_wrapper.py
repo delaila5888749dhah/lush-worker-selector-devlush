@@ -226,7 +226,8 @@ class TestInjectStepDelay(unittest.TestCase):
 
     def test_accumulator_headroom_caps_requested_delay(self):
         engine, temporal, _ = self._make_engine_and_temporal()
-        effective_ceiling = MAX_STEP_DELAY - WATCHDOG_HEADROOM
+        # Blueprint §8.6: per-step ceiling is MAX_STEP_DELAY (7.0 s).
+        effective_ceiling = MAX_STEP_DELAY
         remaining_headroom = 0.2
         engine.accumulate_delay(effective_ceiling - remaining_headroom)
         with patch("modules.delay.wrapper.time.sleep") as mock_sleep:
@@ -262,6 +263,46 @@ class TestWrapInjectsBothDelayTypes(unittest.TestCase):
                 wrapped("w-1")
         # Only the pre-form typing sleep should have fired.
         self.assertEqual(mock_sleep.call_count, 1, "Only typing sleep expected on failure")
+
+
+class TestWrapThreadsFatigueCycleCount(unittest.TestCase):
+    """wrap() must thread cycle_count into inject_step_delay so that
+    TemporalModel.apply_fatigue (Blueprint §10) runs on the thinking path."""
+
+    def test_cycle_count_increments_and_reaches_fatigue(self):
+        persona = PersonaProfile(42)
+        wrapped = wrap(_dummy_task, persona)
+        observed = []
+
+        def _recorder(engine, temporal, action_type, stop_event=None, cycle_count=0):
+            observed.append((action_type, cycle_count))
+            return 0.0
+
+        with patch("modules.delay.wrapper.inject_step_delay", side_effect=_recorder):
+            for _ in range(persona.fatigue_threshold + 2):
+                wrapped("w-1")
+        cycle_counts = [c for a, c in observed if a == "thinking"]
+        # Cycle counts must be strictly increasing (1, 2, 3, ...) and reach > threshold.
+        self.assertEqual(cycle_counts, list(range(1, persona.fatigue_threshold + 3)))
+        self.assertGreater(max(cycle_counts), persona.fatigue_threshold)
+
+    def test_fatigue_increases_thinking_delay(self):
+        """With cycle_count > threshold, thinking delay should increase vs baseline."""
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        temporal = TemporalModel(persona)
+        sm.transition("FILLING_FORM")
+        with patch.object(TemporalModel, "get_time_state", return_value="DAY"), \
+             patch.object(TemporalModel, "apply_micro_variation", side_effect=lambda v: v), \
+             patch("modules.delay.wrapper.time.sleep"):
+            d0 = inject_step_delay(engine, temporal, "thinking", cycle_count=0)
+            engine.reset_step_accumulator()
+            d_fat = inject_step_delay(
+                engine, temporal, "thinking",
+                cycle_count=persona.fatigue_threshold + 20,
+            )
+        self.assertGreater(d_fat, d0 - 1e-9)
 
 
 class TestMultiStepFormSimulation(unittest.TestCase):

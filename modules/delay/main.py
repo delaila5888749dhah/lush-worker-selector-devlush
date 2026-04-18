@@ -13,7 +13,8 @@ from modules.delay.persona import NIGHT_PENALTY_MIN, NIGHT_PENALTY_MAX  # noqa: 
 from modules.delay.persona import FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX  # noqa: F401
 from modules.delay.state import BehaviorStateMachine, BEHAVIOR_STATES  # noqa: F401
 from modules.delay.engine import DelayEngine  # noqa: F401
-from modules.delay.engine import MAX_HESITATION_DELAY, MAX_STEP_DELAY, WATCHDOG_HEADROOM  # noqa: F401
+from modules.delay.engine import MAX_HESITATION_DELAY, MAX_STEP_DELAY  # noqa: F401
+from modules.delay.config import WATCHDOG_HEADROOM  # noqa: F401
 from modules.delay.temporal import TemporalModel  # noqa: F401
 from modules.delay.temporal import DAY_START, DAY_END  # noqa: F401
 from modules.delay.temporal import NIGHT_SPEED_PENALTY_RANGE, NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE  # noqa: F401

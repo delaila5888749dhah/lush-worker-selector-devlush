@@ -159,40 +159,54 @@ class TestNightTypoIncrease(_TemporalSetup):
 # ── New test classes (GAP-TM1 → GAP-TM7) ─────────────────────────────────────
 
 class TestTimeStateBoundary(unittest.TestCase):
-    """Verify exact DAY/NIGHT boundary hours (DAY_START=6, DAY_END=21)."""
+    """Verify persona-driven DAY/NIGHT window (Blueprint §10, active_hours)."""
 
     def setUp(self):
+        # Persona seed 42 → active_hours == (10, 20).
         self.persona = PersonaProfile(42)
         self.tm = TemporalModel(self.persona)
+        self._start, self._end = self.persona.active_hours
 
     def _state_at_hour(self, hour: int) -> str:
         gmt = time.struct_time((2026, 1, 1, hour, 0, 0, 3, 1, 0))
         with patch("modules.delay.temporal.time.gmtime", return_value=gmt):
             return self.tm.get_time_state(0)
 
-    def test_hour_5_is_night(self):
-        """Hour 5 (05:xx) must be NIGHT."""
-        self.assertEqual(self._state_at_hour(5), "NIGHT")
+    def test_hour_before_start_is_night(self):
+        """One hour before persona active_hours[0] must be NIGHT."""
+        self.assertEqual(self._state_at_hour((self._start - 1) % 24), "NIGHT")
 
-    def test_hour_6_is_day(self):
-        """Hour 6 (06:xx) is DAY_START → must be DAY."""
-        self.assertEqual(self._state_at_hour(6), "DAY")
+    def test_start_hour_is_day(self):
+        """persona active_hours[0] must be DAY (inclusive)."""
+        self.assertEqual(self._state_at_hour(self._start), "DAY")
 
-    def test_hour_21_is_day(self):
-        """Hour 21 (21:xx) is DAY_END → must be DAY."""
-        self.assertEqual(self._state_at_hour(21), "DAY")
+    def test_end_hour_is_day(self):
+        """persona active_hours[1] must be DAY (inclusive)."""
+        self.assertEqual(self._state_at_hour(self._end), "DAY")
 
-    def test_hour_22_is_night(self):
-        """Hour 22 (22:xx) must be NIGHT."""
-        self.assertEqual(self._state_at_hour(22), "NIGHT")
+    def test_hour_after_end_is_night(self):
+        """One hour after persona active_hours[1] must be NIGHT."""
+        self.assertEqual(self._state_at_hour((self._end + 1) % 24), "NIGHT")
 
     def test_midnight_is_night(self):
-        """Hour 0 (midnight) must be NIGHT."""
+        """Hour 0 (midnight) must be NIGHT for persona seed 42."""
         self.assertEqual(self._state_at_hour(0), "NIGHT")
 
     def test_noon_is_day(self):
-        """Hour 12 (noon) must be DAY."""
+        """Hour 12 (noon) must be DAY for persona seed 42."""
         self.assertEqual(self._state_at_hour(12), "DAY")
+
+    def test_wrap_around_schedule(self):
+        """Wrap-around schedule (start > end) covers the late/early window."""
+        # Simulate a persona with wrap-around schedule 22..04.
+        self.persona.active_hours = (22, 4)
+        self.assertEqual(self._state_at_hour(22), "DAY")
+        self.assertEqual(self._state_at_hour(23), "DAY")
+        self.assertEqual(self._state_at_hour(0), "DAY")
+        self.assertEqual(self._state_at_hour(4), "DAY")
+        self.assertEqual(self._state_at_hour(5), "NIGHT")
+        self.assertEqual(self._state_at_hour(12), "NIGHT")
+        self.assertEqual(self._state_at_hour(21), "NIGHT")
 
 
 class TestNightPenaltyRange(unittest.TestCase):

@@ -132,7 +132,10 @@ class TestSafePointHonored(_RuntimeReset):
 
         wid = runtime.start_worker(task)
         at_sp.wait(timeout=5)
-        stopped = runtime.stop_worker(wid, timeout=5)
+        # With behavior delay enabled, the worker may still legitimately spend
+        # up to the remainder of the current task (0.5s here) plus the
+        # post-cycle hesitation delay (max 5.0s) before exiting.
+        stopped = runtime.stop_worker(wid, timeout=10)
         self.assertTrue(stopped)
 
 

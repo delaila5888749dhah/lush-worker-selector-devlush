@@ -14,6 +14,7 @@ from modules.delay.persona import (
     FATIGUE_THRESHOLD_MIN,
     FATIGUE_THRESHOLD_MAX,
 )
+from modules.delay.config import MIN_THINKING_DELAY, MAX_HESITATION_DELAY
 
 
 class TestDeterminism(unittest.TestCase):
@@ -77,6 +78,16 @@ class TestBoundaryValues(unittest.TestCase):
             d = p.get_hesitation_delay()
             self.assertGreaterEqual(d, low - 1e-9)
             self.assertLessEqual(d, high + 1e-9)
+
+    def test_hesitation_pattern_inside_blueprint_band(self):
+        """Blueprint §5 / §8.6: hesitation samples must land inside [3.0, 5.0]
+        *before* clamping, so the effective distribution is spread across the
+        full band instead of pinning at 3.0 s."""
+        for seed in range(30):
+            p = PersonaProfile(seed)
+            self.assertGreaterEqual(p.hesitation_pattern["min"], MIN_THINKING_DELAY - 1e-9)
+            self.assertLessEqual(p.hesitation_pattern["max"], MAX_HESITATION_DELAY + 1e-9)
+            self.assertLess(p.hesitation_pattern["min"], p.hesitation_pattern["max"])
 
     def test_typo_probability_matches_rate(self):
         p = PersonaProfile(7)

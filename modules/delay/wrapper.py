@@ -26,10 +26,11 @@ _INJECTABLE_ACTIONS = frozenset(("typing", "thinking"))
 
 
 def inject_step_delay(
-    engine: DelayEngine,
-    temporal: TemporalModel,
-    action_type: str,
-    stop_event=None,
+        engine: DelayEngine,
+        temporal: TemporalModel,
+        action_type: str,
+        stop_event=None,
+        cycle_count: int = 0,
 ) -> float:
     """Inject behavioral delay for a single action step.
 
@@ -48,6 +49,11 @@ def inject_step_delay(
     stop_event : threading.Event | None
         When provided, ``stop_event.wait(timeout=delay)`` is used instead
         of ``time.sleep(delay)``.
+    cycle_count : int
+        Number of completed form-fill cycles for this worker. When > 0
+        and above ``persona.fatigue_threshold``, thinking delay is
+        increased via :meth:`TemporalModel.apply_fatigue` to simulate
+        cumulative fatigue (Blueprint §10). 0 disables fatigue.
 
     Returns
     -------
@@ -60,7 +66,7 @@ def inject_step_delay(
 
     - Only injects when ``engine.is_delay_permitted() == True``
     - Delay is clamped by ``action_type`` hard limits
-    - Temporal modifier and micro-variation are applied
+    - Temporal modifier, fatigue (thinking only), and micro-variation are applied
     - Thread-safe (reuses existing locks in engine and temporal)
     """
     # Click: real sleep, bypass accumulator
@@ -85,6 +91,8 @@ def inject_step_delay(
         return 0.0
 
     delay = temporal.apply_temporal_modifier(base_delay, action_type)
+    if action_type == "thinking" and cycle_count > 0:
+        delay = temporal.apply_fatigue(delay, cycle_count)
     delay = temporal.apply_micro_variation(delay)
     if action_type == "typing":
         delay = max(MIN_TYPING_DELAY, min(delay, MAX_TYPING_DELAY))
@@ -192,16 +200,22 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
     sm = BehaviorStateMachine()
     engine = DelayEngine(persona, sm)
     temporal = TemporalModel(persona)
+    cycle_state = {"count": 0}
+    cycle_lock = threading.Lock()
     _log.debug("wrap: persona_type=%s seed=%d", persona.persona_type, persona._seed)
 
     @functools.wraps(task_fn)
     def _wrapped(*args, **kwargs):
+        with cycle_lock:
+            cycle_state["count"] += 1
+            cycle_count = cycle_state["count"]
         # Injection point 1: typing delay before form interaction.
         # Both the delay injection and task_fn are inside the try so that
         # the finally cleanup always runs, even if inject_step_delay raises.
         sm.transition("FILLING_FORM")
         try:
-            inject_step_delay(engine, temporal, "typing", stop_event)
+            inject_step_delay(engine, temporal, "typing", stop_event,
+                              cycle_count=cycle_count)
             result = task_fn(*args, **kwargs)
         finally:
             _log.debug(
@@ -219,7 +233,8 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
         # even if the thinking delay injection raises or is interrupted.
         sm.transition("FILLING_FORM")
         try:
-            inject_step_delay(engine, temporal, "thinking", stop_event)
+            inject_step_delay(engine, temporal, "thinking", stop_event,
+                              cycle_count=cycle_count)
         finally:
             engine.reset_step_accumulator()
             sm.reset()
