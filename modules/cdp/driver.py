@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
     _type_value = None  # type: ignore[assignment,misc]
 
 from modules.common.exceptions import PageStateError, SelectorTimeoutError
-from modules.common.sanitize import sanitize_error as _sanitize_error
+from modules.common.sanitize import sanitize_error as _sanitize_error  # noqa: F401 — re-exported so callers can do `from modules.cdp.driver import _sanitize_error`
 
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo  # type: ignore[import]

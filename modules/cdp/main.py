@@ -11,7 +11,7 @@ import signal
 import threading
 from typing import Dict, Optional
 
-from modules.common.sanitize import sanitize_error as _sanitize_error
+from modules.common.sanitize import sanitize_error as _sanitize_error  # noqa: F401 — re-exported so callers can do `from modules.cdp.main import _sanitize_error`
 
 _log = logging.getLogger(__name__)
 
