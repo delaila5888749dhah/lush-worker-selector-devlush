@@ -6,6 +6,7 @@ Legacy global API is deprecated. Use `initialize_for_worker()`, `transition_for_
 import functools
 import inspect
 import logging
+import os
 import threading
 import warnings
 
@@ -102,9 +103,24 @@ def cleanup_worker(worker_id: str) -> None:
 # ── Legacy global API (backward compat) ────────────────────────
 
 
+def _is_legacy_allowed() -> bool:
+    """Return True when FSM_ALLOW_LEGACY is explicitly enabled.
+
+    Defaults to disabled so that production builds never expose the legacy API.
+    Set ``FSM_ALLOW_LEGACY=1`` (or ``true``/``yes``) in non-production environments
+    to re-enable the legacy global API with deprecation warnings.
+    """
+    return os.environ.get("FSM_ALLOW_LEGACY", "").strip().lower() in ("1", "true", "yes")
+
+
 def _legacy_warn(func):
     @functools.wraps(func)
     def _wrapper(*args, **kwargs):
+        if not _is_legacy_allowed():
+            raise RuntimeError(
+                f"FSM legacy global API '{func.__name__}' is disabled. "
+                "Set FSM_ALLOW_LEGACY=1 to enable (not for production use)."
+            )
         stack = inspect.stack()
         # stack[0]=_wrapper, stack[1]=decorated func call, stack[2]=actual caller
         frame = stack[2] if len(stack) > 2 else stack[-1]

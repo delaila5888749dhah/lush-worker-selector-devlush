@@ -64,6 +64,21 @@ def _get_min_billing_profiles() -> int:
 _MIN_BILLING_PROFILES = _get_min_billing_profiles()
 
 
+def _is_production_mode() -> bool:
+    """Return True when the production task-fn feature flag is active.
+
+    Mirrors the check in ``integration.runtime.is_production_task_fn_enabled``.
+    When production mode is on, ``/tmp`` paths are rejected as ``BILLING_POOL_DIR``
+    because ``/tmp`` is a volatile, world-writable directory unsuitable for
+    production billing data.
+    """
+    return os.environ.get("ENABLE_PRODUCTION_TASK_FN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def _pool_dir() -> Path:
     raw = os.environ.get("BILLING_POOL_DIR")
     if raw is not None and not raw.strip():
@@ -78,7 +93,17 @@ def _pool_dir() -> Path:
             return Path(__file__).resolve().parents[2] / "billing_pool"
         resolved = Path(override).resolve()
         project_root = Path(__file__).resolve().parents[2]
-        allowed_prefixes = (project_root, Path("/data"), Path("/tmp"))
+        if _is_production_mode():
+            allowed_prefixes = (project_root, Path("/data"))
+            tmp_path = Path("/tmp").resolve()
+            if resolved == tmp_path or str(resolved).startswith(str(tmp_path) + os.sep):
+                _logger.warning(
+                    "BILLING_POOL_DIR resolves to a /tmp path which is not permitted in"
+                    " production mode; using default billing_pool.",
+                )
+                return Path(__file__).resolve().parents[2] / "billing_pool"
+        else:
+            allowed_prefixes = (project_root, Path("/data"), Path("/tmp"))
         if not any(
             resolved == prefix or str(resolved).startswith(str(prefix) + os.sep)
             for prefix in allowed_prefixes

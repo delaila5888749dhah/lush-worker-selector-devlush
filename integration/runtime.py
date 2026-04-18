@@ -887,7 +887,6 @@ def reset():
     rollout.reset()
     monitor.reset()
     _autoscaler_module.reset()
-    fsm.reset_states()  # intentional: legacy global reset for test isolation
     fsm.reset_registry()
     metrics_exporter.reset()
     log_sink.reset()

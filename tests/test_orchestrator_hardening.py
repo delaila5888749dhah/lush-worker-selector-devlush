@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, call, patch
 
 from modules.common.exceptions import SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
-from modules.fsm.main import cleanup_worker, reset_states
+from modules.fsm.main import cleanup_worker, reset_registry
 from modules.watchdog.main import reset as _reset_watchdog
 
 from integration.orchestrator import (
@@ -115,7 +115,7 @@ class DualNotifyGuardTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("guard-worker")
 
     def tearDown(self):
@@ -545,7 +545,7 @@ class SubmittedStateCrashRecoveryTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
         self._store_backup = None
         if _IDEMPOTENCY_STORE_PATH.exists():
@@ -729,7 +729,7 @@ class EndToEndCallbackContractTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("e2e-worker")
 
     def tearDown(self):
@@ -832,7 +832,7 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("post-sub-worker")
 
     def tearDown(self):

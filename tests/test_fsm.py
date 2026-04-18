@@ -2,8 +2,10 @@
 
 import logging
 import logging.handlers
+import os
 import threading
 import unittest
+from unittest.mock import patch
 
 from modules.fsm.main import (
     ALLOWED_STATES,
@@ -24,7 +26,12 @@ _WID = "worker-fsm-test"
 
 class FSMTests(unittest.TestCase):
     def setUp(self):
+        self._legacy_patch = patch.dict(os.environ, {"FSM_ALLOW_LEGACY": "1"})
+        self._legacy_patch.start()
         reset_states()
+
+    def tearDown(self):
+        self._legacy_patch.stop()
 
     def test_add_new_state_returns_state(self):
         result = add_new_state("ui_lock")
@@ -245,8 +252,13 @@ class FSMLegacyWarnTests(unittest.TestCase):
     """Verify _legacy_warn decorator emits warnings for global API calls."""
 
     def setUp(self):
+        self._legacy_patch = patch.dict(os.environ, {"FSM_ALLOW_LEGACY": "1"})
+        self._legacy_patch.start()
         with self.assertLogs("modules.fsm.main", level="WARNING"):
             reset_states()
+
+    def tearDown(self):
+        self._legacy_patch.stop()
 
     def test_transition_to_emits_warning(self):
         """Legacy transition_to() must emit a deprecation WARNING."""

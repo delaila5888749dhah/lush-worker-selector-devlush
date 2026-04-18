@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, call, patch
 
 from modules.common.exceptions import SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
-from modules.fsm.main import cleanup_worker, reset_states
+from modules.fsm.main import cleanup_worker, reset_registry
 from modules.watchdog.main import reset as _reset_watchdog
 
 from integration.orchestrator import (
@@ -73,7 +73,7 @@ class FullSequenceCallOrderTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("seq-worker")
 
     def tearDown(self):
@@ -212,7 +212,7 @@ class ExceptionRoutingTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("exc-worker")
 
     def tearDown(self):
@@ -327,7 +327,7 @@ class IdempotencyCrashTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("crash-worker")
 
     def tearDown(self):
@@ -441,7 +441,7 @@ class L3IntegrationStubTests(unittest.TestCase):
     def setUp(self):
         _clear_idempotency()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("l3-worker")
 
     def tearDown(self):

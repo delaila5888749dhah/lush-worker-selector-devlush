@@ -16,7 +16,7 @@ from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import (
     cleanup_worker,
     get_current_state_for_worker,
-    reset_states,
+    reset_registry,
     transition_for_worker,
 )
 from modules.watchdog.main import reset as _reset_watchdog
@@ -59,7 +59,7 @@ def _make_task(order_queue=None):
 
 class InitializeCycleTests(unittest.TestCase):
     def setUp(self):
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
 
     def tearDown(self):
@@ -131,7 +131,7 @@ class HandleOutcomeTests(unittest.TestCase):
 class RunPaymentStepTests(unittest.TestCase):
     def setUp(self):
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
 
     def tearDown(self):
@@ -275,7 +275,7 @@ class RunPaymentStepTests(unittest.TestCase):
 class RunCycleTests(unittest.TestCase):
     def setUp(self):
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
 
     def tearDown(self):
@@ -462,7 +462,7 @@ class WatchdogCleanupTests(unittest.TestCase):
 
     def setUp(self):
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
 
     def tearDown(self):
@@ -486,7 +486,7 @@ class IdempotencyTests(unittest.TestCase):
             _in_flight_task_ids.clear()
             _submitted_task_ids.clear()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
 
     def tearDown(self):
@@ -559,7 +559,7 @@ class PersistentIdempotencyStoreTests(unittest.TestCase):
             _in_flight_task_ids.clear()
             _submitted_task_ids.clear()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
         # Back up original store path content if it exists
         self._store_backup = None
@@ -671,7 +671,7 @@ class CDPDriverCleanupTests(unittest.TestCase):
             _in_flight_task_ids.clear()
             _submitted_task_ids.clear()
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         cleanup_worker("default")
 
     def tearDown(self):
@@ -749,7 +749,7 @@ class FsmRegistryLeakTests(unittest.TestCase):
 
     def setUp(self):
         _reset_watchdog()
-        reset_states()
+        reset_registry()
         self._worker_ids = []
 
     def tearDown(self):
@@ -1262,7 +1262,7 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_audit.info.side_effect = lambda fmt, payload: captured.append(payload)
             _reset_watchdog()
-            reset_states()
+            reset_registry()
             cleanup_worker(worker_id)
             run_payment_step(_make_task(), zip_code=zip_code, worker_id=worker_id)
         return captured
@@ -1354,7 +1354,7 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 10.0
             mock_fsm.get_current_state_for_worker.return_value = None
             _reset_watchdog()
-            reset_states()
+            reset_registry()
             cleanup_worker("default")
             state, total = run_payment_step(_make_task())
         self.assertEqual(total, 10.0)
