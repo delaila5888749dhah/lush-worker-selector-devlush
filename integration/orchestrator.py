@@ -731,7 +731,10 @@ def _validated_notify_total(worker_id: str, value: float) -> bool:
 
 
 def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
-    """Fallback: read total from DOM and notify watchdog.
+    """DOM fallback: read checkout total from DOM and notify watchdog.
+
+    Called only when the primary CDP ``Network.getResponseBody`` path fails,
+    returns an empty body, or yields no recognised total key.
 
     First-notify-wins: if a total has already been notified for *worker_id* in
     the current cycle, subsequent calls are silently skipped under
@@ -772,9 +775,54 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
         if callable(add_listener):
             def _on_response(params):
                 try:
-                    response = params.get("response", {}) if isinstance(params, dict) else {}
+                    if not isinstance(params, dict):
+                        return
+                    response = params.get("response", {})
                     url = str(response.get("url", ""))
-                    if any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
+                    if not any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
+                        return
+
+                    request_id = params.get("requestId")
+                    body_parsed = False
+
+                    if request_id:
+                        try:
+                            body_resp = driver_obj.execute_cdp_cmd(
+                                "Network.getResponseBody",
+                                {"requestId": request_id},
+                            )
+                            body_str = (
+                                body_resp.get("body", "")
+                                if isinstance(body_resp, dict)
+                                else ""
+                            )
+                            if body_str:
+                                body_data = json.loads(body_str)
+                                total_raw = None
+                                for _key in ("total", "order_total", "orderTotal", "amount"):
+                                    _candidate = body_data.get(_key)
+                                    if _candidate is not None:
+                                        total_raw = _candidate
+                                        break
+                                if total_raw is not None:
+                                    _validated_notify_total(worker_id, float(total_raw))
+                                    body_parsed = True
+                        except Exception as body_exc:  # noqa: BLE001  # pylint: disable=broad-except
+                            _logger.warning(
+                                "[trace=%s] Network.getResponseBody parse failed for "
+                                "worker=%s; falling back to DOM: %s",
+                                _get_trace_id(),
+                                worker_id,
+                                body_exc,
+                            )
+
+                    if not body_parsed:
+                        _logger.warning(
+                            "[trace=%s] CDP body unavailable for worker=%s; "
+                            "using DOM fallback",
+                            _get_trace_id(),
+                            worker_id,
+                        )
                         _notify_total_from_dom(driver_obj, worker_id)
                 except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
