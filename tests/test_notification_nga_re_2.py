@@ -9,12 +9,12 @@ Covers the fixes called out in the task checklist:
                 not the raw screenshot.
   - KIỂM TRA 6: exceptions in any notification step are swallowed and logged.
 """
-# pylint: disable=missing-class-docstring,missing-function-docstring,protected-access
+# pylint: disable=protected-access
 import io
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PIL import Image, ImageDraw  # third-party; also required by screenshot_blur
+from PIL import Image, ImageDraw  # pylint: disable=import-error  # third-party
 
 from integration import orchestrator
 from modules.notification import screenshot_blur, telegram_notifier
@@ -38,12 +38,13 @@ class BlurAndMaskTests(unittest.TestCase):
     """KIỂM TRA 3: blur is applied to the real image, not just an overlay."""
 
     def test_blur_and_mask_returns_png(self):
+        """Output of blur_and_mask must be valid PNG bytes."""
         out = blur_and_mask(_png_bytes_with_text(), _TEST_PAN)
-        self.assertIsInstance(out, (bytes, bytearray))
         # PNG magic number.
         self.assertTrue(out.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_blur_alters_pixels_globally(self):
+        """Blur must change pixels across the whole image, not only the overlay region."""
         raw = _png_bytes_with_text()
         blurred = blur_and_mask(raw, _TEST_PAN)
         raw_img = Image.open(io.BytesIO(raw)).convert("RGB")
@@ -66,11 +67,11 @@ class BlurAndMaskTests(unittest.TestCase):
         )
 
     def test_empty_input_returns_none(self):
+        """Empty bytes input must return None without raising."""
         self.assertIsNone(blur_and_mask(b"", _TEST_PAN))
 
     def test_corrupt_png_falls_back_to_raw(self):
-        # When PIL raises on decode, helper should log a warning and return
-        # the raw bytes — never propagate (Blueprint §8.7).
+        """PIL decode failure must be caught; raw bytes returned (Blueprint §8.7)."""
         raw = b"not-a-real-png"
         out = blur_and_mask(raw, _TEST_PAN)
         self.assertEqual(out, raw)
@@ -80,11 +81,13 @@ class CaptureAndBlurTests(unittest.TestCase):
     """KIỂM TRA 6: screenshot failure must not raise."""
 
     def test_screenshot_failure_returns_none(self):
+        """Driver.get_screenshot_as_png raising must return None, never propagate."""
         driver = MagicMock()
         driver.get_screenshot_as_png.side_effect = RuntimeError("boom")
         self.assertIsNone(capture_and_blur(driver, _TEST_PAN))
 
     def test_happy_path_returns_processed_png(self):
+        """Successful screenshot must be processed and returned as PNG bytes."""
         driver = MagicMock()
         driver.get_screenshot_as_png.return_value = _png_bytes_with_text()
         out = capture_and_blur(driver, _TEST_PAN)
@@ -92,7 +95,7 @@ class CaptureAndBlurTests(unittest.TestCase):
         self.assertTrue(out.startswith(b"\x89PNG\r\n\x1a\n"))
 
 
-class _FakeGivex:
+class _FakeGivex:  # pylint: disable=too-few-public-methods
     """Minimal stand-in for GivexDriver exposing only ``._driver`` to mirror prod shape."""
 
     def __init__(self, inner):
@@ -107,6 +110,7 @@ class OrchestratorUnwrapsGivexDriverTests(unittest.TestCase):
     """KIỂM TRA 2: orchestrator must pass raw Selenium driver to capture_and_blur."""
 
     def test_notify_success_unwraps_givex_driver(self):
+        """GivexDriver wrapper must be unwrapped; raw driver used for screenshot."""
         raw_selenium = MagicMock(name="selenium_webdriver")
         raw_selenium.get_screenshot_as_png.return_value = _png_bytes_with_text()
         wrapper = _FakeGivex(raw_selenium)
@@ -147,6 +151,7 @@ class TelegramSendPhotoReceivesBlurredBytesTests(unittest.TestCase):
     """KIỂM TRA 4: verify the multipart payload contains the blurred bytes."""
 
     def test_sendphoto_body_contains_blurred_bytes(self):
+        """Multipart sendPhoto body must contain the blurred PNG bytes, not raw."""
         captured = {}
 
         def _fake_post(url, data, headers=None, timeout=10):
@@ -182,8 +187,7 @@ class BlurModuleConstantsTests(unittest.TestCase):
     """Guard the blur radius against accidental regressions."""
 
     def test_blur_radius_is_heavy_enough(self):
-        # Guard against regressions where a light blur lets card digits
-        # remain legible on the confirmation page.
+        """_BLUR_RADIUS must be ≥10 to ensure card digits are illegible."""
         self.assertGreaterEqual(screenshot_blur._BLUR_RADIUS, 10)
 
 
