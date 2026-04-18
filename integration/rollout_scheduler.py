@@ -61,7 +61,7 @@ def _try_advance():
         _logger.info("rollout complete: at max workers")
 
 
-def _scheduler_loop(task_fn, interval):
+def _scheduler_loop(interval):
     global _stable_since
     while not _stop_event.is_set():
         try:
@@ -87,13 +87,10 @@ def _scheduler_loop(task_fn, interval):
         _stop_event.wait(timeout=interval)
 
 
-def start_scheduler(task_fn, interval: float = 300.0) -> bool:
+def start_scheduler(interval: float = 300.0) -> bool:
     """Start the rollout scheduler loop in a background thread.
 
     Args:
-        task_fn: Reserved for future use (e.g. passing to runtime.start_worker
-            when scaling up).  Not invoked directly here to avoid circular
-            imports between integration modules.
         interval: Polling interval in seconds (default 300s = 5 min).
 
     Returns True if started, False if already running.
@@ -108,6 +105,7 @@ def start_scheduler(task_fn, interval: float = 300.0) -> bool:
             "Set ROLLOUT_MANAGED_BY_RUNTIME=false to re-enable (not recommended)."
         )
         return False
+    _logger.info("Scheduler is passive; runtime module owns scaling.")
     global _scheduler_thread
     clamped = max(float(interval), _MIN_INTERVAL)
     with _lock:
@@ -115,7 +113,7 @@ def start_scheduler(task_fn, interval: float = 300.0) -> bool:
             return False
         _stop_event.clear()
         _scheduler_thread = threading.Thread(
-            target=_scheduler_loop, args=(task_fn, clamped),
+            target=_scheduler_loop, args=(clamped,),
             daemon=True, name="rollout-scheduler",
         )
         _scheduler_thread.start()

@@ -48,16 +48,16 @@ class TestSchedulerLifecycle(SchedulerResetMixin, unittest.TestCase):
     """start_scheduler(), stop_scheduler(), reset()"""
 
     def test_start_returns_true_when_not_running(self):
-        result = sched.start_scheduler(lambda _: None, interval=60.0)
+        result = sched.start_scheduler(interval=60.0)
         self.assertTrue(result)
 
     def test_start_returns_false_when_already_running(self):
-        sched.start_scheduler(lambda _: None, interval=60.0)
-        result = sched.start_scheduler(lambda _: None, interval=60.0)
+        sched.start_scheduler(interval=60.0)
+        result = sched.start_scheduler(interval=60.0)
         self.assertFalse(result)
 
     def test_stop_returns_true_when_running(self):
-        sched.start_scheduler(lambda _: None, interval=60.0)
+        sched.start_scheduler(interval=60.0)
         result = sched.stop_scheduler(timeout=5.0)
         self.assertTrue(result)
 
@@ -66,7 +66,7 @@ class TestSchedulerLifecycle(SchedulerResetMixin, unittest.TestCase):
         self.assertFalse(result)
 
     def test_reset_clears_state(self):
-        sched.start_scheduler(lambda _: None, interval=60.0)
+        sched.start_scheduler(interval=60.0)
         sched._stable_since = time.monotonic()
         sched.reset()
         self.assertIsNone(sched._stable_since)
@@ -139,7 +139,7 @@ class TestStabilityTracking(SchedulerResetMixin, unittest.TestCase):
     @patch("modules.monitor.main.get_metrics", return_value=_BAD_METRICS)
     def test_stability_resets_on_bad_metrics(self, _mock_m):
         sched._stable_since = time.monotonic() - 100
-        sched.start_scheduler(lambda _: None, interval=1.0)
+        sched.start_scheduler(interval=1.0)
         time.sleep(1.5)
         sched.stop_scheduler(timeout=2.0)
         self.assertIsNone(sched._stable_since)
@@ -154,7 +154,7 @@ class TestStabilityTracking(SchedulerResetMixin, unittest.TestCase):
 
     @patch("modules.monitor.main.get_metrics", return_value=_HEALTHY_METRICS)
     def test_stable_since_set_on_healthy_metrics(self, _mock_m):
-        sched.start_scheduler(lambda _: None, interval=1.0)
+        sched.start_scheduler(interval=1.0)
         time.sleep(1.5)
         sched.stop_scheduler(timeout=2.0)
         self.assertIsNotNone(sched._stable_since)
@@ -173,7 +173,7 @@ class TestSchedulerLoop(SchedulerResetMixin, unittest.TestCase):
         sched._stable_since = (
             time.monotonic() - (sched.STABLE_DURATION_SECONDS + 10)
         )
-        sched.start_scheduler(lambda _: None, interval=1.0)
+        sched.start_scheduler(interval=1.0)
         time.sleep(1.5)
         sched.stop_scheduler(timeout=2.0)
         mock_scale_up.assert_called()
@@ -182,7 +182,7 @@ class TestSchedulerLoop(SchedulerResetMixin, unittest.TestCase):
     @patch("modules.monitor.main.get_metrics", return_value=_BAD_METRICS)
     def test_loop_rolls_back_on_high_error_rate(self, _m, mock_rb):
         mock_rb.return_value = 1
-        sched.start_scheduler(lambda _: None, interval=1.0)
+        sched.start_scheduler(interval=1.0)
         time.sleep(1.5)
         sched.stop_scheduler(timeout=2.0)
         mock_rb.assert_called()
@@ -190,13 +190,13 @@ class TestSchedulerLoop(SchedulerResetMixin, unittest.TestCase):
     @patch("modules.rollout.main.try_scale_up")
     @patch("modules.monitor.main.get_metrics", return_value=_HEALTHY_METRICS)
     def test_loop_does_not_advance_before_stable_duration(self, _m, mock_su):
-        sched.start_scheduler(lambda _: None, interval=1.0)
+        sched.start_scheduler(interval=1.0)
         time.sleep(1.5)
         sched.stop_scheduler(timeout=2.0)
         mock_su.assert_not_called()
 
     def test_loop_stops_on_stop_event(self):
-        sched.start_scheduler(lambda _: None, interval=60.0)
+        sched.start_scheduler(interval=60.0)
         self.assertTrue(sched.get_scheduler_status()["running"])
         stopped = sched.stop_scheduler(timeout=5.0)
         self.assertTrue(stopped)

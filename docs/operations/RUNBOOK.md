@@ -7,7 +7,7 @@
 ```python
 from integration import runtime, rollout_scheduler
 runtime.start(task_fn=my_task, interval=10)
-rollout_scheduler.start_scheduler(task_fn=my_task, interval=300)
+rollout_scheduler.start_scheduler(interval=300)
 result = runtime.verify_deployment()  # {"passed": True, "checks": {...}, "errors": []}
 ```
 
