@@ -5,6 +5,7 @@ Two cases:
  2. A driver without add_cdp_listener raises RuntimeError with the expected
     operator message.
 """
+# pylint: disable=too-few-public-methods,no-self-use
 import unittest
 
 from integration.runtime import probe_cdp_listener_support
@@ -14,7 +15,7 @@ class _GoodDriver:
     """Mock driver with a callable add_cdp_listener."""
 
     def add_cdp_listener(self, event, callback):  # pragma: no cover
-        pass
+        """Mock listener registration; no-op."""
 
 
 class _BadDriverMissing:
@@ -27,6 +28,7 @@ class _BadDriverNonCallable:
 
 
 class TestProbeCdpListenerSupport(unittest.TestCase):
+    """U-06 unit tests for the startup probe helper."""
 
     def test_passes_for_callable_add_cdp_listener(self):
         """probe raises nothing when driver has callable add_cdp_listener."""

@@ -4,6 +4,7 @@ Asserts the current content of the constant so that drift is caught
 immediately.  The patterns cover both /api/checkout/total (via
 '/checkout/total' substring) and /api/tax (exact).
 """
+# pylint: disable=protected-access,missing-function-docstring,no-self-use
 import unittest
 
 from integration import orchestrator
@@ -13,9 +14,11 @@ class TestCDPNetworkUrlPatterns(unittest.TestCase):
     """U-05 lock-in: _CDP_NETWORK_URL_PATTERNS membership assertions."""
 
     def _patterns(self):
+        """Return the module-level constant under test."""
         return orchestrator._CDP_NETWORK_URL_PATTERNS
 
     def test_constant_is_non_empty(self):
+        """Constant must be populated."""
         self.assertTrue(self._patterns(), "_CDP_NETWORK_URL_PATTERNS must not be empty")
 
     def test_checkout_total_coverage(self):
