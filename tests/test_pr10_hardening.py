@@ -119,7 +119,7 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
                 result = billing._pool_dir()
         self.assertTrue(str(result).endswith("billing_pool"))
         self.assertFalse(str(result).startswith("/tmp"))
-        self.assertTrue(any("/tmp" in m for m in log_ctx.output))
+        self.assertTrue(any("production mode" in m for m in log_ctx.output))
 
     def test_tmp_root_itself_rejected_in_production(self):
         """Bare /tmp as BILLING_POOL_DIR is also rejected in production."""
@@ -142,9 +142,11 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
             os.environ,
             {"ENABLE_PRODUCTION_TASK_FN": "true", "BILLING_POOL_DIR": "/tmp/x"},
         ):
-            result = billing._pool_dir()
+            with self.assertLogs("modules.billing.main", level="WARNING") as log_ctx:
+                result = billing._pool_dir()
         self.assertTrue(str(result).endswith("billing_pool"))
         self.assertFalse(str(result).startswith("/tmp"))
+        self.assertTrue(any("production mode" in m for m in log_ctx.output))
 
 
 class TestBillingTmpGuardNonProduction(unittest.TestCase):

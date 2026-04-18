@@ -95,12 +95,11 @@ def _pool_dir() -> Path:
         project_root = Path(__file__).resolve().parents[2]
         if _is_production_mode():
             allowed_prefixes = (project_root, Path("/data"))
-            tmp_path = Path("/tmp")
+            tmp_path = Path("/tmp").resolve()
             if resolved == tmp_path or str(resolved).startswith(str(tmp_path) + os.sep):
                 _logger.warning(
-                    "BILLING_POOL_DIR %s resolves to a /tmp path which is not permitted in"
+                    "BILLING_POOL_DIR resolves to a /tmp path which is not permitted in"
                     " production mode; using default billing_pool.",
-                    str(resolved),
                 )
                 return Path(__file__).resolve().parents[2] / "billing_pool"
         else:
