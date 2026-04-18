@@ -231,23 +231,13 @@ class TestDeprecationSignalling(unittest.TestCase):
     """Each public API must emit DeprecationWarning (shim signalling)."""
 
     def setUp(self):
-        # Reset scheduler internals directly without calling deprecated public APIs
-        sched._stop_event.set()
-        if sched._scheduler_thread is not None and sched._scheduler_thread.is_alive():
-            sched._scheduler_thread.join(timeout=2.0)
-        with sched._lock:
-            sched._scheduler_thread = None
-            sched._stable_since = None
-        sched._stop_event.clear()
+        sched.reset()
         sched._ROLLOUT_MANAGED_BY_RUNTIME = True
         rollout.reset()
         monitor.reset()
 
     def tearDown(self):
-        sched._stop_event.set()
-        if sched._scheduler_thread is not None and sched._scheduler_thread.is_alive():
-            sched._scheduler_thread.join(timeout=2.0)
-        sched._stop_event.clear()
+        sched.reset()
 
     def test_start_scheduler_emits_deprecation_warning(self):
         with warnings.catch_warnings(record=True) as caught:
