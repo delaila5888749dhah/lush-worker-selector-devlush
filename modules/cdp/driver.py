@@ -181,6 +181,39 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
     return None
 
 
+def maxmind_lookup_zip(ip_addr: str) -> str | None:
+    """Look up postal/zip code for an IP using MaxMind GeoLite2-City.mmdb.
+
+    Parallel to :func:`_lookup_maxmind_utc_offset`; uses the same database
+    path resolved from the ``GEOIP_DB_PATH`` environment variable or the
+    ``data/GeoLite2-City.mmdb`` default.
+
+    Args:
+        ip_addr: IPv4 or IPv6 address string.
+
+    Returns:
+        A postal/zip code string (e.g. ``"10001"``) or ``None`` when the
+        database is absent, ``geoip2`` is not installed, the record carries
+        no postal code, or any lookup error occurs.
+    """
+    mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+    if not os.path.exists(mmdb_path):
+        return None
+    try:
+        import geoip2.database  # type: ignore
+    except ImportError:
+        return None
+    try:
+        with geoip2.database.Reader(mmdb_path) as reader:
+            record = reader.city(ip_addr)
+            postal_code = record.postal.code
+            if postal_code:
+                return postal_code
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.debug("MaxMind zip lookup failed for %s: %s", ip_addr, exc)
+    return None
+
+
 def _get_current_ip_best_effort() -> str | None:
     """Return current public IP using a short best-effort ipify request."""
     try:

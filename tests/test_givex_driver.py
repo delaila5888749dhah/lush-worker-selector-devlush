@@ -905,6 +905,126 @@ class TestMaxMindGeoLookup(unittest.TestCase):
             self.assertIsNone(result)
 
 
+class TestMaxMindZipLookup(unittest.TestCase):
+    """maxmind_lookup_zip returns postal code from MaxMind DB or None."""
+
+    def _make_fake_reader(self, postal_code):
+        """Return a FakeReader context manager yielding the given postal code."""
+        fake_record = MagicMock()
+        fake_record.postal.code = postal_code
+
+        class FakeReader:
+            """Fake geoip2 Reader for test isolation."""
+
+            def __init__(self, _path):
+                self._path = _path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            @staticmethod
+            def city(_ip):
+                """Return the canned fake record."""
+                return fake_record
+
+        return FakeReader
+
+    def test_returns_zip_when_db_present(self):
+        """Returns postal code string when MaxMind DB record has postal code."""
+        FakeReader = self._make_fake_reader("10001")
+        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch.dict(
+                 "sys.modules",
+                 {"geoip2": fake_geoip2_module, "geoip2.database": fake_database_module},
+             ):
+            result = drv.maxmind_lookup_zip("8.8.8.8")
+        self.assertEqual(result, "10001")
+
+    def test_returns_none_when_db_missing(self):
+        """Returns None when the MaxMind database file is absent."""
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("modules.cdp.driver.os.path.exists", return_value=False):
+            result = drv.maxmind_lookup_zip("8.8.8.8")
+            self.assertIsNone(result)
+
+    def test_returns_none_when_geoip2_not_installed(self):
+        """Returns None via ImportError guard when geoip2 is not installed."""
+        real_import = __import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "geoip2.database":
+                raise ImportError("geoip2 missing")
+            return real_import(name, *args, **kwargs)
+
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch("builtins.__import__", side_effect=_fake_import):
+            result = drv.maxmind_lookup_zip("8.8.8.8")
+            self.assertIsNone(result)
+
+    def test_returns_none_when_postal_code_is_empty_string(self):
+        """Returns None when the DB record has an empty postal code."""
+        FakeReader = self._make_fake_reader("")
+        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch.dict(
+                 "sys.modules",
+                 {"geoip2": fake_geoip2_module, "geoip2.database": fake_database_module},
+             ):
+            result = drv.maxmind_lookup_zip("8.8.8.8")
+        self.assertIsNone(result)
+
+    def test_returns_none_when_postal_code_is_none(self):
+        """Returns None when the DB record has a None postal code."""
+        FakeReader = self._make_fake_reader(None)
+        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch.dict(
+                 "sys.modules",
+                 {"geoip2": fake_geoip2_module, "geoip2.database": fake_database_module},
+             ):
+            result = drv.maxmind_lookup_zip("8.8.8.8")
+        self.assertIsNone(result)
+
+    def test_returns_none_on_lookup_exception(self):
+        """Returns None when geoip2 reader raises an unexpected exception."""
+        class ErrorReader:
+            def __init__(self, _path):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def city(self, _ip):
+                raise RuntimeError("unexpected error")
+
+        fake_database_module = types.SimpleNamespace(Reader=ErrorReader)
+        fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch.dict(
+                 "sys.modules",
+                 {"geoip2": fake_geoip2_module, "geoip2.database": fake_database_module},
+             ):
+            result = drv.maxmind_lookup_zip("8.8.8.8")
+        self.assertIsNone(result)
+
+    def test_uses_geoip_db_path_env_var(self):
+        """Respects GEOIP_DB_PATH environment variable for database location."""
+        with patch.dict("os.environ", {"GEOIP_DB_PATH": "/custom/path.mmdb"}), \
+             patch("modules.cdp.driver.os.path.exists", return_value=False) as mock_exists:
+            drv.maxmind_lookup_zip("8.8.8.8")
+        mock_exists.assert_called_with("/custom/path.mmdb")
+
+
 # ── Helpers for persona-aware tests ─────────────────────────────────────────
 
 

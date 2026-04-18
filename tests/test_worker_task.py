@@ -473,5 +473,220 @@ class TestIsProductionTaskFnEnabled(unittest.TestCase):
             self.assertFalse(runtime.is_production_task_fn_enabled())
 
 
+# ── task_fn zip wiring tests (F-07) ──────────────────────────────────────────
+
+
+class TestMakeTaskFnZipWiring(unittest.TestCase):
+    """task_fn resolves zip via MaxMind and forwards it to run_cycle (F-07)."""
+
+    def _run(
+        self,
+        worker_id="worker-1",
+        mock_ip="1.2.3.4",
+        mock_zip="10001",
+        task=None,
+    ):
+        """Run task_fn with a mock task_source and return the mock run_cycle."""
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+
+        if task is None:
+            task = MagicMock()
+        mock_task_source = MagicMock(return_value=task)
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp") as mock_cdp,
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch(
+                "integration.worker_task._get_current_ip_best_effort",
+                return_value=mock_ip,
+            ),
+            patch(
+                "integration.worker_task.maxmind_lookup_zip",
+                return_value=mock_zip,
+            ),
+            patch("integration.orchestrator.run_cycle") as mock_run_cycle,
+        ):
+            from integration.worker_task import make_task_fn
+            make_task_fn(task_source=mock_task_source)(worker_id)
+        return mock_run_cycle, mock_task_source, mock_cdp
+
+    def test_run_cycle_called_with_resolved_zip(self):
+        """run_cycle receives the zip resolved by MaxMind."""
+        mock_run_cycle, _, _ = self._run(mock_zip="10001")
+        mock_run_cycle.assert_called_once()
+        _, kwargs = mock_run_cycle.call_args
+        self.assertEqual(kwargs.get("zip_code"), "10001")
+
+    def test_run_cycle_called_with_none_zip_when_maxmind_unavailable(self):
+        """run_cycle receives zip_code=None when MaxMind cannot resolve a zip."""
+        mock_run_cycle, _, _ = self._run(mock_zip=None)
+        mock_run_cycle.assert_called_once()
+        _, kwargs = mock_run_cycle.call_args
+        self.assertIsNone(kwargs.get("zip_code"))
+
+    def test_run_cycle_called_with_none_zip_when_ip_unavailable(self):
+        """run_cycle receives zip_code=None when the public IP cannot be detected."""
+        mock_run_cycle, _, _ = self._run(mock_ip=None, mock_zip=None)
+        mock_run_cycle.assert_called_once()
+        _, kwargs = mock_run_cycle.call_args
+        self.assertIsNone(kwargs.get("zip_code"))
+
+    def test_run_cycle_receives_correct_worker_id(self):
+        """run_cycle is called with the same worker_id as task_fn."""
+        mock_run_cycle, _, _ = self._run(worker_id="worker-42", mock_zip="90210")
+        mock_run_cycle.assert_called_once()
+        _, kwargs = mock_run_cycle.call_args
+        self.assertEqual(kwargs.get("worker_id"), "worker-42")
+
+    def test_run_cycle_not_called_when_task_source_returns_none(self):
+        """run_cycle is skipped if task_source returns None (no pending task)."""
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch(
+                "integration.worker_task._get_current_ip_best_effort",
+                return_value="1.2.3.4",
+            ),
+            patch(
+                "integration.worker_task.maxmind_lookup_zip",
+                return_value="10001",
+            ),
+            patch("integration.orchestrator.run_cycle") as mock_run_cycle,
+        ):
+            from integration.worker_task import make_task_fn
+            make_task_fn(task_source=MagicMock(return_value=None))("worker-1")
+        mock_run_cycle.assert_not_called()
+
+    def test_run_cycle_not_called_without_task_source(self):
+        """run_cycle is not called when make_task_fn() is invoked with no task_source."""
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch(
+                "integration.worker_task._get_current_ip_best_effort",
+                return_value="1.2.3.4",
+            ),
+            patch(
+                "integration.worker_task.maxmind_lookup_zip",
+                return_value="10001",
+            ),
+            patch("integration.orchestrator.run_cycle") as mock_run_cycle,
+        ):
+            from integration.worker_task import make_task_fn
+            make_task_fn()("worker-1")
+        mock_run_cycle.assert_not_called()
+
+    def test_unregister_still_called_when_run_cycle_raises(self):
+        """cdp.unregister_driver is called even when run_cycle raises."""
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp") as mock_cdp,
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch(
+                "integration.worker_task._get_current_ip_best_effort",
+                return_value="1.2.3.4",
+            ),
+            patch(
+                "integration.worker_task.maxmind_lookup_zip",
+                return_value="10001",
+            ),
+            patch(
+                "integration.orchestrator.run_cycle",
+                side_effect=RuntimeError("cycle failed"),
+            ),
+        ):
+            from integration.worker_task import make_task_fn
+            with self.assertRaises(RuntimeError):
+                make_task_fn(task_source=MagicMock(return_value=MagicMock()))("w")
+        mock_cdp.unregister_driver.assert_called_once_with("w")
+
+    def test_task_source_called_with_worker_id(self):
+        """task_source is invoked with the worker_id to retrieve the task."""
+        _, mock_task_source, _ = self._run(worker_id="worker-99")
+        mock_task_source.assert_called_once_with("worker-99")
+
+    def test_maxmind_lookup_called_with_detected_ip(self):
+        """maxmind_lookup_zip is called with the IP returned by _get_current_ip_best_effort."""
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+        task = MagicMock()
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch(
+                "integration.worker_task._get_current_ip_best_effort",
+                return_value="203.0.113.5",
+            ),
+            patch(
+                "integration.worker_task.maxmind_lookup_zip",
+                return_value="90210",
+            ) as mock_zip_lookup,
+            patch("integration.orchestrator.run_cycle"),
+        ):
+            from integration.worker_task import make_task_fn
+            make_task_fn(task_source=MagicMock(return_value=task))("w")
+        mock_zip_lookup.assert_called_once_with("203.0.113.5")
+
+
 if __name__ == "__main__":
     unittest.main()
