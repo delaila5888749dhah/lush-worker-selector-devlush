@@ -91,7 +91,7 @@ def _build_remote_driver(webdriver_url: str):
         RuntimeError: if selenium is not installed.
     """
     try:
-        # pylint: disable=C0415
+        # pylint: disable=C0415  # import-outside-toplevel; keep selenium optional
         from selenium.webdriver import Remote  # type: ignore[import]
         from selenium.webdriver.common.desired_capabilities import (  # type: ignore[import]
             DesiredCapabilities,
