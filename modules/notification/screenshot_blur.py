@@ -3,6 +3,7 @@
 Captures a PNG screenshot from a Selenium driver and overlays the masked card number
 in the upper-right corner.  Requires Pillow; degrades gracefully if unavailable.
 """
+import io
 import logging
 
 from modules.notification.card_masker import mask_card_number
@@ -29,7 +30,6 @@ def capture_and_blur(driver, card_number: str) -> bytes | None:
 
     try:
         from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
-        import io  # noqa: PLC0415
 
         img = Image.open(io.BytesIO(raw_png)).convert("RGBA")
 

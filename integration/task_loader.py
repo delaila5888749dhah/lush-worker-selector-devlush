@@ -71,10 +71,9 @@ class FileTaskLoader:
         """
         parts = line.split("|")
 
-        # Minimum: email + amount + one card block (6 fields total)
-        min_fields = _PREFIX_FIELDS + _CARD_BLOCK_SIZE + 1  # +1 for cvv
-        # Actually: email|amount|card_number|exp_month|exp_year|cvv = 6 fields
-        if len(parts) < 6:
+        # Minimum: email + amount + one card block (card_number, exp_month, exp_year, cvv) = 6 fields
+        min_fields = _PREFIX_FIELDS + _CARD_BLOCK_SIZE
+        if len(parts) < min_fields:
             _logger.warning(
                 "FileTaskLoader: malformed line (expected ≥6 fields, got %d): %r",
                 len(parts),
