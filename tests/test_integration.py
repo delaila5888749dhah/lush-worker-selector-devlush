@@ -718,7 +718,7 @@ class SanitizeErrorTests(unittest.TestCase):
         exc = RuntimeError("Card 4111111111111111 was declined")
         result = _sanitize_error(exc)
         self.assertNotIn("4111111111111111", result)
-        self.assertIn("[REDACTED]", result)
+        self.assertIn("[REDACTED-CARD]", result)
 
     def test_preserves_non_card_data(self):
         from integration.orchestrator import _sanitize_error

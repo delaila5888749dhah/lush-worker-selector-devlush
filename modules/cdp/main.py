@@ -7,10 +7,11 @@ implementation delegates to the registered driver for page interaction.
 
 import logging
 import os
-import re
 import signal
 import threading
 from typing import Dict, Optional
+
+from modules.common.sanitize import sanitize_error as _sanitize_error
 
 _log = logging.getLogger(__name__)
 
@@ -18,29 +19,6 @@ _registry_lock = threading.Lock()
 _driver_registry: dict[str, object] = {}
 _pid_registry: dict[str, int] = {}
 _bitbrowser_registry: Dict[str, str] = {}
-
-_CARD_PATTERN = re.compile(r"\b\d{16}\b")
-_CVV_PATTERN = re.compile(r"\bcvv\b[\s:=_-]*\d{3,4}\b", re.IGNORECASE)
-_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-
-
-def _sanitize_error(msg: str) -> str:
-    """Redact sensitive PII from an error message string.
-
-    Replaces 16-digit card numbers, CVV patterns, and email addresses
-    with placeholder tokens so that sensitive data is never exposed in
-    logs or re-raised exception messages.
-
-    Args:
-        msg: The raw error message that may contain PII.
-
-    Returns:
-        The message with all recognised PII replaced.
-    """
-    msg = _CARD_PATTERN.sub("[REDACTED-CARD]", msg)
-    msg = _CVV_PATTERN.sub("[REDACTED-CVV]", msg)
-    msg = _EMAIL_PATTERN.sub("[REDACTED-EMAIL]", msg)
-    return msg
 
 
 def register_driver(worker_id: str, driver: object) -> None:
