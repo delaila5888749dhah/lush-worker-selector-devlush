@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import logging
 import os
-import os
 import sys
 import time
 import unittest
@@ -171,7 +170,7 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
         stub = _StubGivexDriver(
             self.worker_id,
             final_state="success",
-            dom_total=None,  # DOM fallback returns None → watchdog never fires
+            dom_total=None,  # DOM fallback returns None → watchdog fires on timeout
         )
         _cdp_main.register_driver(self.worker_id, stub)
         start = time.monotonic()

@@ -24,6 +24,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from unittest.mock import MagicMock
 
+from modules.common.exceptions import InvalidStateError, InvalidTransitionError
+
 from modules.common.exceptions import SessionFlaggedError
 from modules.common.types import BillingProfile, CardInfo, WorkerTask
 import modules.cdp.main as _cdp_main
@@ -132,7 +134,11 @@ class _StubGivexDriver:
         if self.final_state:
             try:
                 transition_for_worker(self.worker_id, self.final_state)
-            except Exception:  # noqa: BLE001 — silently ignored in stub
+            except (InvalidStateError, InvalidTransitionError, ValueError):
+                # FSM transition may legitimately fail when the stub is exercised
+                # outside a full run_cycle (e.g. direct run_payment_step calls where
+                # the worker registry entry may not be initialized). This is expected
+                # stub behaviour and should not propagate to the test.
                 pass
 
     def run_full_cycle(self, task, profile) -> str:

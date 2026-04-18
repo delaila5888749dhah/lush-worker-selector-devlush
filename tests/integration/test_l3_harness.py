@@ -154,9 +154,10 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
             call_order.append("submit")
             stub.calls.append("submit_purchase")
             from modules.fsm.main import transition_for_worker
+            from modules.common.exceptions import InvalidStateError, InvalidTransitionError
             try:
                 transition_for_worker(self.worker_id, "success")
-            except Exception:  # noqa: BLE001
+            except (InvalidStateError, InvalidTransitionError, ValueError):
                 pass
 
         def record_mark(task_id):
@@ -214,9 +215,10 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
         def submit():
             stub.calls.append("submit_purchase")
             from modules.fsm.main import transition_for_worker
+            from modules.common.exceptions import InvalidStateError, InvalidTransitionError
             try:
                 transition_for_worker(self.worker_id, "success")
-            except Exception:  # noqa: BLE001
+            except (InvalidStateError, InvalidTransitionError, ValueError):
                 pass
         stub.submit_purchase = submit
 
