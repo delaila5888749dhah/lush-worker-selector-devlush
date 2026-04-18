@@ -1,4 +1,5 @@
-"""Worker task factory — F-01 (entrypoint), F-03 (CDP registration), F-04 (BitBrowser lifecycle), F-07 (MaxMind zip).
+"""Worker task factory — F-01 (entrypoint), F-03 (CDP registration),
+F-04 (BitBrowser lifecycle), F-07 (MaxMind zip).
 
 Creates a task_fn suitable for ``integration.runtime.start()``.  The
 returned callable wires the full browser lifecycle for one work cycle:
@@ -106,7 +107,7 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 if task_source is not None:
                     task = task_source(worker_id)
                     if task is not None:
-                        from integration.orchestrator import run_cycle  # noqa: PLC0415
+                        from integration.orchestrator import run_cycle  # noqa: PLC0415  # pylint: disable=C0415
                         run_cycle(task, zip_code=zip_code, worker_id=worker_id)
                 else:
                     _log.debug(

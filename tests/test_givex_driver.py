@@ -934,8 +934,8 @@ class TestMaxMindZipLookup(unittest.TestCase):
 
     def test_returns_zip_when_db_present(self):
         """Returns postal code string when MaxMind DB record has postal code."""
-        FakeReader = self._make_fake_reader("10001")
-        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_reader_cls = self._make_fake_reader("10001")
+        fake_database_module = types.SimpleNamespace(Reader=fake_reader_cls)
         fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
         with patch("modules.cdp.driver.os.path.exists", return_value=True), \
              patch.dict(
@@ -968,8 +968,8 @@ class TestMaxMindZipLookup(unittest.TestCase):
 
     def test_returns_none_when_postal_code_is_empty_string(self):
         """Returns None when the DB record has an empty postal code."""
-        FakeReader = self._make_fake_reader("")
-        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_reader_cls = self._make_fake_reader("")
+        fake_database_module = types.SimpleNamespace(Reader=fake_reader_cls)
         fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
         with patch("modules.cdp.driver.os.path.exists", return_value=True), \
              patch.dict(
@@ -981,8 +981,8 @@ class TestMaxMindZipLookup(unittest.TestCase):
 
     def test_returns_none_when_postal_code_is_none(self):
         """Returns None when the DB record has a None postal code."""
-        FakeReader = self._make_fake_reader(None)
-        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_reader_cls = self._make_fake_reader(None)
+        fake_database_module = types.SimpleNamespace(Reader=fake_reader_cls)
         fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
         with patch("modules.cdp.driver.os.path.exists", return_value=True), \
              patch.dict(
@@ -995,6 +995,8 @@ class TestMaxMindZipLookup(unittest.TestCase):
     def test_returns_none_on_lookup_exception(self):
         """Returns None when geoip2 reader raises an unexpected exception."""
         class ErrorReader:
+            """Fake geoip2 reader that always raises RuntimeError on city lookup."""
+
             def __init__(self, _path):
                 pass
 
@@ -1004,7 +1006,9 @@ class TestMaxMindZipLookup(unittest.TestCase):
             def __exit__(self, exc_type, exc_value, traceback):
                 return False
 
-            def city(self, _ip):
+            @staticmethod
+            def city(_ip):
+                """Raise RuntimeError to simulate an unexpected lookup error."""
                 raise RuntimeError("unexpected error")
 
         fake_database_module = types.SimpleNamespace(Reader=ErrorReader)
@@ -1017,7 +1021,7 @@ class TestMaxMindZipLookup(unittest.TestCase):
             result = drv.maxmind_lookup_zip("8.8.8.8")
         self.assertIsNone(result)
 
-    def test_uses_geoip_db_path_env_var(self):
+    def test_uses_geoip_db_path_env_var(self):  # pylint: disable=no-self-use
         """Respects GEOIP_DB_PATH environment variable for database location."""
         with patch.dict("os.environ", {"GEOIP_DB_PATH": "/custom/path.mmdb"}), \
              patch("modules.cdp.driver.os.path.exists", return_value=False) as mock_exists:
