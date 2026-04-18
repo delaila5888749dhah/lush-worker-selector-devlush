@@ -1021,12 +1021,12 @@ class TestMaxMindZipLookup(unittest.TestCase):
             result = drv.maxmind_lookup_zip("8.8.8.8")
         self.assertIsNone(result)
 
-    def test_uses_geoip_db_path_env_var(self):
+    def test_uses_geoip_db_path_env_var(self):  # pylint: disable=no-self-use
         """Respects GEOIP_DB_PATH environment variable for database location."""
         with patch.dict("os.environ", {"GEOIP_DB_PATH": "/custom/path.mmdb"}), \
              patch("modules.cdp.driver.os.path.exists", return_value=False) as mock_exists:
             drv.maxmind_lookup_zip("8.8.8.8")
-        self.assertEqual(mock_exists.call_args, call("/custom/path.mmdb"))
+        mock_exists.assert_called_with("/custom/path.mmdb")
 
 
 # ── Helpers for persona-aware tests ─────────────────────────────────────────
