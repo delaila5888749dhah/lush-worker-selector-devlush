@@ -797,9 +797,12 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     Steps:
       1. Select a billing profile from the pool.
       2. Enable the network watchdog for this worker.
-      3. Fill billing and card data via CDP (with timeout).
-      4. Wait for the checkout total to be confirmed by the watchdog.
-      5. Return (state, total).
+      3. Run the full pre-submit sequence via CDP (preflight_geo → navigate →
+         fill eGift form → add to cart → guest checkout → fill payment/billing).
+      4. Persist the idempotency checkpoint (U-07: mark_submitted BEFORE submit).
+      5. Submit the purchase via CDP (the irreversible action).
+      6. Wait for the checkout total to be confirmed by the watchdog.
+      7. Return (state, total).
 
     Args:
         task: WorkerTask containing card and order information.
@@ -833,18 +836,28 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
     watchdog.enable_network_monitor(worker_id)
     _submitted_before_wait = False
     try:
+        # F-02: Drive the full pre-submit purchase sequence
+        # (preflight_geo → navigate → fill eGift form → add to cart → guest checkout
+        #  → fill payment/billing).  This replaces the former fill-only call.
         _cdp_call_with_timeout(
-            cdp.fill_payment_and_billing,
-            task.primary_card,
+            cdp.run_preflight_and_fill,
+            task,
             profile,
             worker_id=worker_id,
         )
-        # Payment-submitted checkpoint: persist task_id before waiting for total.
-        # If the process crashes here, the submitted state records that payment was sent.
+        # U-07: Persist the idempotency checkpoint BEFORE the irreversible submit
+        # action.  If the process crashes between mark_submitted and submit_purchase,
+        # the submitted state blocks re-execution on restart, preventing a
+        # double-charge even though no payment was actually processed.
         _task_id = getattr(task, "task_id", None)
         if _task_id is not None:
             _get_idempotency_store().mark_submitted(_task_id)
             _submitted_before_wait = True
+        # F-02: Submit the purchase (the irreversible action — must come AFTER mark_submitted).
+        _cdp_call_with_timeout(
+            cdp.submit_purchase,
+            worker_id=worker_id,
+        )
         # Fallback: read total from DOM to unblock watchdog
         _notify_total_from_dom(driver_obj, worker_id)
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)

@@ -157,8 +157,8 @@ class RunPaymentStepTests(unittest.TestCase):
         mock_billing.select_profile.assert_called_once_with("90210")
 
 
-    def test_fill_payment_and_billing_called_with_card_and_profile(self):
-        """run_payment_step() must use the new single-call API, not fill_card()."""
+    def test_run_preflight_and_fill_called_with_task_and_profile(self):
+        """run_payment_step() must use cdp.run_preflight_and_fill for the pre-submit sequence."""
         task = _make_task()
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -171,9 +171,10 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 25.0
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task)
-        mock_cdp.fill_payment_and_billing.assert_called_once_with(
-            task.primary_card, profile, worker_id="default"
+        mock_cdp.run_preflight_and_fill.assert_called_once_with(
+            task, profile, worker_id="default"
         )
+        mock_cdp.submit_purchase.assert_called_once_with(worker_id="default")
 
     def test_fill_card_not_called_during_payment_step(self):
         """Deprecated fill_card() must never be called by run_payment_step()."""

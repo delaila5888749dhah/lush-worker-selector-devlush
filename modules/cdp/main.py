@@ -189,6 +189,148 @@ def clear_card_fields(worker_id: str) -> None:
     _get_driver(worker_id).clear_card_fields()
 
 
+def preflight_geo_check(worker_id: str) -> str:
+    """Run the geo pre-flight check via the registered driver.
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Returns:
+        ``"US"`` when the primary API confirms a US IP, or ``"UNKNOWN"``
+        when the API is unavailable and the fallback is used.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+        RuntimeError: if the detected country is not ``"US"``.
+    """
+    return _get_driver(worker_id).preflight_geo_check()
+
+
+def navigate_to_egift(worker_id: str) -> None:
+    """Navigate to the eGift purchase page via the registered driver.
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).navigate_to_egift()
+
+
+def fill_egift_form(task, billing_profile, worker_id: str) -> None:
+    """Fill the eGift order form via the registered driver.
+
+    Args:
+        task: WorkerTask with ``recipient_email`` and ``amount``.
+        billing_profile: BillingProfile with name details.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).fill_egift_form(task, billing_profile)
+
+
+def add_to_cart_and_checkout(worker_id: str) -> None:
+    """Click Add-to-Cart and Review & Checkout via the registered driver.
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).add_to_cart_and_checkout()
+
+
+def select_guest_checkout(email: str, worker_id: str) -> None:
+    """Complete the guest checkout flow via the registered driver.
+
+    Args:
+        email: Guest email address to use for checkout.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).select_guest_checkout(email)
+
+
+def submit_purchase(worker_id: str) -> None:
+    """Submit the purchase via the registered driver.
+
+    This is the irreversible action that charges the card.  It must only
+    be called after the idempotency checkpoint has been persisted (U-07).
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).submit_purchase()
+
+
+def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
+    """Run all pre-submit purchase steps via the registered driver.
+
+    Executes steps 1–6 of the full purchase sequence (everything up to and
+    including form fill), but intentionally omits the submit step so that the
+    orchestrator can persist the idempotency checkpoint between fill and
+    submit (U-07):
+
+    1. Geo pre-flight check (``preflight_geo_check``).
+    2. Navigate to eGift page (``navigate_to_egift``).
+    3. Fill the eGift form (``fill_egift_form``).
+    4. Add to cart and click Review & Checkout (``add_to_cart_and_checkout``).
+    5. Select guest checkout (``select_guest_checkout``).
+    6. Fill payment and billing fields (``fill_payment_and_billing``).
+
+    Args:
+        task: WorkerTask with purchase details.
+        billing_profile: BillingProfile with address and email.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+        ValueError: if ``billing_profile.email`` is ``None``.
+    """
+    if billing_profile.email is None:
+        raise ValueError(
+            "billing_profile.email must not be None for guest checkout"
+        )
+    driver = _get_driver(worker_id)
+    driver.preflight_geo_check()
+    driver.navigate_to_egift()
+    driver.fill_egift_form(task, billing_profile)
+    driver.add_to_cart_and_checkout()
+    driver.select_guest_checkout(billing_profile.email)
+    driver.fill_payment_and_billing(task.primary_card, billing_profile)
+
+
+def run_full_purchase_flow(task, billing_profile, worker_id: str) -> str:
+    """Run the complete purchase sequence via the registered driver.
+
+    Delegates to ``GivexDriver.run_full_cycle``.  Prefer
+    ``run_preflight_and_fill`` + ``submit_purchase`` from the orchestrator
+    so that the idempotency checkpoint can be persisted between fill and
+    submit (U-07).
+
+    Args:
+        task: WorkerTask with purchase details.
+        billing_profile: BillingProfile with address and email.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Returns:
+        The FSM state string returned by ``detect_page_state()``.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    return _get_driver(worker_id).run_full_cycle(task, billing_profile)
+
+
 def register_browser_profile(worker_id: str, profile_id: str) -> None:
     """Register BitBrowser profile id for a worker."""
     with _registry_lock:
