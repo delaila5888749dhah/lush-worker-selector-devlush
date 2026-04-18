@@ -589,6 +589,28 @@ def _validate_billing_pool_preflight() -> None:  # pylint: disable=protected-acc
                 f" threshold {min_profiles}. Startup aborted."
             )
     _logger.info("Billing pool preflight OK: dir=%s", pool_dir)
+def probe_cdp_listener_support(driver_obj: object) -> None:
+    """Assert *driver_obj* exposes a callable ``add_cdp_listener`` method.
+
+    Raises ``RuntimeError`` with a clear operator message if the check fails so
+    that mis-configured Selenium flavors are caught at driver bring-up time
+    rather than silently at the first network-watchdog attach.
+
+    Note: this helper is exported as a public function.  It is **not** called
+    anywhere inside ``runtime.py`` today because no driver is constructed here
+    (F-01 is not yet fixed).  PR-04 (F-01) is responsible for invoking this
+    probe immediately after the driver object is created during ``task_fn``
+    bring-up.  Add the call there — do not wire it here before F-01 lands.
+    """
+    if not (hasattr(driver_obj, "add_cdp_listener")
+            and callable(getattr(driver_obj, "add_cdp_listener", None))):
+        raise RuntimeError(
+            "Driver does not expose a callable 'add_cdp_listener'. "
+            "Ensure the pinned Selenium flavor (selenium-wire==5.1.0) "
+            "is installed and the driver is a seleniumwire WebDriver instance."
+        )
+
+
 def start(task_fn, interval=None):
     """Start the runtime loop. Returns True if started, False if already running."""
     global _state, _loop_thread, _trace_id
