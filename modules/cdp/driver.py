@@ -23,6 +23,7 @@ import ipaddress
 import urllib.parse
 import urllib.request
 import urllib.error
+from typing import Any
 
 try:
     from selenium.webdriver.support.ui import Select  # type: ignore[import]
@@ -647,7 +648,10 @@ def handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20)) -> bool:
 
 
 def vbv_dynamic_wait(rng: _random.Random | None = None) -> float:
-    """Wait 8–12s for VBV/3DS iframe to fully load (Blueprint §6 Ngã rẽ 3).
+    """Wait 8–12s for VBV/3DS iframe to fully load.
+
+    Blueprint §6 Ngã rẽ 3 (VBV/3DS iframe challenge handling) in
+    spec/blueprint.md.
 
     Pure sleep with no DOM interaction. Returns the actual sleep duration.
     """
@@ -658,7 +662,9 @@ def vbv_dynamic_wait(rng: _random.Random | None = None) -> float:
 
 
 def cdp_click_iframe_element(
-        driver, iframe_selector: str, element_selector: str,
+        driver: Any,
+        iframe_selector: str,
+        element_selector: str,
         rng: _random.Random | None = None,
 ) -> tuple[float, float]:
     """Click element inside iframe via CDP absolute coordinates.
