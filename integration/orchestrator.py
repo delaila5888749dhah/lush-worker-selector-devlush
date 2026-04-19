@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.common.exceptions import SessionFlaggedError
+from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
@@ -1080,9 +1081,13 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             if cancelled:
                 try:
                     driver_obj.detect_page_state()
-                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
-                    _logger.debug("VBV cancel: detect_page_state skipped", exc_info=True)
-                from modules.common.types import State  # noqa: PLC0415
+                except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.warning(
+                        "[trace=%s] VBV cancel detect_page_state failed for worker=%s: %s",
+                        _get_trace_id(),
+                        worker_id,
+                        _sanitize_error(exc),
+                    )
                 return handle_outcome(
                     State("vbv_cancelled"),
                     order_queue,
