@@ -845,7 +845,7 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
         bb_client, selenium_drv, givex_drv = self._make_mocks()
         run_cycle_kwargs: list[dict] = []
 
-        def capture_run_cycle(_task, zip_code=None, worker_id="default"):
+        def capture_run_cycle(_task, zip_code=None, worker_id="default", ctx=None, **_kwargs):
             run_cycle_kwargs.append({"zip_code": zip_code, "worker_id": worker_id})
 
         with patch(

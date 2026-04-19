@@ -40,7 +40,20 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
     _GhostCursor = None  # type: ignore[assignment,misc]
     _type_value = None  # type: ignore[assignment,misc]
 
-from modules.common.exceptions import PageStateError, SelectorTimeoutError
+from modules.common.exceptions import (
+    PageStateError,
+    SelectorTimeoutError,
+    SessionFlaggedError,
+)
+
+
+class GeoCheckFailedError(RuntimeError):
+    """Raised by :func:`preflight_geo_check` when the detected country does
+    not match the expected country (default ``"US"``).
+
+    Blueprint §2: pre-flight geo assertion — caller may choose to abort the
+    cycle and rotate proxy/session on this error.
+    """
 
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo  # type: ignore[import]
@@ -100,7 +113,118 @@ def init_maxmind_reader(mmdb_path: str | None = None) -> None:
         ) from exc
     with _MAXMIND_READER_LOCK:
         _MAXMIND_READER = geoip2_database.Reader(path)
+    try:
+        globals()["_MAXMIND_FILE_MTIME"] = os.path.getmtime(path)
+    except OSError:  # pragma: no cover - defensive
+        pass
     _log.info("MaxMind GeoLite2 reader initialised from '%s'.", path)
+
+
+# ── MaxMind hot-reload (D1) ────────────────────────────────────────────────
+# In-process background thread that checks mtime on the .mmdb file every
+# MAXMIND_RELOAD_INTERVAL_HOURS (default 24) and atomically swaps the reader
+# when the file changes.  Complements (but does not require) an external
+# cron/systemd refresher — see README "Production Deployment".
+_MAXMIND_RELOAD_INTERVAL_HOURS = int(
+    os.environ.get("MAXMIND_RELOAD_INTERVAL_HOURS", "24")
+)
+_MAXMIND_FILE_MTIME: float | None = None
+_MAXMIND_RELOAD_THREAD: threading.Thread | None = None
+_MAXMIND_RELOAD_STOP = threading.Event()
+# Grace period (seconds) before closing the previous reader so in-flight
+# lookups that already captured a local reference finish safely.
+_MAXMIND_SWAP_GRACE_SECONDS = 5
+
+
+def _get_mmdb_path() -> str:
+    """Return the configured MaxMind database file path."""
+    return os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+
+
+def _atomic_swap_reader() -> None:
+    """Create a fresh Reader from the current mmdb file and swap it in.
+
+    The assignment to ``_MAXMIND_READER`` is a single-opcode rebinding, so
+    concurrent readers either see the old or the new reader — never a
+    half-constructed object.  The old reader is closed after a short grace
+    period on a background thread so in-flight ``maxmind_lookup_zip`` calls
+    can complete against their local reference.
+    """
+    global _MAXMIND_READER, _MAXMIND_FILE_MTIME  # pylint: disable=global-statement
+    path = _get_mmdb_path()
+    try:
+        geoip2_database = importlib.import_module("geoip2.database")
+    except ImportError:
+        _log.warning("_atomic_swap_reader: geoip2 package missing; skip swap")
+        return
+    new_reader = geoip2_database.Reader(path)
+    old_reader = _MAXMIND_READER
+    _MAXMIND_READER = new_reader  # single-opcode rebinding (GIL-atomic)
+    try:
+        _MAXMIND_FILE_MTIME = os.path.getmtime(path)
+    except OSError:
+        _MAXMIND_FILE_MTIME = None
+    if old_reader is not None and old_reader is not new_reader:
+        def _close_after_grace(reader):
+            try:
+                if _MAXMIND_RELOAD_STOP.wait(_MAXMIND_SWAP_GRACE_SECONDS):
+                    # Stop requested during grace period; still close the reader.
+                    pass
+                close = getattr(reader, "close", None)
+                if callable(close):
+                    close()
+            except Exception as exc:  # pylint: disable=broad-except
+                _log.debug("_atomic_swap_reader: close old reader failed: %s", exc)
+        threading.Thread(
+            target=_close_after_grace,
+            args=(old_reader,),
+            daemon=True,
+            name="maxmind-old-reader-close",
+        ).start()
+    _log.info("MaxMind reader hot-swapped from '%s'.", path)
+
+
+def _maxmind_reload_loop() -> None:
+    """Background loop: wake every interval, swap reader if mtime changed."""
+    interval_s = _MAXMIND_RELOAD_INTERVAL_HOURS * 3600
+    while not _MAXMIND_RELOAD_STOP.wait(interval_s):
+        try:
+            path = _get_mmdb_path()
+            mtime = os.path.getmtime(path)
+            if _MAXMIND_FILE_MTIME is not None and mtime > _MAXMIND_FILE_MTIME:
+                _atomic_swap_reader()
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning("MaxMind reload check failed: %s", exc)
+
+
+def start_maxmind_auto_reload() -> None:
+    """Start the background thread that hot-reloads the MaxMind DB.
+
+    No-op if the thread is already running.  Safe to call at startup after
+    :func:`init_maxmind_reader`.  The thread is a daemon and will be torn
+    down automatically on process exit; call :func:`stop_maxmind_auto_reload`
+    for graceful shutdown.
+    """
+    global _MAXMIND_RELOAD_THREAD  # pylint: disable=global-statement
+    if _MAXMIND_RELOAD_THREAD is not None and _MAXMIND_RELOAD_THREAD.is_alive():
+        return
+    _MAXMIND_RELOAD_STOP.clear()
+    _MAXMIND_RELOAD_THREAD = threading.Thread(
+        target=_maxmind_reload_loop,
+        daemon=True,
+        name="maxmind-auto-reload",
+    )
+    _MAXMIND_RELOAD_THREAD.start()
+
+
+def stop_maxmind_auto_reload() -> None:
+    """Signal the reload thread to stop and join with a 5s timeout."""
+    global _MAXMIND_RELOAD_THREAD  # pylint: disable=global-statement
+    _MAXMIND_RELOAD_STOP.set()
+    thread = _MAXMIND_RELOAD_THREAD
+    if thread is not None:
+        thread.join(timeout=5)
+    _MAXMIND_RELOAD_THREAD = None
 
 # ── PII redaction patterns ────────────────────────────────────────────────
 # Matches 16-digit PAN-like sequences in plain (4111111111111111),
@@ -346,6 +470,164 @@ def _get_current_ip_best_effort() -> str | None:
         and delegates to :func:`_get_proxy_ip`.
     """
     return _get_proxy_ip()
+
+
+# ── Session init helpers (Blueprint §2, §3, §6) ────────────────────────────
+
+def close_extra_tabs(driver) -> int:
+    """Close all browser tabs except the first one. Return count closed.
+
+    Blueprint §2 Tab Janitor: BitBrowser profiles often open with extra
+    ad/junk tabs.  The janitor must close them BEFORE pre-flight geo check
+    so ``window_handles`` count does not confuse ``detect_page_state``.
+
+    Args:
+        driver: A Selenium-compatible driver exposing ``window_handles``,
+            ``switch_to.window(handle)`` and ``close()``.
+
+    Returns:
+        The number of extra tabs successfully closed.  Individual close
+        failures are swallowed with a warning log so the janitor never
+        crashes the calling flow.
+    """
+    handles = driver.window_handles
+    if len(handles) <= 1:
+        return 0
+    main = handles[0]
+    closed = 0
+    for handle in handles[1:]:
+        try:
+            driver.switch_to.window(handle)
+            driver.close()
+            closed += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning("close_extra_tabs: failed to close %s: %s", handle, exc)
+    try:
+        driver.switch_to.window(main)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("close_extra_tabs: failed to switch back to main: %s", exc)
+    return closed
+
+
+def preflight_geo_check(driver, expected_country: str = "US") -> dict:
+    """Navigate to ``URL_GEO_CHECK`` and assert the public IP is in ``expected_country``.
+
+    Blueprint §2: strict pre-flight geo assertion executed once per cycle.
+    Unlike the :meth:`GivexDriver.preflight_geo_check` method (which also
+    drives the UTC-offset adjustment for typing cadence), this standalone
+    helper focuses on the single concern of asserting the proxy geo and
+    raising a typed exception that the caller can route.
+
+    Args:
+        driver: A Selenium-compatible driver exposing ``get`` and
+            ``find_element``.
+        expected_country: Two-letter country code to assert against the
+            ``country`` field in the JSON response.  Defaults to ``"US"``.
+
+    Returns:
+        The parsed JSON response dict on success.
+
+    Raises:
+        GeoCheckFailedError: When the JSON response's ``country`` field does
+            not equal ``expected_country`` or the response body is malformed.
+        SessionFlaggedError: When the browser window is lost mid-navigation
+            (``NoSuchWindowException``) — caller should rotate session.
+    """
+    # Import selenium exception lazily so the module remains importable in
+    # environments where selenium is stubbed/absent.
+    try:
+        from selenium.common.exceptions import NoSuchWindowException  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - selenium always present in prod
+        class NoSuchWindowException(Exception):  # type: ignore[no-redef]
+            """Fallback stub when selenium is unavailable."""
+
+    try:
+        driver.get(URL_GEO_CHECK)
+        body = driver.find_element("tag name", "body").text
+    except NoSuchWindowException as exc:
+        raise SessionFlaggedError("Window lost during geo check") from exc
+
+    try:
+        data = _json.loads(body)
+    except (ValueError, TypeError) as exc:
+        raise GeoCheckFailedError(
+            f"Malformed geo-check response: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise GeoCheckFailedError(
+            f"Geo-check response was not a JSON object: {type(data).__name__}"
+        )
+    actual = data.get("country")
+    if actual != expected_country:
+        raise GeoCheckFailedError(
+            f"Expected country {expected_country!r}, got {actual!r}"
+        )
+    return data
+
+
+_HARD_RESET_JS = """
+try { window.localStorage.clear(); } catch(e) {}
+try { window.sessionStorage.clear(); } catch(e) {}
+try {
+  document.cookie.split(';').forEach(function(c) {
+    document.cookie = c.replace(/^ +/, '').replace(/=.*/, '=;expires=' + new Date().toUTCString() + ';path=/');
+  });
+} catch(e) {}
+"""
+
+
+def hard_reset_browser_state(driver) -> None:
+    """Clear cookies, localStorage, and sessionStorage (Blueprint §3 Hard-Reset).
+
+    Must be called AFTER navigating to the target same-origin URL (e.g.
+    ``/e-gifts/``) but BEFORE any form interaction.  The JS block wraps each
+    storage clear in its own ``try/catch`` so a page with disabled storage
+    APIs does not abort the reset.  ``driver.delete_all_cookies`` is invoked
+    as a Selenium-level safety net; exceptions from either step are logged
+    and swallowed so the caller may continue.
+    """
+    try:
+        driver.execute_script(_HARD_RESET_JS)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.debug("hard_reset_browser_state: execute_script skipped: %s", exc)
+    try:
+        driver.delete_all_cookies()
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.debug("hard_reset_browser_state: delete_all_cookies skipped: %s", exc)
+
+
+def handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20)) -> bool:
+    """Focus-Shift Retry per Blueprint §6 Ngã rẽ 1.
+
+    Steps:
+      1. Click a neutral point (e.g. ``(20, 20)`` on the page ``body``) to
+         shift focus away from the locked submit button.
+      2. Wait 0.5s to let any animation settle.
+      3. Re-locate ``SEL_COMPLETE_PURCHASE`` and click it once via
+         ``ActionChains.click``.
+
+    This helper executes **exactly once** per invocation and never retries
+    internally — the caller is responsible for enforcing the one-retry-per-
+    cycle cap (Blueprint rule).  Returns ``True`` on apparent success and
+    ``False`` on any exception (already logged).
+
+    Args:
+        driver: Selenium-compatible driver.
+        neutral_xy: Pixel offset from the current mouse position for the
+            neutral click.  Defaults to ``(20, 20)``.
+    """
+    if _ActionChains is None:  # pragma: no cover - selenium always present in prod
+        _log.warning("handle_ui_lock_focus_shift: ActionChains unavailable")
+        return False
+    try:
+        _ActionChains(driver).move_by_offset(*neutral_xy).click().perform()
+        time.sleep(0.5)
+        btn = driver.find_element("css selector", SEL_COMPLETE_PURCHASE)
+        _ActionChains(driver).move_to_element(btn).click().perform()
+        return True
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("focus_shift_retry failed: %s", exc)
+        return False
 
 
 class GivexDriver:
