@@ -232,7 +232,6 @@ class TestDeprecationSignalling(unittest.TestCase):
 
     def setUp(self):
         sched.reset()
-        sched._ROLLOUT_MANAGED_BY_RUNTIME = True
         rollout.reset()
         monitor.reset()
 
@@ -240,30 +239,35 @@ class TestDeprecationSignalling(unittest.TestCase):
         sched.reset()
 
     def test_start_scheduler_emits_deprecation_warning(self):
+        """start_scheduler emits DeprecationWarning on the shim call path."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sched.start_scheduler(interval=60.0)
         self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_stop_scheduler_emits_deprecation_warning(self):
+        """stop_scheduler emits DeprecationWarning on the shim call path."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sched.stop_scheduler(timeout=1.0)
         self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_get_scheduler_status_emits_deprecation_warning(self):
+        """get_scheduler_status emits DeprecationWarning on the shim call path."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sched.get_scheduler_status()
         self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_advance_step_emits_deprecation_warning(self):
+        """advance_step emits DeprecationWarning on the shim call path."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sched.advance_step()
         self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_reset_emits_deprecation_warning(self):
+        """reset emits DeprecationWarning on the shim call path."""
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             sched.reset()
