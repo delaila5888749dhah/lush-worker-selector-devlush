@@ -10,7 +10,7 @@ returned callable wires the full browser lifecycle for one work cycle:
   4. Wrap in ``GivexDriver``.
   5. Register driver + PID + profile with the CDP registry (F-03).
   6. Probe ``add_cdp_listener`` availability (U-06 guard).
-  7. Resolve proxy/public IP → zip code via MaxMind (F-07).
+  7. Resolve proxy IP → zip code via MaxMind (F-07).
   8. Execute purchase cycle via ``run_cycle`` when a task_source is wired.
   9. On **all** exits: ``cdp.unregister_driver()`` (GAP-CDP-01).
 
@@ -20,6 +20,7 @@ the flag itself so that tests can import and exercise it freely.
 """
 import importlib
 import logging
+import uuid
 from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
@@ -80,7 +81,9 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 from integration.runtime import probe_cdp_listener_support  # noqa: PLC0415
                 probe_cdp_listener_support(selenium_driver)
 
-                # Resolve proxy/public IP → zip code via MaxMind (F-07)
+                # Resolve proxy IP → zip code via MaxMind (F-07).
+                # The proxy IP is extracted from the PROXY_SERVER env var or
+                # the driver's proxy attribute — no external HTTP calls.
                 zip_code: Optional[str] = None
                 try:
                     detected_ip = _get_current_ip_best_effort()
@@ -104,15 +107,23 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                         worker_id,
                     )
 
-                # Run purchase cycle when a task source is wired (F-02/F-07)
+                # Run purchase cycle when a task source is wired (F-02/F-07).
+                # A CycleContext is created once per cycle so that billing is
+                # locked for the entire cycle (P5: billing fixed across card retries).
                 if task_source is not None:
                     task = task_source(worker_id)
                     if task is not None:
+                        from modules.common.types import CycleContext  # noqa: PLC0415
+                        ctx = CycleContext(
+                            cycle_id=uuid.uuid4().hex,
+                            worker_id=worker_id,
+                            zip_code=zip_code,
+                        )
                         orchestrator_module = importlib.import_module(
                             "integration.orchestrator"
                         )
                         run_cycle = orchestrator_module.run_cycle
-                        run_cycle(task, zip_code=zip_code, worker_id=worker_id)
+                        run_cycle(task, zip_code=zip_code, worker_id=worker_id, ctx=ctx)
                 else:
                     _log.debug(
                         "worker=%s profile=%s driver registered; "

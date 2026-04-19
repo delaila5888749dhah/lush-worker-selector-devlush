@@ -6,7 +6,9 @@ import logging
 import os
 import random
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from modules.common.exceptions import CycleExhaustedError
 from modules.common.types import BillingProfile
@@ -19,7 +21,28 @@ _logger = logging.getLogger(__name__)
 _reload_requested: bool = False  # pylint: disable=invalid-name
 _RELOAD_FLAG_LOCK = threading.Lock()
 
-_EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "icloud.com")
+# ── Per-worker billing state (P4) ─────────────────────────────────────────
+# Master pool: loaded once at startup (or lazily on first use).  Each worker
+# receives its own independently-shuffled copy so workers never share state.
+_MASTER_POOL: List[BillingProfile] = []
+_MASTER_POOL_LOCK = threading.Lock()
+_MASTER_POOL_LOADED: bool = False  # pylint: disable=invalid-name
+
+_WORKER_STATES: Dict[str, "WorkerBillingState"] = {}
+_WORKER_STATES_LOCK = threading.Lock()
+
+
+@dataclass
+class WorkerBillingState:
+    """Per-worker billing pool state.  Each worker owns an independently
+    shuffled copy of the master profile list and an independent index pointer
+    for sequential (anti-repeat) selection."""
+
+    profiles: List[BillingProfile]
+    index: int = 0
+    rng: random.Random = field(default_factory=random.Random)
+
+_EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "hotmail.com")
 _PHONE_FIRST_DIGITS = "23456789"
 _PHONE_OTHER_DIGITS = "0123456789"
 _HEX_CHARS = "0123456789abcdef"
@@ -119,7 +142,12 @@ def _pool_dir() -> Path:
 
 
 def _reset_state() -> None:
-    global _profiles, _reload_requested
+    global _profiles, _reload_requested, _MASTER_POOL, _MASTER_POOL_LOADED, _WORKER_STATES
+    with _MASTER_POOL_LOCK:
+        _MASTER_POOL = []
+        _MASTER_POOL_LOADED = False
+    with _WORKER_STATES_LOCK:
+        _WORKER_STATES = {}
     with _LOAD_LOCK:
         with _lock:
             _profiles = collections.deque()
@@ -235,6 +263,74 @@ def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
     return collections.deque(profiles)
 
 
+def load_billing_pool() -> int:
+    """Eagerly load the billing pool from disk into the master pool and legacy deque.
+
+    Call once at startup (before workers start) to populate both the legacy
+    ``_profiles`` deque (used when ``worker_id`` is omitted) and the new
+    ``_MASTER_POOL`` list (used for per-worker shuffled copies).
+
+    Returns:
+        Number of profiles loaded.
+
+    This is a no-op if the pool is already loaded; subsequent calls return
+    the current pool size without re-reading disk.
+    """
+    global _MASTER_POOL, _MASTER_POOL_LOADED, _profiles  # pylint: disable=global-statement
+    with _MASTER_POOL_LOCK:
+        if _MASTER_POOL_LOADED:
+            return len(_MASTER_POOL)
+        loaded_deque = _read_profiles_from_disk()
+        master = list(loaded_deque)
+        _MASTER_POOL = master
+        _MASTER_POOL_LOADED = True
+    with _LOAD_LOCK:
+        with _lock:
+            if not _profiles:
+                _profiles = loaded_deque
+    count = len(_MASTER_POOL)
+    _logger.info("Billing pool eagerly loaded at startup: %d profiles.", count)
+    return count
+
+
+def _ensure_master_pool_loaded() -> None:
+    """Lazily load the master pool from disk if not yet loaded.
+
+    Thread-safe.  Subsequent calls after the first load are no-ops.
+    """
+    global _MASTER_POOL, _MASTER_POOL_LOADED  # pylint: disable=global-statement
+    with _MASTER_POOL_LOCK:
+        if _MASTER_POOL_LOADED:
+            return
+        loaded_deque = _read_profiles_from_disk()
+        _MASTER_POOL = list(loaded_deque)
+        _MASTER_POOL_LOADED = True
+        _logger.info(
+            "Billing master pool lazily loaded: %d profiles.", len(_MASTER_POOL)
+        )
+
+
+def get_worker_state(worker_id: str) -> "WorkerBillingState":
+    """Return the per-worker :class:`WorkerBillingState`, creating it on first access.
+
+    On first access for *worker_id* the master pool is copied, shuffled with a
+    per-worker seed, and stored.  Subsequent calls return the same state object.
+
+    Thread-safe: uses :data:`_WORKER_STATES_LOCK`.
+    """
+    with _WORKER_STATES_LOCK:
+        if worker_id in _WORKER_STATES:
+            return _WORKER_STATES[worker_id]
+        # Ensure master pool is available before creating worker state.
+        _ensure_master_pool_loaded()
+        profiles = list(_MASTER_POOL)
+        rng = random.Random(hash(worker_id) ^ id(worker_id))
+        rng.shuffle(profiles)
+        state = WorkerBillingState(profiles=profiles, rng=rng)
+        _WORKER_STATES[worker_id] = state
+        return state
+
+
 def _get_fill_rng(persona_seed: int | None = None) -> random.Random:
     """Get per-thread or per-persona deterministic RNG."""
     if persona_seed is not None:
@@ -311,8 +407,93 @@ def _fill_missing(profile: BillingProfile) -> BillingProfile:
     )
 
 
-def select_profile(zip_code: str | int | None = None) -> BillingProfile:
-    global _profiles, _reload_requested
+def select_profile(
+    zip_code: str | int | None = None,
+    worker_id: Optional[str] = None,
+) -> BillingProfile:
+    """Select a billing profile from the pool.
+
+    When *worker_id* is ``None`` (default), the legacy global-deque path is
+    used — all existing callers that omit *worker_id* see unchanged behaviour.
+
+    When *worker_id* is provided, the per-worker path is used:
+    each worker gets its own independently-shuffled copy of the master pool
+    and an independent sequential index pointer.
+
+    Per-worker selection algorithm:
+      1. Search from ``state.index`` forward (with wrap-around) for a profile
+         whose ``zip_code`` matches the requested *zip_code*.
+      2. If found: return it **without** advancing ``state.index`` (blueprint
+         rule — the pointer is reserved for the sequential fallback).
+      3. If not found: return ``state.profiles[state.index]``, then advance
+         ``state.index = (state.index + 1) % len(state.profiles)``.
+
+    Args:
+        zip_code: Optional zip/postal code for affinity matching.
+        worker_id: When supplied, enables per-worker state isolation
+            (anti-repeat + independent shuffle).
+
+    Returns:
+        A :class:`~modules.common.types.BillingProfile` with ``phone`` and
+        ``email`` guaranteed to be set (auto-generated if missing in the file).
+
+    Raises:
+        CycleExhaustedError: If the billing pool is empty or below the
+            configured minimum threshold.
+        ValueError: If *zip_code* has an unsupported type.
+    """
+    if worker_id is not None:
+        return _select_profile_per_worker(zip_code, worker_id)
+    return _select_profile_legacy(zip_code)
+
+
+def _select_profile_per_worker(
+    zip_code: str | int | None,
+    worker_id: str,
+) -> BillingProfile:
+    """Per-worker profile selection with independent shuffled list + index pointer."""
+    normalized_zip = _normalize_zip(zip_code)
+    state = get_worker_state(worker_id)
+
+    with _WORKER_STATES_LOCK:
+        profiles = state.profiles
+        if not profiles:
+            pool_dir = _pool_dir()
+            raise CycleExhaustedError(
+                f"No billing profiles available for worker '{worker_id}' "
+                f"(pool_dir='{pool_dir}')"
+            )
+        if _MIN_BILLING_PROFILES > 0 and len(profiles) < _MIN_BILLING_PROFILES:
+            raise CycleExhaustedError(
+                f"Billing pool has {len(profiles)} profiles, "
+                f"below minimum threshold {_MIN_BILLING_PROFILES}."
+            )
+
+        n = len(profiles)
+        # Search from state.index forward for a profile matching zip_code.
+        if normalized_zip:
+            for offset in range(n):
+                i = (state.index + offset) % n
+                if _normalize_zip(profiles[i].zip_code) == normalized_zip:
+                    profile = profiles[i]
+                    if profile.phone is None or profile.email is None:
+                        profile = _fill_missing(profile)
+                        profiles[i] = profile
+                    # Do NOT advance state.index (blueprint rule).
+                    return profile
+
+        # No zip match (or no zip requested): use sequential pointer, advance it.
+        profile = profiles[state.index]
+        if profile.phone is None or profile.email is None:
+            profile = _fill_missing(profile)
+            profiles[state.index] = profile
+        state.index = (state.index + 1) % n
+        return profile
+
+
+def _select_profile_legacy(zip_code: str | int | None) -> BillingProfile:
+    """Legacy global-deque profile selection (unchanged behaviour)."""
+    global _profiles, _reload_requested  # pylint: disable=global-statement
     normalized_zip = _normalize_zip(zip_code)
 
     # Hot-reload: if a reload was requested (e.g., after CB pause), invalidate cache.
@@ -374,3 +555,4 @@ def select_profile(zip_code: str | int | None = None) -> BillingProfile:
             profile = _fill_missing(profile)
         _profiles.append(profile)
         return profile
+

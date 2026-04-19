@@ -427,6 +427,13 @@ class TestAppMainProductionPath(unittest.TestCase):
                 "integration.worker_task.make_task_fn",
                 return_value=fake_task_fn,
             ),
+            # Patch at the implementation level so the patches survive importlib.reload.
+            # _startup_check_geoip calls os.path.exists for the MMDB file;
+            # make it look like the file exists, and no-op the actual reader init.
+            patch("os.path.exists", return_value=True),
+            patch("modules.cdp.driver.init_maxmind_reader"),
+            # _startup_load_billing_pool calls billing.load_billing_pool; no-op it.
+            patch("modules.billing.main.load_billing_pool", return_value=0),
         ):
             import app.__main__ as app_main
             import importlib

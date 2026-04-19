@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -68,3 +69,24 @@ class WorkerTask:
                 raise TypeError(
                     f"order_queue[{i}] must be a CardInfo instance, got {type(card)!r}"
                 )
+
+
+@dataclass
+class CycleContext:
+    """Mutable context object scoped to one payment cycle (across card-swap retries).
+
+    ``billing_profile`` is populated once by :func:`integration.orchestrator.run_cycle`
+    on the first attempt and **reused on all subsequent card-swap retries** within
+    the same cycle.  This ensures billing name, address, phone, and email remain
+    constant while only the card fields change.
+
+    A new :class:`CycleContext` must be created for every fully new cycle (new
+    order / new worker run).
+    """
+
+    cycle_id: str
+    worker_id: str
+    billing_profile: Optional[BillingProfile] = None
+    zip_code: Optional[str] = None
+    card_attempts: int = 0
+

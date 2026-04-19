@@ -13,10 +13,13 @@ import logging
 import os
 import re as _re
 import secrets
+import socket
+import threading
 import time
 import datetime
 import importlib
 import ipaddress
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -56,6 +59,48 @@ except ImportError:
     _BehaviorStateMachine = _DelayEngine = None
 
 _log = logging.getLogger(__name__)
+
+# ── MaxMind GeoLite2 singleton ────────────────────────────────────────────
+# Loaded once at startup via init_maxmind_reader(); subsequent lookups reuse
+# the open Reader object, keeping latency effectively <1ms (RAM only, no I/O).
+_MAXMIND_READER = None  # pylint: disable=invalid-name
+_MAXMIND_READER_LOCK = threading.Lock()
+
+
+def init_maxmind_reader(mmdb_path: str | None = None) -> None:
+    """Load the GeoLite2-City database into the module-level singleton.
+
+    Call once at application startup, before any :func:`maxmind_lookup_zip` or
+    :func:`_lookup_maxmind_utc_offset` calls, to preload the DB into RAM and
+    eliminate per-lookup disk I/O.
+
+    Args:
+        mmdb_path: Override path to the ``.mmdb`` file.  Falls back to the
+            ``GEOIP_DB_PATH`` environment variable, then the default
+            ``data/GeoLite2-City.mmdb``.
+
+    Raises:
+        FileNotFoundError: If the database file is not found at the resolved path.
+        ImportError: If the ``geoip2`` package is not installed.
+    """
+    global _MAXMIND_READER  # pylint: disable=global-statement,invalid-name
+    path = mmdb_path or os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"MaxMind GeoLite2 database not found at '{path}'. "
+            "Run scripts/download_maxmind.py (requires MAXMIND_LICENSE_KEY) "
+            "to download the database."
+        )
+    try:
+        geoip2_database = importlib.import_module("geoip2.database")
+    except ImportError as exc:
+        raise ImportError(
+            "geoip2 package is required for MaxMind lookups. "
+            "Install it with: pip install geoip2"
+        ) from exc
+    with _MAXMIND_READER_LOCK:
+        _MAXMIND_READER = geoip2_database.Reader(path)
+    _log.info("MaxMind GeoLite2 reader initialised from '%s'.", path)
 
 # ── PII redaction patterns ────────────────────────────────────────────────
 # Matches 16-digit PAN-like sequences in plain (4111111111111111),
@@ -156,27 +201,49 @@ def _random_greeting() -> str:
 
 
 def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
-    """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb."""
+    """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb.
+
+    Uses the module-level singleton reader when available (initialised via
+    :func:`init_maxmind_reader`); falls back to a per-call open for backward
+    compatibility in stub/test mode (with a warning log).
+    """
     if _ZoneInfo is None:
         return None
-    mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
-    if not os.path.exists(mmdb_path):
+    reader = _MAXMIND_READER
+    if reader is None:
+        # Lazy per-call fallback for test/stub mode; not latency-optimal.
+        mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+        if not os.path.exists(mmdb_path):
+            return None
+        try:
+            geoip2_database = importlib.import_module("geoip2.database")
+        except ImportError:
+            return None
+        try:
+            with geoip2_database.Reader(mmdb_path) as _reader:
+                record = _reader.city(ip_addr)
+                tz_name = record.location.time_zone
+                if tz_name:
+                    tz_info = _ZoneInfo(tz_name)
+                    now = datetime.datetime.now(tz_info)
+                    offset = now.utcoffset()
+                    if offset is None:
+                        return None
+                    return int(offset.total_seconds() // 3600)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
         return None
+    # Singleton path: no disk I/O, <1ms latency.
     try:
-        geoip2_database = importlib.import_module("geoip2.database")
-    except ImportError:
-        return None
-    try:
-        with geoip2_database.Reader(mmdb_path) as reader:
-            record = reader.city(ip_addr)
-            tz_name = record.location.time_zone
-            if tz_name:
-                tz_info = _ZoneInfo(tz_name)
-                now = datetime.datetime.now(tz_info)
-                offset = now.utcoffset()
-                if offset is None:
-                    return None
-                return int(offset.total_seconds() // 3600)
+        record = reader.city(ip_addr)
+        tz_name = record.location.time_zone
+        if tz_name:
+            tz_info = _ZoneInfo(tz_name)
+            now = datetime.datetime.now(tz_info)
+            offset = now.utcoffset()
+            if offset is None:
+                return None
+            return int(offset.total_seconds() // 3600)
     except Exception as exc:  # pylint: disable=broad-except
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None
@@ -185,9 +252,9 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
 def maxmind_lookup_zip(ip_addr: str) -> str | None:
     """Look up postal/zip code for an IP using MaxMind GeoLite2-City.mmdb.
 
-    Parallel to :func:`_lookup_maxmind_utc_offset`; uses the same database
-    path resolved from the ``GEOIP_DB_PATH`` environment variable or the
-    ``data/GeoLite2-City.mmdb`` default.
+    Uses the module-level singleton reader when available (initialised via
+    :func:`init_maxmind_reader` at startup); falls back to a per-call open
+    for backward compatibility in stub/test mode (with a warning log).
 
     Args:
         ip_addr: IPv4 or IPv6 address string.
@@ -197,39 +264,89 @@ def maxmind_lookup_zip(ip_addr: str) -> str | None:
         database is absent, ``geoip2`` is not installed, the record carries
         no postal code, or any lookup error occurs.
     """
-    mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
-    if not os.path.exists(mmdb_path):
+    reader = _MAXMIND_READER
+    if reader is None:
+        # Lazy per-call fallback for test/stub mode.
+        mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+        if not os.path.exists(mmdb_path):
+            return None
+        try:
+            geoip2_database = importlib.import_module("geoip2.database")
+        except ImportError:
+            return None
+        try:
+            with geoip2_database.Reader(mmdb_path) as _reader:
+                record = _reader.city(ip_addr)
+                postal_code = record.postal.code
+                if postal_code:
+                    return postal_code
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug("MaxMind zip lookup failed for %s: %s", ip_addr, exc)
         return None
+    # Singleton path: no disk I/O, <1ms latency.
     try:
-        geoip2_database = importlib.import_module("geoip2.database")
-    except ImportError:
-        return None
-    try:
-        with geoip2_database.Reader(mmdb_path) as reader:
-            record = reader.city(ip_addr)
-            postal_code = record.postal.code
-            if postal_code:
-                return postal_code
+        record = reader.city(ip_addr)
+        postal_code = record.postal.code
+        return postal_code or None
     except Exception as exc:  # pylint: disable=broad-except
         _log.debug("MaxMind zip lookup failed for %s: %s", ip_addr, exc)
     return None
 
 
-def _get_current_ip_best_effort() -> str | None:
-    """Return current public IP using a short best-effort ipify request."""
-    try:
-        with urllib.request.urlopen(  # nosec B310
-            "https://api.ipify.org", timeout=3,
-        ) as response:
-            ip_value = response.read().decode("utf-8").strip()
-            if not ip_value:
-                return None
-            ipaddress.ip_address(ip_value)
-            return ip_value
-    except (urllib.error.URLError, TimeoutError,
-            OSError, ValueError, UnicodeDecodeError) as exc:
-        _log.debug("Public IP lookup failed: %s", exc)
+def _get_proxy_ip(proxy_str: str | None = None) -> str | None:
+    """Extract the proxy host IP from a proxy string via local DNS only.
+
+    No external HTTP requests are made.  The proxy string is parsed using
+    :func:`urllib.parse.urlparse`; if the host is already an IPv4/IPv6
+    address it is returned directly.  Otherwise a single local DNS resolution
+    via :func:`socket.gethostbyname` is performed.
+
+    Args:
+        proxy_str: Proxy URL/address, e.g. ``http://user:pass@1.2.3.4:8080``,
+            ``1.2.3.4:8080``, or a hostname:port pair.  When ``None``, the
+            ``PROXY_SERVER`` environment variable is consulted as a fallback.
+
+    Returns:
+        IPv4 string on success, or ``None`` if no proxy is configured or
+        the host cannot be resolved.
+    """
+    raw = proxy_str
+    if not raw:
+        raw = os.environ.get("PROXY_SERVER", "").strip()
+    if not raw:
         return None
+    # Ensure urlparse receives a scheme so hostname is parsed correctly.
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        host = parsed.hostname
+        if not host:
+            return None
+        # Try to validate as a literal IP address first.
+        try:
+            ipaddress.ip_address(host)
+            return host
+        except ValueError:
+            pass
+        # Resolve hostname via local DNS (no external geo API involved).
+        return socket.gethostbyname(host)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.debug("_get_proxy_ip: could not extract IP from proxy '%s': %s", proxy_str, exc)
+        return None
+
+
+def _get_current_ip_best_effort() -> str | None:
+    """Return proxy IP from PROXY_SERVER env var. No external HTTP calls.
+
+    .. deprecated::
+        Previously called ``api.ipify.org`` (external geo service).  That
+        dependency has been removed.  Use :func:`_get_proxy_ip` directly for
+        new code.  This wrapper reads ``PROXY_SERVER`` from the environment
+        and delegates to :func:`_get_proxy_ip`.
+    """
+    return _get_proxy_ip()
+
 
 class GivexDriver:
     """Automates the Givex e-gift card purchase flow using CDP/Selenium.

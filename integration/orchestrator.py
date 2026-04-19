@@ -867,11 +867,11 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
         )
 
 
-def run_payment_step(task, zip_code=None, worker_id: str = "default"):
+def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=None):
     """Execute one payment attempt.
 
     Steps:
-      1. Select a billing profile from the pool.
+      1. Select a billing profile from the pool (or use *_profile* if provided).
       2. Enable the network watchdog for this worker.
       3. Run the full pre-submit sequence via CDP (preflight_geo → navigate →
          fill eGift form → add to cart → guest checkout → fill payment/billing).
@@ -884,6 +884,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         task: WorkerTask containing card and order information.
         zip_code: Optional zip code for billing profile matching.
         worker_id: Unique identifier for this worker (used to key the watchdog session).
+        _profile: Pre-selected :class:`~modules.common.types.BillingProfile`.
+            When provided, ``billing.select_profile`` is **not** called (billing
+            is locked for the cycle by the caller, e.g. via :class:`CycleContext`).
+            When ``None`` (default), a new profile is selected from the pool.
 
     Returns:
         A (state, total) tuple where state is a State object or None,
@@ -894,7 +898,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default"):
         SessionFlaggedError: if the watchdog times out waiting for the total.
         RuntimeError: if no CDP driver has been registered.
     """
-    profile = billing.select_profile(zip_code)
+    if _profile is not None:
+        profile = _profile
+    else:
+        profile = billing.select_profile(zip_code)
     # Emit audit event AFTER successful selection — never before.
     _emit_billing_audit_event(
         profile=profile,
@@ -1017,16 +1024,32 @@ def handle_outcome(state, order_queue, worker_id: str = "default"):
     return "retry"
 
 
-def run_cycle(task, zip_code=None, worker_id: str = "default"):
+def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
     """Run a full payment cycle for a WorkerTask.
 
     Initializes the FSM, executes one payment attempt, and returns the
     outcome action together with the final state and confirmed total.
 
+    When *ctx* is supplied (a :class:`~modules.common.types.CycleContext`),
+    the billing profile is locked for the entire cycle:
+
+    * **First call** (``ctx.billing_profile is None``): billing is selected
+      once via :func:`~modules.billing.main.select_profile` and stored in
+      ``ctx.billing_profile``.
+    * **Subsequent calls** with the same *ctx* (e.g. card-swap retries): the
+      already-selected profile is reused — ``billing.select_profile`` is NOT
+      called again.
+
+    When *ctx* is ``None`` (default), a fresh :class:`CycleContext` is created
+    internally and billing is selected once for this invocation (backward-
+    compatible with existing callers that omit *ctx*).
+
     Args:
         task: WorkerTask containing the recipient, amount, and card data.
         zip_code: Optional zip code for billing profile selection.
         worker_id: Unique identifier for this worker.
+        ctx: Optional :class:`~modules.common.types.CycleContext` for
+            cross-retry billing lock.  If ``None``, a new context is created.
 
     Returns:
         A (action, state, total) tuple where action is one of:
@@ -1037,6 +1060,9 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
         SessionFlaggedError: if the watchdog times out.
         RuntimeError: if no CDP driver has been registered.
     """
+    import uuid as _uuid  # noqa: PLC0415
+    from modules.common.types import CycleContext  # noqa: PLC0415
+
     task_id = getattr(task, "task_id", None)
     success = False
     if task_id is not None:
@@ -1047,9 +1073,27 @@ def run_cycle(task, zip_code=None, worker_id: str = "default"):
                 task_id,
             )
             return "complete", None, None
+
+    # Create or receive CycleContext.
+    if ctx is None:
+        ctx = CycleContext(
+            cycle_id=_uuid.uuid4().hex,
+            worker_id=worker_id,
+            zip_code=zip_code,
+        )
+
+    # Select billing profile once per ctx — reuse on card-swap retries.
+    if ctx.billing_profile is None:
+        ctx.billing_profile = billing.select_profile(
+            ctx.zip_code if ctx.zip_code is not None else zip_code,
+            worker_id=worker_id,
+        )
+
     try:
         initialize_cycle(worker_id)
-        state, total = run_payment_step(task, zip_code, worker_id=worker_id)
+        state, total = run_payment_step(
+            task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
+        )
         action = handle_outcome(state, task.order_queue, worker_id=worker_id)
         if action == "complete":
             success = True
