@@ -80,13 +80,13 @@ class TestVbvChallengeWiring(unittest.TestCase):
         gd = GivexDriver(driver)
         order = []
 
-        def record_sleep(_value):
+        def record_wait(_value):
             order.append("sleep")
 
         def record_click(*_args, **_kwargs):
             order.append("click")
 
-        with patch("modules.cdp.driver.time.sleep", side_effect=record_sleep), \
+        with patch("modules.cdp.driver.time.sleep", side_effect=record_wait), \
              patch("modules.cdp.driver.cdp_click_iframe_element", side_effect=record_click), \
              patch("modules.cdp.driver.handle_something_wrong_popup", return_value=False):
             gd.handle_vbv_challenge()

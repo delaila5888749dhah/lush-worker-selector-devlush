@@ -727,7 +727,10 @@ def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
                 # Transient find_elements failures during polling are expected
                 # (stale DOM mid-reload, brief CDP hiccups). Continue polling;
                 # the outer timeout guarantees eventual exit.
-                _log.debug("popup poll: transient find_elements error: %s", exc)
+                _log.debug(
+                    "something_wrong popup poll: transient find_elements error: %s",
+                    exc,
+                )
             time.sleep(0.05)
         else:
             return False
