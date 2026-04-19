@@ -647,7 +647,7 @@ def handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20)) -> bool:
 
 
 def vbv_dynamic_wait(rng: _random.Random | None = None) -> float:
-    """Wait 8–12s for VBV iframe to fully load. Blueprint §6 Ngã rẽ 3.
+    """Wait 8–12s for VBV/3DS iframe to fully load (Blueprint §6 Ngã rẽ 3).
 
     Pure sleep with no DOM interaction. Returns the actual sleep duration.
     """
@@ -663,8 +663,9 @@ def cdp_click_iframe_element(
 ) -> tuple[float, float]:
     """Click element inside iframe via CDP absolute coordinates.
 
-    Blueprint §6 Ngã rẽ 3 — dispatch via Input.dispatchMouseEvent so the event
-    isTrusted=True and bypasses iframe sandbox restrictions.
+    Blueprint §6 Ngã rẽ 3 (VBV/3DS iframe challenge) — dispatch via
+    Input.dispatchMouseEvent so the event isTrusted=True and bypasses iframe
+    sandbox restrictions.
     """
     rng = rng or _random
     base_driver = getattr(driver, "_driver", driver)
@@ -698,8 +699,8 @@ def cdp_click_iframe_element(
 def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
     """Click Close on the 'Something went wrong' popup if present.
 
-    Blueprint §6 Ngã rẽ 3: must click Close (no DOM mutation) to allow the
-    UI framework to reset state cleanly.
+    Blueprint §6 Ngã rẽ 3 (VBV/3DS popup cleanup): must click Close (no DOM
+    mutation) to allow the UI framework to reset state cleanly.
     """
     base_driver = getattr(driver, "_driver", driver)
     selector_by = By.CSS_SELECTOR if By is not None else "css selector"
@@ -1431,12 +1432,8 @@ class GivexDriver:
                     },
                 ):
                     self._driver.execute_cdp_cmd("Input.dispatchKeyEvent", event)
-            except Exception as exc:  # pylint: disable=broad-except
-                _log.warning(
-                    "clear_card_fields_cdp failed for selector %s: %s",
-                    selector,
-                    _sanitize_error(str(exc)),
-                )
+            except Exception:  # pylint: disable=broad-except
+                _log.warning("clear_card_fields_cdp failed; continuing")
 
     def clear_card_fields(self) -> None:
         """Clear all card form fields (best-effort)."""
