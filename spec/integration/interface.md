@@ -1,7 +1,10 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 5.2
+spec-version: 5.3
 
+> **v5.3 Breaking Changes:**
+> - billing.select_profile now accepts optional worker_id parameter for per-worker state isolation (Blueprint §5 billing_pool rule)
+>
 > **v5.0 Breaking Changes:**
 > - CDP functions (detect_page_state, fill_card, fill_billing, clear_card_fields) now require worker_id parameter
 > - Added reset_session(worker_id) public API to watchdog module
@@ -57,7 +60,13 @@ Notes:
 Function: select_profile
 Input:
   - zip_code
+  - worker_id
 Output: BillingProfile
+Notes:
+  - worker_id is optional (default None) — when provided, uses per-worker shuffled list with index pointer (P4 per-worker isolation)
+  - worker_id=None preserves legacy global-deque behaviour for backward compatibility
+  - Zip match: searches from state.index forward, returns match WITHOUT advancing pointer
+  - No zip match: returns state.profiles[state.index], then index = (index + 1) % n
 
 ## Module: cdp
 
@@ -177,6 +186,9 @@ Output: None
 ---
 
 ## Changelog
+
+### v5.3 (2026-04-19)
+- billing.select_profile(zip_code, worker_id=None) — added optional worker_id for per-worker shuffled state (P4 Blueprint compliance).
 
 ### v5.2 (2026-04-12)
 - Added Ext-2 Alerting Rules contract (`modules.observability.alerting`).

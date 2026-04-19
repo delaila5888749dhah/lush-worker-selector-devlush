@@ -122,7 +122,13 @@ Notes:
 Function: select_profile
 Input:
   - zip_code
+  - worker_id
 Output: BillingProfile
+Notes:
+  - worker_id is optional (default None) — when provided, uses per-worker shuffled list with index pointer (P4 per-worker isolation)
+  - worker_id=None preserves legacy global-deque behaviour for backward compatibility
+  - Zip match: searches from state.index forward, returns match WITHOUT advancing pointer
+  - No zip match: returns state.profiles[state.index], then index = (index + 1) % n
 
 ## Module: cdp
 
