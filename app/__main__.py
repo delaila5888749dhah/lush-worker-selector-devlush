@@ -11,6 +11,7 @@ starts with a no-op stub task_fn so this code can merge and coexist with
 existing deployments without forcing an immediate cutover.  Set the flag
 to ``1`` / ``true`` / ``yes`` to activate the production browser lifecycle.
 """
+import atexit
 import logging
 import os
 import sys
@@ -91,6 +92,18 @@ def _startup_check_geoip() -> None:
             "Continuing in stub mode — zip lookups unavailable.",
             mmdb_path, exc,
         )
+        return
+
+    # D1 — hot-reload .mmdb in-process when the file changes on disk.
+    try:
+        from modules.cdp.driver import (  # noqa: PLC0415
+            start_maxmind_auto_reload,
+            stop_maxmind_auto_reload,
+        )
+        start_maxmind_auto_reload()
+        atexit.register(stop_maxmind_auto_reload)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("MaxMind auto-reload thread failed to start: %s", exc)
 
 
 def _startup_load_billing_pool() -> None:
