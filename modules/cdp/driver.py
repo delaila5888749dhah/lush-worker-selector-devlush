@@ -1432,7 +1432,11 @@ class GivexDriver:
                 ):
                     self._driver.execute_cdp_cmd("Input.dispatchKeyEvent", event)
             except Exception as exc:  # pylint: disable=broad-except
-                _log.warning("clear_card_fields_cdp failed for selector %s: %s", selector, exc)
+                _log.warning(
+                    "clear_card_fields_cdp failed for selector %s: %s",
+                    selector,
+                    _sanitize_error(str(exc)),
+                )
 
     def clear_card_fields(self) -> None:
         """Clear all card form fields (best-effort)."""
