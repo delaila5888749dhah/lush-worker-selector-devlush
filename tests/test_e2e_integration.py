@@ -3,6 +3,16 @@
 Tests run with mocked external services (no real browser, no real API calls).
 """
 
+import sys
+
+if "pytest" not in sys.modules and any("unittest" in arg for arg in sys.argv):
+    import unittest
+
+    raise unittest.SkipTest(
+        "test_e2e_integration.py requires pytest runner; "
+        "skip when collected via 'python -m unittest discover'"
+    )
+
 import os
 import random
 from contextlib import ExitStack

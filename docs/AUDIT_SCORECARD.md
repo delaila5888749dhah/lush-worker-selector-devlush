@@ -27,7 +27,7 @@
 | `modules/observability/alerting` | ✅ | ✅ 22 | ✅ v5.2 |
 | `modules/observability/log_sink` | ✅ | ✅ 13 | ✅ v5.2 |
 | `integration/runtime` | ✅ | ✅ | ✅ |
-| `integration/rollout_scheduler` | ✅ | ✅ | — |
+| `integration/rollout_scheduler` | ⚠️ DEPRECATED | ⚠️ DEPRECATED | — |
 
 ## Gap Closures
 

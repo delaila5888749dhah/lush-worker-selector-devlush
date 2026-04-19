@@ -1,10 +1,19 @@
 # DEPRECATED: This scheduler is superseded by integration/runtime._runtime_loop().
 # Controlled by the ROLLOUT_MANAGED_BY_RUNTIME environment variable (default: true = disabled).
-"""Automatic rollout scheduler — manages production rollout via ROLLOUT_STEPS."""
+"""Automatic rollout scheduler — manages production rollout via ROLLOUT_STEPS.
+
+DEPRECATED — use ``integration.runtime`` instead.  This module is a semantic
+shim: the legacy scheduler loop and all internals are retained in-place
+(dormant by default via ``ROLLOUT_MANAGED_BY_RUNTIME=true``) for backward
+compatibility.  Every public entry point now emits a
+:class:`DeprecationWarning`.  Full removal of the legacy internals is
+deferred to a follow-up ``[infra]`` PR.
+"""
 import logging
 import os as _os
 import threading
 import time
+import warnings
 from modules.monitor import main as monitor
 from modules.rollout import main as rollout
 
@@ -87,6 +96,21 @@ def _scheduler_loop(interval):
         _stop_event.wait(timeout=interval)
 
 
+_DEPRECATION_MSG = (
+    "integration.rollout_scheduler is deprecated; use integration.runtime. "
+    "Removal scheduled in next major version."
+)
+
+
+def _warn_deprecated(api: str) -> None:
+    warnings.warn(
+        f"{api}: {_DEPRECATION_MSG}",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    _logger.warning("rollout_scheduler.%s called on deprecated shim", api)
+
+
 def start_scheduler(interval: float = 300.0) -> bool:
     """Start the rollout scheduler loop in a background thread.
 
@@ -95,6 +119,7 @@ def start_scheduler(interval: float = 300.0) -> bool:
 
     Returns True if started, False if already running.
     """
+    _warn_deprecated("start_scheduler")
     with _lock:
         managed = _ROLLOUT_MANAGED_BY_RUNTIME
     if managed:
@@ -125,6 +150,7 @@ def stop_scheduler(timeout: float = 10.0) -> bool:
 
     Returns True if stopped cleanly, False if timed out.
     """
+    _warn_deprecated("stop_scheduler")
     with _lock:
         thread = _scheduler_thread
     if thread is None or not thread.is_alive():
@@ -136,6 +162,7 @@ def stop_scheduler(timeout: float = 10.0) -> bool:
 
 def get_scheduler_status() -> dict:
     """Return scheduler status snapshot."""
+    _warn_deprecated("get_scheduler_status")
     with _lock:
         running = _scheduler_thread is not None and _scheduler_thread.is_alive()
         stable_since = _stable_since
@@ -164,6 +191,7 @@ def advance_step() -> tuple[bool, str]:
 
     Returns (success, reason).
     """
+    _warn_deprecated("advance_step")
     global _stable_since
     if not rollout.can_scale_up():
         return False, "at max step"
@@ -181,6 +209,7 @@ def advance_step() -> tuple[bool, str]:
 
 def reset() -> None:
     """Reset scheduler state. Intended for testing."""
+    _warn_deprecated("reset")
     global _scheduler_thread, _stable_since, _ROLLOUT_MANAGED_BY_RUNTIME  # pylint: disable=global-statement,invalid-name
     _stop_event.set()
     with _lock:

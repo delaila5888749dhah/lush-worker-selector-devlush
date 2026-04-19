@@ -120,6 +120,188 @@ class ScriptTests(unittest.TestCase):
             finally:
                 os.chdir(saved_cwd)
 
+    def test_download_maxmind_checksum_mismatch_returns_1(self):
+        """Mock urlopen returning a wrong checksum → main() returns 1."""
+        module = _load_module("download_maxmind", "scripts/download_maxmind.py")
+        archive_bytes = b"archive-bytes"
+        bad_checksum_bytes = b"0" * 64 + b"  GeoLite2-City.tar.gz\n"
+
+        def _mock_urlopen(url, **_kw):
+            text = str(getattr(url, "full_url", url))
+            if text.endswith("suffix=tar.gz.sha256"):
+                return _FakeResponse(bad_checksum_bytes)
+            if text.endswith("suffix=tar.gz"):
+                return _FakeResponse(archive_bytes)
+            raise AssertionError("Unexpected URL: %s" % text)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            saved_cwd = os.getcwd()
+            try:
+                os.chdir(tmp_dir)
+                with patch.dict(os.environ, {"MAXMIND_LICENSE_KEY": "k"}):
+                    with patch.object(module.urllib.request, "urlopen",
+                                      side_effect=_mock_urlopen):
+                        self.assertEqual(module.main(), 1)
+            finally:
+                os.chdir(saved_cwd)
+
+    def test_download_maxmind_archive_without_mmdb_returns_1(self):
+        """Archive that contains no .mmdb file → main() returns 1."""
+        module = _load_module("download_maxmind", "scripts/download_maxmind.py")
+        # Build a tar.gz with only a README, no .mmdb inside.
+        archive_stream = io.BytesIO()
+        with tarfile.open(fileobj=archive_stream, mode="w:gz") as tar:
+            payload = b"no mmdb here"
+            info = tarfile.TarInfo(name="GeoLite2-City_20260414/README.txt")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        archive_bytes = archive_stream.getvalue()
+        checksum = hashlib.sha256(archive_bytes).hexdigest()
+        checksum_bytes = ("%s  GeoLite2-City.tar.gz\n" % checksum).encode()
+
+        def _mock_urlopen(url, **_kw):
+            text = str(getattr(url, "full_url", url))
+            if text.endswith("suffix=tar.gz.sha256"):
+                return _FakeResponse(checksum_bytes)
+            if text.endswith("suffix=tar.gz"):
+                return _FakeResponse(archive_bytes)
+            raise AssertionError("Unexpected URL: %s" % text)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            saved_cwd = os.getcwd()
+            try:
+                os.chdir(tmp_dir)
+                with patch.dict(os.environ, {"MAXMIND_LICENSE_KEY": "k"}):
+                    with patch.object(module.urllib.request, "urlopen",
+                                      side_effect=_mock_urlopen):
+                        self.assertEqual(module.main(), 1)
+            finally:
+                os.chdir(saved_cwd)
+
+    def test_download_maxmind_urlopen_oserror_returns_1(self):
+        """urlopen raising OSError is caught and returns exit code 1."""
+        module = _load_module("download_maxmind", "scripts/download_maxmind.py")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            saved_cwd = os.getcwd()
+            try:
+                os.chdir(tmp_dir)
+                with patch.dict(os.environ, {"MAXMIND_LICENSE_KEY": "k"}):
+                    with patch.object(module.urllib.request, "urlopen",
+                                      side_effect=OSError("network down")):
+                        self.assertEqual(module.main(), 1)
+            finally:
+                os.chdir(saved_cwd)
+
+    def test_parse_checksum_empty_raises_value_error(self):
+        """_parse_checksum on empty bytes raises ValueError."""
+        module = _load_module("download_maxmind", "scripts/download_maxmind.py")
+        with self.assertRaises(ValueError):
+            module._parse_checksum(b"")  # pylint: disable=protected-access
+
+    # ── seed_billing_pool edge cases ───────────────────────────────
+
+    def test_seed_input_file_not_found_returns_nonzero(self):
+        """Missing input file → CLI returns non-zero and logs an error."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing = os.path.join(tmp_dir, "does_not_exist.csv")
+            output_dir = os.path.join(tmp_dir, "out")
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "seed_billing_pool.py"),
+                 "--input", missing, "--output", output_dir],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+
+    def test_seed_csv_with_bom_handled(self):
+        """CSV file starting with a UTF-8 BOM is processed without crashing."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "profiles.csv")
+            output_dir = os.path.join(tmp_dir, "pool")
+            with open(input_path, "wb") as handle:
+                handle.write(b"\xef\xbb\xbf")  # UTF-8 BOM
+                handle.write(
+                    b"Jane,Doe,123 Main St,Austin,TX,78701,5551231234,jane@example.com\n"
+                )
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "seed_billing_pool.py"),
+                 "--input", input_path, "--output", output_dir],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            txt_files = [
+                name for name in os.listdir(output_dir) if name.endswith(".txt")
+            ]
+            self.assertGreaterEqual(len(txt_files), 1)
+
+    def test_seed_all_rows_skipped_when_too_short(self):
+        """If every row has <6 fields, no output file is produced."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "profiles.csv")
+            output_dir = os.path.join(tmp_dir, "pool")
+            with open(input_path, "w", encoding="utf-8") as handle:
+                handle.write("a,b,c\nd,e\n")
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "seed_billing_pool.py"),
+                 "--input", input_path, "--output", output_dir],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            txt_files = [
+                name for name in os.listdir(output_dir) if name.endswith(".txt")
+            ]
+            self.assertEqual(txt_files, [])
+
+    def test_seed_field_with_comma_quoted_csv(self):
+        """Quoted CSV fields containing commas are preserved as a single value."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "profiles.csv")
+            output_dir = os.path.join(tmp_dir, "pool")
+            with open(input_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    'Jane,Doe,"123 Main St, Apt 4",Austin,TX,78701,5551231234,'
+                    "jane@example.com\n"
+                )
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "seed_billing_pool.py"),
+                 "--input", input_path, "--output", output_dir],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            txt_files = sorted(
+                os.path.join(output_dir, n)
+                for n in os.listdir(output_dir) if n.endswith(".txt")
+            )
+            self.assertEqual(len(txt_files), 1)
+            with open(txt_files[0], "r", encoding="utf-8") as handle:
+                line = handle.read().strip().splitlines()[0]
+            # The full quoted field must survive as a single pipe-separated value.
+            self.assertIn("123 Main St, Apt 4", line)
+
+    def test_seed_overwrites_existing_output_safely(self):
+        """Running twice into the same output dir overwrites batch files safely."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "profiles.csv")
+            output_dir = os.path.join(tmp_dir, "pool")
+            os.makedirs(output_dir)
+            # Pre-seed with a stale file at the slot that run will overwrite.
+            stale = os.path.join(output_dir, "billing_pool_0001.txt")
+            with open(stale, "w", encoding="utf-8") as handle:
+                handle.write("stale content\n")
+            with open(input_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "Jane,Doe,123 Main St,Austin,TX,78701,5551231234,jane@example.com\n"
+                )
+            proc = subprocess.run(  # nosec B603
+                [sys.executable, str(SCRIPTS_DIR / "seed_billing_pool.py"),
+                 "--input", input_path, "--output", output_dir],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(stale, "r", encoding="utf-8") as handle:
+                content = handle.read()
+            self.assertNotIn("stale content", content)
+            self.assertIn("Jane|Doe|", content)
+
 
 if __name__ == "__main__":
     unittest.main()

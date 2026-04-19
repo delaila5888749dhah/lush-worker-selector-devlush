@@ -1,6 +1,7 @@
 """Tests for integration/rollout_scheduler.py — rollout scheduler module."""
 import time
 import unittest
+import warnings
 from unittest.mock import patch
 
 from modules.monitor import main as monitor
@@ -221,6 +222,56 @@ class TestRolloutComplete(SchedulerResetMixin, unittest.TestCase):
         self.assertEqual(rollout.get_current_step_index(), 0)
         status = sched.get_scheduler_status()
         self.assertFalse(status["rollout_complete"])
+
+
+# ── Deprecation signalling ────────────────────────────────────────
+
+
+class TestDeprecationSignalling(unittest.TestCase):
+    """Each public API must emit DeprecationWarning (shim signalling)."""
+
+    def setUp(self):
+        sched.reset()
+        rollout.reset()
+        monitor.reset()
+
+    def tearDown(self):
+        sched.reset()
+
+    def test_start_scheduler_emits_deprecation_warning(self):
+        """start_scheduler emits DeprecationWarning on the shim call path."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sched.start_scheduler(interval=60.0)
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+
+    def test_stop_scheduler_emits_deprecation_warning(self):
+        """stop_scheduler emits DeprecationWarning on the shim call path."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sched.stop_scheduler(timeout=1.0)
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+
+    def test_get_scheduler_status_emits_deprecation_warning(self):
+        """get_scheduler_status emits DeprecationWarning on the shim call path."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sched.get_scheduler_status()
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+
+    def test_advance_step_emits_deprecation_warning(self):
+        """advance_step emits DeprecationWarning on the shim call path."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sched.advance_step()
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+
+    def test_reset_emits_deprecation_warning(self):
+        """reset emits DeprecationWarning on the shim call path."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sched.reset()
+        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
 
 if __name__ == "__main__":
