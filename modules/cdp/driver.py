@@ -788,7 +788,12 @@ class GivexDriver:
         )
 
     def handle_vbv_challenge(self) -> bool:
-        """Cancel a VBV/3DS iframe challenge (Blueprint §6 Fork 3)."""
+        """Cancel a VBV/3DS iframe challenge (Blueprint §6 Fork 3).
+
+        Returns:
+            True when the cancel/close sequence completes, False otherwise.
+            All exceptions are swallowed and logged to keep the main loop alive.
+        """
         try:
             vbv_dynamic_wait(rng=self._get_rng())
             cdp_click_iframe_element(

@@ -1082,6 +1082,8 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
                 try:
                     driver_obj.detect_page_state()
                 except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    # Post-cancel page transitions can briefly invalidate selectors;
+                    # log and continue so the swap flow can proceed.
                     _logger.warning(
                         "[trace=%s] VBV cancel detect_page_state failed for worker=%s: %s",
                         _get_trace_id(),
