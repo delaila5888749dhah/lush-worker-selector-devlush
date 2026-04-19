@@ -1,5 +1,4 @@
 """Tests for MaxMind hot-reload (D1) — driver.py module-level helpers."""
-import os
 import threading
 import time
 import unittest
@@ -65,7 +64,7 @@ class TestMaxMindHotReload(unittest.TestCase):
 
     def test_mtime_change_triggers_swap(self):
         fake_module = MagicMock()
-        fake_module.Reader.side_effect = lambda p: _FakeReader(p)
+        fake_module.Reader.side_effect = _FakeReader
         drv._MAXMIND_READER = _FakeReader("/tmp/old.mmdb")
         drv._MAXMIND_FILE_MTIME = 100.0
 
@@ -86,7 +85,7 @@ class TestMaxMindHotReload(unittest.TestCase):
     def test_swap_is_atomic(self):
         """After _atomic_swap_reader, the module global points to the new reader."""
         fake_module = MagicMock()
-        fake_module.Reader.side_effect = lambda p: _FakeReader(p)
+        fake_module.Reader.side_effect = _FakeReader
         old = _FakeReader("/tmp/old.mmdb")
         drv._MAXMIND_READER = old
 
@@ -106,7 +105,7 @@ class TestMaxMindHotReload(unittest.TestCase):
     def test_concurrent_reads_during_swap_no_crash(self):
         """10 threads call maxmind_lookup_zip while swap happens — no crash."""
         fake_module = MagicMock()
-        fake_module.Reader.side_effect = lambda p: _FakeReader(p)
+        fake_module.Reader.side_effect = _FakeReader
 
         class _LookupReader(_FakeReader):
             def city(self, ip):
