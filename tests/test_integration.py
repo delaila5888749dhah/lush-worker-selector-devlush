@@ -126,14 +126,20 @@ class HandleOutcomeTests(unittest.TestCase):
 
     def test_vbv_3ds_clears_fields_and_returns_await_3ds(self):
         with patch("integration.orchestrator.cdp") as mock_cdp:
+            driver = MagicMock()
+            driver.handle_vbv_challenge.return_value = False
+            mock_cdp._get_driver.return_value = driver
             result = handle_outcome(State("vbv_3ds"), [])
         self.assertEqual(result, "await_3ds")
-        mock_cdp.clear_card_fields.assert_called_once_with(worker_id="default")
+        mock_cdp._get_driver.assert_called_once_with("default")
+        driver.handle_vbv_challenge.assert_called_once()
 
     def test_vbv_3ds_cdp_failure_still_returns_await_3ds(self):
-        """BUG-003: CDP error in clear_card_fields must be swallowed; await_3ds returned."""
+        """BUG-003: CDP error in VBV handling must be swallowed; await_3ds returned."""
         with patch("integration.orchestrator.cdp") as mock_cdp:
-            mock_cdp.clear_card_fields.side_effect = RuntimeError("browser crashed")
+            driver = MagicMock()
+            driver.handle_vbv_challenge.side_effect = RuntimeError("browser crashed")
+            mock_cdp._get_driver.return_value = driver
             result = handle_outcome(State("vbv_3ds"), [])
         self.assertEqual(result, "await_3ds")
 

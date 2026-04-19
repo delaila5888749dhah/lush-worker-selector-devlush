@@ -723,8 +723,11 @@ def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
             try:
                 if base_driver.find_elements(selector_by, SEL_POPUP_SOMETHING_WRONG):
                     break
-            except Exception:
-                pass
+            except Exception as exc:  # pylint: disable=broad-except
+                # Transient find_elements failures during polling are expected
+                # (stale DOM mid-reload, brief CDP hiccups). Continue polling;
+                # the outer timeout guarantees eventual exit.
+                _log.debug("popup poll: transient find_elements error: %s", exc)
             time.sleep(0.05)
         else:
             return False
@@ -783,6 +786,22 @@ class GivexDriver:
             if (_GhostCursor is not None and self._rnd is not None)
             else None
         )
+
+    def handle_vbv_challenge(self) -> bool:
+        """Cancel a VBV/3DS iframe challenge (Blueprint §6 Ngã rẽ 3)."""
+        try:
+            vbv_dynamic_wait(rng=self._get_rng())
+            cdp_click_iframe_element(
+                self,
+                SEL_VBV_IFRAME,
+                SEL_VBV_CANCEL_BTN,
+                rng=self._get_rng(),
+            )
+            handle_something_wrong_popup(self)
+            return True
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning("handle_vbv_challenge failed: %s", _sanitize_error(str(exc)))
+            return False
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 

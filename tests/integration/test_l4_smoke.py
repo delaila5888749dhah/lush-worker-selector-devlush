@@ -263,17 +263,16 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
         Smoke log entry documents:
           - FSM transitioned to 'vbv_3ds'.
           - run_cycle returns 'await_3ds'.
-          - cdp.clear_card_fields() called as part of 3DS cleanup path.
+          - handle_vbv_challenge() invoked as part of 3DS cleanup path.
         """
         _smoke_log.info(
             "SMOKE_LOG | scenario=l4_vbv_3ds | phase=start | "
             "description='VBV/3DS challenge: await_3ds expected'"
         )
-        # For vbv_3ds, the orchestrator calls cdp.clear_card_fields(worker_id).
-        # Our stub driver exposes clear_card_fields() so we can verify it.
+        # For vbv_3ds, the orchestrator attempts handle_vbv_challenge().
         task = _make_task(task_id="l4-smoke-vbv-001")
         stub = _StubGivexDriver(self.worker_id, final_state="vbv_3ds", dom_total="50.00")
-        stub.clear_card_fields = lambda: stub.calls.append("clear_card_fields")
+        stub.handle_vbv_challenge = lambda: stub.calls.append("handle_vbv_challenge") or False
         _cdp_main.register_driver(self.worker_id, stub)
         try:
             with patch("integration.orchestrator.billing", make_mock_billing()):
@@ -288,7 +287,7 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
             state=(state.name if state else "None"),
             total=total,
             driver_calls=stub.calls,
-            clear_card_fields_called=("clear_card_fields" in stub.calls),
+            handle_vbv_challenge_called=("handle_vbv_challenge" in stub.calls),
         )
         self.assertEqual(_action_name(action), "await_3ds",
                          f"L4 VBV/3DS: expected action='await_3ds', got '{action}'")

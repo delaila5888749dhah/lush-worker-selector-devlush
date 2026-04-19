@@ -1075,11 +1075,23 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         return "retry"
     if state.name == "vbv_3ds":
         try:
-            cdp.clear_card_fields(worker_id=worker_id)
+            driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+            cancelled = driver_obj.handle_vbv_challenge()
+            if cancelled:
+                try:
+                    driver_obj.detect_page_state()
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.debug("VBV cancel: detect_page_state skipped", exc_info=True)
+                from modules.common.types import State  # noqa: PLC0415
+                return handle_outcome(
+                    State("vbv_cancelled"),
+                    order_queue,
+                    worker_id=worker_id,
+                    ctx=ctx,
+                )
         except Exception as exc:
             _logger.warning(
-                "[trace=%s] cdp.clear_card_fields() failed for worker=%s during vbv_3ds "
-                "handling; proceeding to await_3ds: %s",
+                "[trace=%s] VBV challenge handling failed for worker=%s: %s",
                 _get_trace_id(),
                 worker_id,
                 _sanitize_error(exc),

@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     SEL_POPUP_CLOSE,
-    SEL_POPUP_SOMETHING_WRONG,
     handle_something_wrong_popup,
 )
 
