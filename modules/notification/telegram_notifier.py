@@ -33,7 +33,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 from modules.notification.card_masker import mask_card_number
 
@@ -324,7 +324,7 @@ def build_success_caption(worker_id, task, total, ctx=None) -> str:
     lines.append(f"🌐 Proxy ZIP: {proxy_zip or 'N/A'}")
     if duration is not None:
         lines.append(f"⏱ Cycle: {duration:.1f}s")
-    lines.append(f"🕐 {datetime.utcnow().isoformat()}")
+    lines.append(f"🕐 {datetime.now(timezone.utc).isoformat()}")
     return "\n".join(lines)
 
 

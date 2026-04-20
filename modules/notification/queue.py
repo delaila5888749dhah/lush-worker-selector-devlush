@@ -3,11 +3,17 @@
 The Telegram notifier (``modules.notification.telegram_notifier``) already
 appends to ``telegram_pending.jsonl`` when a payload exhausts its retry
 budget.  This module exposes helpers to **read, drain and re-queue** those
-entries for manual retry.  File operations are protected by a
-``threading.Lock`` so concurrent callers within the same process do not
-interleave writes, and each call opens the file in atomic append / read
-modes (O_APPEND semantics) so multiple processes remain correct as long
-as records stay on a single line (JSONL invariant).
+entries for manual retry.
+
+Concurrency contract:
+* Within a single process, file operations are serialised by the module
+  ``threading.Lock``; writers (``enqueue_failed``) use append-mode so
+  partially-written records cannot be observed.
+* Across multiple processes, ``enqueue_failed`` remains safe as long as
+  each JSON record fits on one line (O_APPEND atomicity for small writes
+  on POSIX).  ``drain`` is **single-process only** — concurrent drains
+  from multiple processes can race on the final ``remove`` and lose
+  records; callers are expected to run drain as an operator task.
 """
 from __future__ import annotations
 
@@ -92,8 +98,10 @@ def drain(path: str | None = None) -> list[dict]:
                         _logger.warning(
                             "notification.queue: skipping malformed line",
                         )
-            # Truncate atomically; on non-POSIX systems this is still
-            # best-effort but good enough for the single-process contract.
+            # Truncate atomically; within a single process this is correct.
+            # Across multiple processes, a concurrent ``enqueue_failed`` can
+            # still race with this ``remove``; the persistent queue contract
+            # is therefore single-process for drain operations.
             os.remove(target)
         except OSError as exc:
             _logger.warning("notification.queue: drain failed: %s", exc)
