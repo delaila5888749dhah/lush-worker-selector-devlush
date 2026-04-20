@@ -1080,13 +1080,41 @@ def is_payment_page_reloaded(driver) -> bool:
 
 
 def refill_after_vbv_reload(driver, ctx, new_card) -> None:
-    """Refill billing + card fields after a VBV cancel reload."""
+    """Refill all form fields after a VBV cancel reload.
+
+    When ``ctx.task`` is available, performs the complete purchase-path sequence:
+    preflight → navigate → eGift → cart → guest → payment (with ``new_card``).
+    This covers the case where the VBV cancel caused the browser to reload the
+    page from the beginning, so every step must be re-executed in order.
+
+    When ``ctx.task`` is ``None`` (legacy / partial-reload path), only billing
+    and card fields are re-filled (original behaviour).
+
+    Each step is logged at INFO level so the journey can be traced in logs.
+    """
     if ctx.billing_profile is None:
         _logger.warning("refill_after_vbv_reload skipped: billing_profile missing")
         return
     try:
-        driver.fill_billing(ctx.billing_profile)
-        driver.fill_card_fields(new_card)
+        if ctx.task is not None:
+            # Full refill: page was reloaded to the beginning after VBV cancel.
+            _logger.info("[VBV-refill] step=preflight_geo_check")
+            driver.preflight_geo_check()
+            _logger.info("[VBV-refill] step=navigate_to_egift")
+            driver.navigate_to_egift()
+            _logger.info("[VBV-refill] step=fill_egift_form")
+            driver.fill_egift_form(ctx.task, ctx.billing_profile)
+            _logger.info("[VBV-refill] step=add_to_cart_and_checkout")
+            driver.add_to_cart_and_checkout()
+            _logger.info("[VBV-refill] step=select_guest_checkout")
+            driver.select_guest_checkout(ctx.billing_profile.email)
+            _logger.info("[VBV-refill] step=fill_payment_and_billing (new card)")
+            driver.fill_payment_and_billing(new_card, ctx.billing_profile)
+            _logger.info("[VBV-refill] full refill sequence complete")
+        else:
+            # Legacy / partial-reload fallback: fill billing + card fields only.
+            driver.fill_billing(ctx.billing_profile)
+            driver.fill_card_fields(new_card)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("refill_after_vbv_reload failed: %s", _sanitize_error(exc))
 

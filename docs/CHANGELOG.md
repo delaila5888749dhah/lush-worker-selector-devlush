@@ -5,6 +5,16 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Fixed (P0-5, #113)
+- `orchestrator.refill_after_vbv_reload` now executes the complete purchase
+  sequence — preflight → navigate → eGift → cart → guest → payment — when
+  `ctx.task` is set (i.e. the VBV cancel caused a full page reload).
+  Previously only `fill_billing` + `fill_card_fields` were called, leaving
+  the preflight, navigation, eGift-form, cart, and guest-checkout steps
+  unexecuted, causing the flow to fail at payment submission.
+  The legacy partial-refill path (`ctx.task is None`) is unchanged.
+  Each step is logged at INFO level for journey tracing.
+
 ### Fixed (P0-6, #114)
 - `orchestrator.run_cycle` no longer calls `mark_completed` for non-success outcomes.
   Previously, declined/retry/abort_cycle tasks were falsely recorded as completed,
