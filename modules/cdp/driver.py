@@ -350,6 +350,32 @@ POPUP_TEXT_PATTERNS_DEFAULT = (
     POPUP_TEXT_PATTERNS_EN + POPUP_TEXT_PATTERNS_VN
 )
 
+# ── Thank-you popup text patterns (P1-2, Blueprint §6 Ngã rẽ 2) ───────────
+# English patterns for success/thank-you confirmation popups
+THANK_YOU_TEXT_PATTERNS_EN = (
+    "thank you for your order",
+    "thank you for your purchase",
+    "order confirmed",
+    "order confirmation",
+    "your order has been placed",
+    "payment successful",
+)
+
+# Vietnamese patterns for success/thank-you confirmation popups
+THANK_YOU_TEXT_PATTERNS_VN = (
+    "cảm ơn bạn đã đặt hàng",
+    "cảm ơn bạn đã mua hàng",
+    "đơn hàng đã được xác nhận",
+    "xác nhận đơn hàng",
+    "thanh toán thành công",
+)
+
+# Combined default pattern set used by detect_popup_thank_you when no
+# explicit patterns are supplied.
+THANK_YOU_TEXT_PATTERNS_DEFAULT = (
+    THANK_YOU_TEXT_PATTERNS_EN + THANK_YOU_TEXT_PATTERNS_VN
+)
+
 _GREETINGS = [
     "Happy gifting!",
     "Enjoy this little treat!",
@@ -821,6 +847,52 @@ def check_popup_text_match(
         normalised[:120],
     )
     return None
+
+
+def detect_popup_thank_you(driver, *, patterns=None) -> bool:
+    """Detect whether the current page shows a "Thank you" success confirmation.
+
+    Checks both the page URL (for known confirmation URL fragments) and the
+    visible body text of the page (for localised success phrases in EN/VN).
+    This function is used as the trigger for the P1-2 clear/refill workflow:
+    after a "Thank you" confirmation is detected, the orchestrator clears
+    card fields and refills from the next order in the queue.
+
+    Args:
+        driver: GivexDriver wrapper or raw Selenium WebDriver.
+        patterns: Tuple of lowercase substrings to match against page text.
+            Falls back to :data:`THANK_YOU_TEXT_PATTERNS_DEFAULT` when ``None``.
+
+    Returns:
+        ``True`` if the page URL contains a confirmation fragment OR the page
+        body text contains a known thank-you pattern; ``False`` otherwise.
+    """
+    if patterns is None:
+        patterns = THANK_YOU_TEXT_PATTERNS_DEFAULT
+    base = getattr(driver, "_driver", driver)
+
+    # 1 — URL-based detection (fastest signal)
+    try:
+        current_url = base.current_url or ""
+        if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
+            _log.debug("detect_popup_thank_you: URL match (%r)", current_url)
+            return True
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    # 2 — Page body text detection
+    try:
+        body_text = base.find_element("tag name", "body").text.lower()
+    except Exception:  # pylint: disable=broad-except
+        body_text = ""
+
+    for pat in patterns:
+        if pat in body_text:
+            _log.debug("detect_popup_thank_you: text MATCH pattern=%r", pat)
+            return True
+
+    _log.debug("detect_popup_thank_you: no thank-you signal found")
+    return False
 
 
 class GivexDriver:
