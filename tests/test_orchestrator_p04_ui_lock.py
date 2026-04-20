@@ -120,8 +120,9 @@ class TestUiLockFocusShiftCalled(_P04Base):
             run_cycle(task, worker_id=_WORKER_ID,
                       ctx=CycleContext(cycle_id="c1", worker_id=_WORKER_ID))
 
-        self.assertTrue(mock_cdp.handle_ui_lock_focus_shift.called)
-        mock_cdp.handle_ui_lock_focus_shift.assert_called_with(_WORKER_ID)
+        self.assertEqual(
+            mock_cdp.handle_ui_lock_focus_shift.call_args.args, (_WORKER_ID,)
+        )
 
     def test_focus_shift_called_with_correct_worker_id(self):
         """handle_ui_lock_focus_shift is called with the exact worker_id."""
@@ -146,8 +147,9 @@ class TestUiLockFocusShiftCalled(_P04Base):
                       ctx=CycleContext(cycle_id="c2", worker_id=target_worker))
             cleanup_worker(target_worker)
 
-        self.assertTrue(mock_cdp.handle_ui_lock_focus_shift.called)
-        mock_cdp.handle_ui_lock_focus_shift.assert_called_with(target_worker)
+        self.assertEqual(
+            mock_cdp.handle_ui_lock_focus_shift.call_args.args, (target_worker,)
+        )
 
 
 # ---------------------------------------------------------------------------
