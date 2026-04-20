@@ -36,6 +36,7 @@ from modules.delay.config import CDP_CALL_TIMEOUT as _CDP_CALL_TIMEOUT_CONFIG
 from modules.fsm import main as fsm
 from modules.fsm.main import ALLOWED_STATES as _FSM_STATES  # noqa: F401 — Imported from fsm canonical source; intentionally unused but enforces INV-FSM-01 at import time
 from modules.monitor import main as monitor
+from modules.observability import alerting as _alerting
 from modules.rollout import main as rollout
 from modules.watchdog import main as watchdog
 
@@ -980,6 +981,12 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
+        try:
+            _alerting.send_alert(
+                f"Watchdog timeout worker={worker_id} task_id={_task_id_log}"
+            )
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug("alerting.send_alert (watchdog) failed", exc_info=True)
         if _submitted_before_wait:
             _logger.error(
                 "[trace=%s] Watchdog timeout AFTER payment submission for worker=%s, task_id=%s. "
@@ -1064,6 +1071,12 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     if state.name == "success":
         return "complete"
     if state.name in ("declined", "vbv_cancelled"):
+        try:
+            _alerting.send_alert(
+                f"Card declined: worker={worker_id} state={state.name}"
+            )
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug("alerting.send_alert (decline) failed", exc_info=True)
         if ctx is None:
             return "retry_new_card" if order_queue else "retry"
         next_card = _ctx_next_swap_card(ctx)

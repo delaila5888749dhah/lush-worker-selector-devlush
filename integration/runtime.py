@@ -276,6 +276,14 @@ def _worker_fn(worker_id, task_fn, persona):
                     err_data["persona_type"] = persona_type_tag
                     err_data["persona_seed"] = persona._seed
                 _log_event(worker_id, "error", "task_failed", err_data)
+                # T-G1: route worker crash to alerting so Telegram (and any
+                # other registered handler) is notified.
+                try:
+                    alerting.send_alert(
+                        f"Worker crashed: worker={worker_id} error={_sanitize_error(exc)}"
+                    )
+                except Exception:  # pylint: disable=broad-except
+                    _logger.debug("alerting.send_alert (worker crash) failed", exc_info=True)
                 break
             with _lock:
                 current_state = _worker_states.get(worker_id)
@@ -290,6 +298,12 @@ def _worker_fn(worker_id, task_fn, persona):
                     break
     except Exception as exc:
         _logger.error("Unexpected error in worker %s: %s", worker_id, exc, exc_info=True)
+        try:
+            alerting.send_alert(
+                f"Worker crashed: worker={worker_id} error={_sanitize_error(exc)}"
+            )
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug("alerting.send_alert (outer crash) failed", exc_info=True)
     finally:
         with _lock:
             # Only remove if this thread owns the worker entry (prevents
@@ -525,6 +539,13 @@ def _runtime_loop(task_fn, interval):
                     if _consecutive_rollbacks >= _MAX_CONSECUTIVE_ROLLBACKS:
                         _log_event("runtime", "critical", "circuit_breaker_triggered", {"count": _consecutive_rollbacks})
                         _logger.error("Circuit breaker: %d consecutive rollbacks. Halting scale-up for %ds.", _consecutive_rollbacks, _CIRCUIT_BREAKER_PAUSE)
+                        try:
+                            alerting.send_alert(
+                                f"CB triggered: {_consecutive_rollbacks} consecutive rollbacks; "
+                                f"pausing scale-up for {_CIRCUIT_BREAKER_PAUSE}s"
+                            )
+                        except Exception:  # pylint: disable=broad-except
+                            _logger.debug("alerting.send_alert (CB) failed", exc_info=True)
                         cb_pause = _CIRCUIT_BREAKER_PAUSE; _consecutive_rollbacks = 0
                     else:
                         cb_pause = 0

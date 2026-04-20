@@ -185,11 +185,20 @@ class TelegramSendPhotoReceivesBlurredBytesTests(unittest.TestCase):
             "TELEGRAM_BOT_TOKEN": "tkn",
             "TELEGRAM_CHAT_ID": "42",
         }
-        with patch.dict("os.environ", env, clear=False), \
-             patch.object(telegram_notifier, "_post", side_effect=_fake_post):
-            sent_ok = telegram_notifier.send_success_notification("w1", task, 10.0, blurred)
+        # PR-4: send_success_notification is now non-blocking; drain the
+        # queue before asserting that the background sender hit _post.
+        telegram_notifier._reset_for_tests()
+        try:
+            with patch.dict("os.environ", env, clear=False), \
+                 patch.object(telegram_notifier, "_post", side_effect=_fake_post):
+                enqueued = telegram_notifier.send_success_notification(
+                    "w1", task, 10.0, blurred,
+                )
+                telegram_notifier._flush_for_tests(timeout=3.0)
+        finally:
+            telegram_notifier._reset_for_tests()
 
-        self.assertTrue(sent_ok)
+        self.assertTrue(enqueued)
         self.assertIn("/sendPhoto", captured["url"])
         self.assertIn(blurred, captured["data"])
         # Sanity: full PAN never appears in caption (which is also in data).

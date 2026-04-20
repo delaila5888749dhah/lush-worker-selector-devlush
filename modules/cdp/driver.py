@@ -325,6 +325,15 @@ _GREETINGS = [
     "Thinking of you!",
     "With love and best wishes!",
     "Hope this brightens your day!",
+    "Just a little something for you.",
+    "Wishing you all the best!",
+    "Sending smiles your way.",
+    "You deserve this!",
+    "Hope you enjoy — treat yourself!",
+    "Warmest regards and happy shopping.",
+    "A small gift with big appreciation.",
+    "Cheers to you!",
+    "Happy shopping — on me!",
 ]
 
 def _random_greeting() -> str:
@@ -1172,6 +1181,22 @@ class GivexDriver:
             )
         _log.debug("_clear_browser_state: browser state cleared for new cycle")
 
+    def accept_cookies_if_present(self) -> bool:
+        """Dismiss the cookie consent banner if it is on screen.
+
+        Returns ``True`` when the accept button was clicked successfully,
+        ``False`` when the banner is absent or the click failed. Never
+        raises — the cookie banner is best-effort only.
+        """
+        if not self.find_elements(SEL_COOKIE_ACCEPT):
+            return False
+        try:
+            self.bounding_box_click(SEL_COOKIE_ACCEPT)
+            return True
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _log.debug("Cookie banner click skipped: %s", exc)
+            return False
+
     def navigate_to_egift(self) -> None:
         """Navigate to the Givex base URL and open the eGift purchase page.
 
@@ -1180,12 +1205,8 @@ class GivexDriver:
         """
         self._clear_browser_state()
         self._driver.get(URL_BASE)
-        # Dismiss cookie banner if present (best-effort)
-        if self.find_elements(SEL_COOKIE_ACCEPT):
-            try:
-                self.bounding_box_click(SEL_COOKIE_ACCEPT)
-            except Exception as exc:  # cookie banner is best-effort; continue navigation
-                _log.debug("Cookie banner click skipped: %s", exc)
+        # Dismiss cookie banner if present (best-effort, L2)
+        self.accept_cookies_if_present()
         self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10)
         self.bounding_box_click(SEL_BUY_EGIFT_BTN)
         self._wait_for_url(URL_EGIFT, timeout=15)

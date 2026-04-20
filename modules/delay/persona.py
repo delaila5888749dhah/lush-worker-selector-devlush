@@ -46,10 +46,21 @@ class PersonaProfile:
         self.night_penalty_factor: float = self._rnd.uniform(NIGHT_PENALTY_MIN, NIGHT_PENALTY_MAX)
 
     def get_typing_delay(self, group_index: int) -> float:
+        """Return a single typing-group delay (s).
+
+        Blueprint §10 (M8): the per-group distribution is **gaussian**
+        around the midpoint of ``[MIN_TYPING_DELAY, MAX_TYPING_DELAY]``
+        with stddev set so the band ≈ 99.7% (±3σ) of the distribution.
+        Samples are clamped to the hard min/max so the result is always
+        inside the contractual range.
+        """
+        lo, hi = MIN_TYPING_DELAY, MAX_TYPING_DELAY
+        mu = (lo + hi) / 2.0
+        sigma = (hi - lo) / 6.0
         with self._rnd_lock:
-            base = self._rnd.uniform(MIN_TYPING_DELAY, MAX_TYPING_DELAY)
+            base = self._rnd.gauss(mu, sigma)
         factor = max(0.85, 1.0 - group_index * 0.03)
-        return max(MIN_TYPING_DELAY, min(base * factor, MAX_TYPING_DELAY))
+        return max(lo, min(base * factor, hi))
 
     def get_hesitation_delay(self) -> float:
         with self._rnd_lock:
