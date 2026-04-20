@@ -13,6 +13,7 @@ import threading
 from typing import Dict, Optional
 
 from modules.cdp.driver import handle_ui_lock_focus_shift as _driver_focus_shift
+from modules.cdp.driver import detect_popup_thank_you as _driver_detect_popup_thank_you
 
 _log = logging.getLogger(__name__)
 
@@ -359,6 +360,27 @@ def register_browser_profile(worker_id: str, profile_id: str) -> None:
     """Register BitBrowser profile id for a worker."""
     with _registry_lock:
         _bitbrowser_registry[worker_id] = profile_id
+
+
+def detect_popup_thank_you(worker_id: str, *, patterns=None) -> bool:
+    """Detect whether the current page shows a "Thank you" success confirmation.
+
+    Delegates to :func:`~modules.cdp.driver.detect_popup_thank_you` using the
+    driver registered for *worker_id*.
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+        patterns: Optional tuple of lowercase substrings to match against page
+            text.  Falls back to ``THANK_YOU_TEXT_PATTERNS_DEFAULT`` when ``None``.
+
+    Returns:
+        ``True`` if a thank-you/confirmation signal is detected; ``False`` otherwise.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    driver = _get_driver(worker_id)
+    return _driver_detect_popup_thank_you(driver, patterns=patterns)
 
 
 def get_browser_profile(worker_id: str) -> Optional[str]:
