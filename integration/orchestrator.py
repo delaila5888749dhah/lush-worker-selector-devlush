@@ -1219,7 +1219,7 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     return "retry"
 
 
-def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
+def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_check=None):
     """Run a full payment cycle for a WorkerTask.
 
     Initializes the FSM, executes one payment attempt, and returns the
@@ -1245,6 +1245,10 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
         worker_id: Unique identifier for this worker.
         ctx: Optional :class:`~modules.common.types.CycleContext` for
             cross-retry billing lock.  If ``None``, a new context is created.
+        abort_check: Optional ``() -> bool`` callable.  When provided, it is
+            called at the start of each retry iteration.  If it returns
+            ``True`` the cycle is aborted immediately and ``"abort_cycle"`` is
+            returned (P1-5).
 
     Returns:
         A (action, state, total) tuple where action is one of:
@@ -1290,6 +1294,13 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
 
     try:
         if not _ENABLE_RETRY_LOOP:
+            # P1-5 — Honour abort before any payment work.
+            if abort_check is not None and abort_check():
+                _logger.debug(
+                    "[trace=%s] worker=%s abort_task=abort_cycle reason=abort_check",
+                    _get_trace_id(), worker_id,
+                )
+                return "abort_cycle", None, None
             initialize_cycle(worker_id)
             state, total = run_payment_step(
                 task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
@@ -1319,6 +1330,15 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
         total = None
 
         for _loop_iter in range(max_iters):
+            # P1-5 — Check abort at the start of every retry iteration.
+            if abort_check is not None and abort_check():
+                _logger.debug(
+                    "[trace=%s] worker=%s abort_task=abort_cycle "
+                    "reason=abort_check iter=%d",
+                    _get_trace_id(), worker_id, _loop_iter,
+                )
+                action = "abort_cycle"
+                break
             initialize_cycle(worker_id)
             # Build an effective task that carries the current (possibly swapped) card.
             effective_task = (
