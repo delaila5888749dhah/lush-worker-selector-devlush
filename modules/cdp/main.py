@@ -12,6 +12,8 @@ import signal
 import threading
 from typing import Dict, Optional
 
+from modules.cdp.driver import handle_ui_lock_focus_shift as _driver_focus_shift
+
 _log = logging.getLogger(__name__)
 
 _registry_lock = threading.Lock()
@@ -329,6 +331,28 @@ def run_full_purchase_flow(task, billing_profile, worker_id: str) -> str:
         RuntimeError: if no driver has been registered for the given worker_id.
     """
     return _get_driver(worker_id).run_full_cycle(task, billing_profile)
+
+
+def handle_ui_lock_focus_shift(worker_id: str) -> bool:
+    """Invoke focus-shift retry for a UI-locked page (Blueprint §6 Ngã rẽ 1).
+
+    Wraps the driver-level :func:`~modules.cdp.driver.handle_ui_lock_focus_shift`
+    function using the driver registered for *worker_id*.  Callers are
+    responsible for enforcing the retry cap — this function executes exactly
+    once per invocation and never retries internally.
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Returns:
+        ``True`` if the focus shift succeeded; ``False`` on any error.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    driver = _get_driver(worker_id)
+    raw = getattr(driver, "_driver", driver)
+    return _driver_focus_shift(raw)
 
 
 def register_browser_profile(worker_id: str, profile_id: str) -> None:

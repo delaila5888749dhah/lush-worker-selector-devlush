@@ -88,6 +88,12 @@ _WATCHDOG_TIMEOUT_PAYMENT = _load_payment_watchdog_timeout()
 # Default is enabled (any value other than "0", "false", or "no").
 _ENABLE_RETRY_LOOP: bool = os.getenv("ENABLE_RETRY_LOOP", "1") not in ("0", "false", "no")
 
+# P0-4 — UI lock focus-shift retry feature flag.
+# Set ENABLE_RETRY_UI_LOCK=0 to disable automatic UI lock recovery.
+# Default is enabled (any value other than "0", "false", or "no").
+_ENABLE_RETRY_UI_LOCK: bool = os.getenv("ENABLE_RETRY_UI_LOCK", "1") not in ("0", "false", "no")
+_MAX_UI_LOCK_RETRIES: int = 2
+
 _logger = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger(f"{__name__}.audit")
 
@@ -1269,6 +1275,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
         # declined/retry_new_card outcomes are consumed instead of silently dropped.
         current_card = task.primary_card
         retry_count = 0
+        ui_lock_retry_count = 0  # P0-4 — separate cap for UI lock focus-shift retries
         # Cap: len(order_queue) card-swap slots + 2 buffer for ui_lock retries.
         max_iters = len(ctx.task.order_queue) + 2
         # action is str for simple outcomes or (str, CardInfo) for retry_new_card.
@@ -1287,6 +1294,41 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
             state, total = run_payment_step(
                 effective_task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
             )
+
+            # P0-4 — UI lock auto-recovery (Blueprint §6 Ngã rẽ 1).
+            # When the page is UI-locked, call handle_ui_lock_focus_shift to click a
+            # neutral point and re-submit, then re-detect to see if the lock cleared.
+            # Cap at _MAX_UI_LOCK_RETRIES (default 2) per card to avoid infinite loops.
+            if (_ENABLE_RETRY_UI_LOCK
+                    and state is not None
+                    and state.name == "ui_lock"
+                    and ui_lock_retry_count < _MAX_UI_LOCK_RETRIES):
+                ui_lock_retry_count += 1
+                _logger.info(
+                    "[trace=%s] UI lock detected for worker=%s — calling "
+                    "handle_ui_lock_focus_shift (attempt %d/%d)",
+                    _get_trace_id(), worker_id, ui_lock_retry_count, _MAX_UI_LOCK_RETRIES,
+                )
+                try:
+                    cdp.handle_ui_lock_focus_shift(worker_id)
+                except Exception as _uil_exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.warning(
+                        "[trace=%s] handle_ui_lock_focus_shift failed for worker=%s: %s",
+                        _get_trace_id(), worker_id, _sanitize_error(_uil_exc),
+                    )
+                # Re-detect page state: if UI lock cleared, transition FSM so that
+                # handle_outcome below receives the updated state rather than ui_lock.
+                try:
+                    _new_page_state = cdp.detect_page_state(worker_id)
+                    if _new_page_state != "ui_lock":
+                        state = fsm.transition_for_worker(worker_id, _new_page_state)
+                except Exception as _det_exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.warning(
+                        "[trace=%s] detect_page_state retry after ui_lock failed "
+                        "for worker=%s: %s",
+                        _get_trace_id(), worker_id, _sanitize_error(_det_exc),
+                    )
+
             action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
 
             _action_key = action[0] if isinstance(action, tuple) else action
@@ -1308,7 +1350,8 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
                         _get_trace_id(), worker_id, _sanitize_error(_swap_exc),
                     )
                 current_card = new_card
-                retry_count = 0  # reset ui_lock retry counter after a card swap
+                retry_count = 0  # reset general retry counter after a card swap
+                ui_lock_retry_count = 0  # P0-4 — reset ui_lock counter after card swap
             elif action == "retry_new_card":
                 # Legacy path (ctx=None): no card info available — abort.
                 action = "abort_cycle"
