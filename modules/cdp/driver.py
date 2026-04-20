@@ -319,6 +319,37 @@ SEL_POPUP_SOMETHING_WRONG = ".modal, .popup, .dialog, .alert, .error-modal"
 SEL_POPUP_CLOSE = SEL_POPUP_CLOSE_BTN
 SEL_NEUTRAL_DIV     = "body"
 
+# ── Popup text-match patterns (P1-1, Blueprint §6 Fork 3 text-verify) ─────────
+# English patterns for error/warning popups
+POPUP_TEXT_PATTERNS_EN = (
+    "something went wrong",
+    "an error occurred",
+    "please try again",
+    "payment failed",
+    "transaction declined",
+    "unable to process",
+    "session expired",
+    "service unavailable",
+)
+
+# Vietnamese patterns for error/warning popups
+POPUP_TEXT_PATTERNS_VN = (
+    "có lỗi xảy ra",
+    "vui lòng thử lại",
+    "thanh toán thất bại",
+    "giao dịch bị từ chối",
+    "không thể xử lý",
+    "phiên đã hết hạn",
+    "dịch vụ không khả dụng",
+    "đã xảy ra sự cố",
+)
+
+# Combined default pattern set used by check_popup_text_match when no
+# explicit patterns are supplied.
+POPUP_TEXT_PATTERNS_DEFAULT = (
+    POPUP_TEXT_PATTERNS_EN + POPUP_TEXT_PATTERNS_VN
+)
+
 _GREETINGS = [
     "Happy gifting!",
     "Enjoy this little treat!",
@@ -684,6 +715,112 @@ def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
     except Exception as exc:  # pylint: disable=broad-except
         _log.warning("popup close failed: %s", exc)
         return False
+
+
+def _get_shadow_text(base_driver, selector: str) -> str:
+    """Extract text content from an element, including shadow-DOM children.
+
+    Uses JavaScript to traverse shadow roots and collect all visible text.
+
+    Args:
+        base_driver: Raw Selenium WebDriver instance.
+        selector: CSS selector for the host element.
+
+    Returns:
+        Concatenated text content, empty string if element not found or JS fails.
+    """
+    js = """
+(function(selector) {
+    function collectText(node) {
+        if (!node) return '';
+        let text = '';
+        if (node.shadowRoot) {
+            text += collectText(node.shadowRoot);
+        }
+        if (node.childNodes) {
+            for (let i = 0; i < node.childNodes.length; i++) {
+                const child = node.childNodes[i];
+                if (child.nodeType === 3) {
+                    text += child.textContent || '';
+                } else if (child.nodeType === 1) {
+                    text += collectText(child);
+                }
+            }
+        }
+        return text;
+    }
+    const els = document.querySelectorAll(selector);
+    let result = '';
+    for (let j = 0; j < els.length; j++) {
+        result += collectText(els[j]) + ' ';
+    }
+    return result;
+})(arguments[0]);
+"""
+    try:
+        return base_driver.execute_script(js, selector) or ""
+    except Exception:  # pylint: disable=broad-except
+        return ""
+
+
+def check_popup_text_match(
+    driver,
+    patterns=None,
+    *,
+    selector: str = SEL_POPUP_SOMETHING_WRONG,
+    shadow_root: bool = True,
+) -> str | None:
+    """Check whether any currently visible popup element contains a known error pattern.
+
+    Supports multi-language matching (EN + VN) and optionally traverses shadow-DOM
+    children to find text hidden behind a shadow root.
+
+    Args:
+        driver: GivexDriver wrapper or raw Selenium WebDriver.
+        patterns: Tuple of lowercase substrings to match against popup text.  Falls
+            back to :data:`POPUP_TEXT_PATTERNS_DEFAULT` when ``None``.
+        selector: CSS selector used to locate candidate popup elements.
+        shadow_root: When ``True`` (default) the match also scans text inside any
+            shadow-DOM children attached to matched elements.
+
+    Returns:
+        The first matching pattern string if any popup text matches; ``None`` if no
+        match is found or no popup is currently visible.
+    """
+    if patterns is None:
+        patterns = POPUP_TEXT_PATTERNS_DEFAULT
+    base = getattr(driver, "_driver", driver)
+
+    # Collect raw text from the DOM (with or without shadow traversal)
+    if shadow_root:
+        raw_text = _get_shadow_text(base, selector)
+    else:
+        try:
+            # By may be None when selenium is not installed (module-level try/except)
+            elements = base.find_elements(By.CSS_SELECTOR, selector) if By is not None else []
+        except Exception:  # pylint: disable=broad-except
+            elements = []
+        raw_text = " ".join(el.text for el in elements if el.text)
+
+    normalised = raw_text.lower().strip()
+
+    if not normalised:
+        _log.debug("popup text-match: no popup text found (selector=%r)", selector)
+        return None
+
+    for pat in patterns:
+        if pat in normalised:
+            _log.debug("popup text-match: MATCH pattern=%r in popup text", pat)
+            return pat
+
+    _log.debug(
+        "popup text-match: NO MATCH — popup present but none of %d patterns found "
+        "(selector=%r, text_snippet=%r)",
+        len(patterns),
+        selector,
+        normalised[:120],
+    )
+    return None
 
 
 class GivexDriver:
