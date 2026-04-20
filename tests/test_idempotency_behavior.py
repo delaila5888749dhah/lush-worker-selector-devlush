@@ -275,11 +275,10 @@ class TestCrossCycleRetryAfterDeclined(_IdmBase):
         """Confirm that after a declined cycle, mark_completed was never called."""
         task_id = "task-cross-retry-T2"
         _action, store = self._run(action_return="retry", task_id=task_id)
-        # mark_completed must never have been called for a retry/declined task
+        # mark_completed must never have been called for a retry/declined task;
+        # the real store therefore never sets is_duplicate=True, allowing the
+        # next cycle to run without being blocked.
         store.mark_completed.assert_not_called()
-        # is_duplicate was never indirectly set True (no bogus mark_completed)
-        # → the real store would still allow the task on the next cycle
-        self.assertEqual(store.mark_completed.call_count, 0)
 
 
 if __name__ == "__main__":
