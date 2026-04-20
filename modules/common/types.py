@@ -80,6 +80,9 @@ class CycleContext:
     the same cycle.  This ensures billing name, address, phone, and email remain
     constant while only the card fields change.
 
+    ``swap_count`` tracks how many card swaps have occurred in the cycle and is
+    incremented by the orchestrator on each card swap.
+
     A new :class:`CycleContext` must be created for every fully new cycle (new
     order / new worker run).
     """
@@ -89,4 +92,5 @@ class CycleContext:
     billing_profile: Optional[BillingProfile] = None
     zip_code: Optional[str] = None
     card_attempts: int = 0
-
+    task: Optional[WorkerTask] = None
+    swap_count: int = 0

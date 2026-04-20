@@ -81,6 +81,10 @@ def _make_billing_profile(
     )
 
 
+def _action_name(action):
+    return action[0] if isinstance(action, tuple) else action
+
+
 # ── Stub GivexDriver ───────────────────────────────────────────────────────────
 
 class _StubGivexDriver:

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.common.exceptions import SessionFlaggedError
+from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
@@ -983,16 +984,40 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     return state, total
 
 
-def handle_outcome(state, order_queue, worker_id: str = "default"):
+def _ctx_next_swap_card(ctx):
+    if ctx.task is None or ctx.swap_count >= len(ctx.task.order_queue):
+        return None
+    return ctx.task.order_queue[ctx.swap_count]
+
+
+def is_payment_page_reloaded(driver) -> bool:
+    """True if billing field is missing/empty after VBV cancel."""
+    try:
+        from modules.cdp.driver import SEL_BILLING_ADDRESS  # noqa: PLC0415
+        elements = driver.find_elements(SEL_BILLING_ADDRESS)
+        return not elements or not elements[0].get_attribute("value")
+    except Exception:
+        return True
+
+
+def refill_after_vbv_reload(driver, ctx, new_card) -> None:
+    """Refill billing + card fields after a VBV cancel reload."""
+    if ctx.billing_profile is None:
+        _logger.warning("refill_after_vbv_reload skipped: billing_profile missing")
+        return
+    try:
+        driver.fill_billing(ctx.billing_profile)
+        driver.fill_card_fields(new_card)
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning("refill_after_vbv_reload failed: %s", _sanitize_error(exc))
+
+
+def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     """Determine the next action based on the current FSM state.
 
-    Args:
-        state: Current State object (or None if FSM was never transitioned).
-        order_queue: Remaining cards available for swap.
-        worker_id: Unique identifier for this worker (used for log context).
-
-    Returns:
-        One of: "complete", "retry", "retry_new_card", "await_3ds".
+    Returns one of: "complete", "retry", "await_3ds", "abort_cycle", or
+    ("retry_new_card", CardInfo) when a swap is available. ``ctx`` is an
+    optional :class:`CycleContext` tracking swap counts across retries.
     """
     if state is None:
         _logger.warning(
@@ -1005,20 +1030,36 @@ def handle_outcome(state, order_queue, worker_id: str = "default"):
         return "retry"
     if state.name == "success":
         return "complete"
-    if state.name == "declined":
-        return "retry_new_card" if order_queue else "retry"
+    if state.name in ("declined", "vbv_cancelled"):
+        if ctx is None:
+            return "retry_new_card" if order_queue else "retry"
+        next_card = _ctx_next_swap_card(ctx)
+        if next_card is None:
+            return "abort_cycle"
+        ctx.swap_count += 1
+        if state.name == "vbv_cancelled":
+            try:
+                driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+                if is_payment_page_reloaded(driver):
+                    refill_after_vbv_reload(driver, ctx, next_card)
+            except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+                _logger.warning("VBV reload refill failed: %s", _sanitize_error(exc))
+        return ("retry_new_card", next_card)
     if state.name == "ui_lock":
         return "retry"
     if state.name == "vbv_3ds":
         try:
-            cdp.clear_card_fields(worker_id=worker_id)
+            driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+            if driver.handle_vbv_challenge():
+                driver.detect_page_state()
+                return handle_outcome(
+                    State("vbv_cancelled"), order_queue,
+                    worker_id=worker_id, ctx=ctx,
+                )
         except Exception as exc:
             _logger.warning(
-                "[trace=%s] cdp.clear_card_fields() failed for worker=%s during vbv_3ds "
-                "handling; proceeding to await_3ds: %s",
-                _get_trace_id(),
-                worker_id,
-                _sanitize_error(exc),
+                "[trace=%s] VBV challenge handling failed for worker=%s: %s",
+                _get_trace_id(), worker_id, _sanitize_error(exc),
             )
         return "await_3ds"
     return "retry"
@@ -1053,7 +1094,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
 
     Returns:
         A (action, state, total) tuple where action is one of:
-        "complete" | "retry" | "retry_new_card" | "await_3ds".
+        "complete" | "retry" | "retry_new_card" | "await_3ds" | "abort_cycle".
 
     Raises:
         CycleExhaustedError: if the billing pool is empty.
@@ -1081,6 +1122,8 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
             worker_id=worker_id,
             zip_code=zip_code,
         )
+    if ctx.task is None:
+        ctx.task = task
 
     # Select billing profile once per ctx — reuse on card-swap retries.
     if ctx.billing_profile is None:
@@ -1096,7 +1139,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
         state, total = run_payment_step(
             task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
         )
-        action = handle_outcome(state, task.order_queue, worker_id=worker_id)
+        action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
         if action == "complete":
             success = True
             _record_autoscaler_success(worker_id)

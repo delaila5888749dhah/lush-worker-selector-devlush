@@ -12,7 +12,7 @@ from modules.common.exceptions import (
     InvalidTransitionError,
     SessionFlaggedError,
 )
-from modules.common.types import CardInfo, State, WorkerTask
+from modules.common.types import CardInfo, CycleContext, State, WorkerTask
 from modules.fsm.main import (
     cleanup_worker,
     get_current_state_for_worker,
@@ -55,6 +55,10 @@ def _make_task(order_queue=None):
         primary_card=card,
         order_queue=tuple(order_queue) if order_queue else (),
     )
+
+
+def _action_name(action):
+    return action[0] if isinstance(action, tuple) else action
 
 
 class InitializeCycleTests(unittest.TestCase):
@@ -102,8 +106,17 @@ class HandleOutcomeTests(unittest.TestCase):
         self.assertEqual(handle_outcome(State("success"), []), "complete")
 
     def test_declined_with_queue_returns_retry_new_card(self):
-        queue = [MagicMock()]
-        self.assertEqual(handle_outcome(State("declined"), queue), "retry_new_card")
+        queue_card = CardInfo(
+            card_number="4000000000000002",
+            exp_month="07",
+            exp_year="27",
+            cvv="123",
+        )
+        task = _make_task(order_queue=[queue_card])
+        ctx = CycleContext(cycle_id="cycle-1", worker_id="default", task=task)
+        action = handle_outcome(State("declined"), task.order_queue, ctx=ctx)
+        self.assertEqual(_action_name(action), "retry_new_card")
+        self.assertIs(action[1], task.order_queue[0])
 
     def test_declined_empty_queue_returns_retry(self):
         self.assertEqual(handle_outcome(State("declined"), []), "retry")
@@ -113,14 +126,20 @@ class HandleOutcomeTests(unittest.TestCase):
 
     def test_vbv_3ds_clears_fields_and_returns_await_3ds(self):
         with patch("integration.orchestrator.cdp") as mock_cdp:
+            driver = MagicMock()
+            driver.handle_vbv_challenge.return_value = False
+            mock_cdp._get_driver.return_value = driver
             result = handle_outcome(State("vbv_3ds"), [])
         self.assertEqual(result, "await_3ds")
-        mock_cdp.clear_card_fields.assert_called_once_with(worker_id="default")
+        mock_cdp._get_driver.assert_called_once_with("default")
+        driver.handle_vbv_challenge.assert_called_once()
 
     def test_vbv_3ds_cdp_failure_still_returns_await_3ds(self):
-        """BUG-003: CDP error in clear_card_fields must be swallowed; await_3ds returned."""
+        """BUG-003: CDP error in VBV handling must be swallowed; await_3ds returned."""
         with patch("integration.orchestrator.cdp") as mock_cdp:
-            mock_cdp.clear_card_fields.side_effect = RuntimeError("browser crashed")
+            driver = MagicMock()
+            driver.handle_vbv_challenge.side_effect = RuntimeError("browser crashed")
+            mock_cdp._get_driver.return_value = driver
             result = handle_outcome(State("vbv_3ds"), [])
         self.assertEqual(result, "await_3ds")
 

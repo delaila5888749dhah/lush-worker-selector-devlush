@@ -71,6 +71,7 @@ from integration.worker_task import make_task_fn  # noqa: E402  pylint: disable=
 from _integration_harness import (  # noqa: E402  pylint: disable=wrong-import-position,wrong-import-order
     _IntegrationBase,
     _StubGivexDriver,
+    _action_name,
     _make_task,
     make_mock_billing,
 )
@@ -263,14 +264,14 @@ class TestL3OrchestratorScenarios(_IntegrationBase, unittest.TestCase):
     def test_declined_state_returns_retry_or_retry_new_card(self):
         """Stub in 'declined' final state → run_cycle returns 'retry' or 'retry_new_card'."""
         action, state, _total = self._run_cycle("declined")
-        self.assertIn(action, ("retry", "retry_new_card"))
+        self.assertIn(_action_name(action), ("retry", "retry_new_card"))
         self.assertIsNotNone(state)
         self.assertEqual(state.name, "declined")
 
     def test_vbv_3ds_state_returns_await_3ds(self):
         """Stub in 'vbv_3ds' final state → run_cycle returns 'await_3ds'."""
         action, state, _total = self._run_cycle("vbv_3ds")
-        self.assertEqual(action, "await_3ds")
+        self.assertEqual(_action_name(action), "await_3ds")
         self.assertIsNotNone(state)
         self.assertEqual(state.name, "vbv_3ds")
 

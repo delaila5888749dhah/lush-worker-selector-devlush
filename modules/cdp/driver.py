@@ -11,6 +11,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import os
+import random as _random
 import re as _re
 import secrets
 import socket
@@ -30,8 +31,13 @@ except ImportError:  # pragma: no cover - tests mock _cdp_select_option
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
-except ImportError:  # pragma: no cover - only used as fallback in _ghost_move_to
-    _ActionChains = None  # type: ignore[assignment,misc]
+    from selenium.webdriver.common.by import By  # type: ignore[import]
+    from selenium.webdriver.support.ui import WebDriverWait  # type: ignore[import]
+    from selenium.webdriver.support import expected_conditions as EC  # type: ignore[import]
+    from selenium.common.exceptions import TimeoutException  # type: ignore[import]
+except ImportError:  # pragma: no cover - selenium always present in prod
+    _ActionChains = By = WebDriverWait = EC = None  # type: ignore[assignment,misc]
+    TimeoutException = Exception  # type: ignore[assignment,misc]
 
 try:
     from modules.cdp.mouse import GhostCursor as _GhostCursor
@@ -309,6 +315,8 @@ SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
 SEL_VBV_CANCEL_BTN  = "button[id*='cancel'], a[id*='cancel'], button[id*='return'], a[id*='return']"
 SEL_POPUP_CLOSE_BTN = "button.modal-close, button[aria-label='Close'], .modal button[type='button']"
+SEL_POPUP_SOMETHING_WRONG = ".modal, .popup, .dialog, .alert, .error-modal"
+SEL_POPUP_CLOSE = SEL_POPUP_CLOSE_BTN
 SEL_NEUTRAL_DIV     = "body"
 
 _GREETINGS = [
@@ -630,6 +638,54 @@ def handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20)) -> bool:
         return False
 
 
+def vbv_dynamic_wait(rng: _random.Random | None = None) -> float:
+    """Wait 8–12s for VBV/3DS iframe to load (Blueprint §6 Fork 3, no DOM)."""
+    duration = (rng or _random).uniform(8.0, 12.0)
+    time.sleep(duration)
+    return duration
+
+
+def cdp_click_iframe_element(
+        driver, iframe_selector: str, element_selector: str,
+        rng: _random.Random | None = None,
+) -> tuple[float, float]:
+    """Click element inside iframe via CDP absolute coordinates (Blueprint §6 Fork 3)."""
+    # Input.dispatchMouseEvent yields isTrusted=True and bypasses iframe sandbox.
+    rng = rng or _random
+    base = getattr(driver, "_driver", driver)
+    by = By.CSS_SELECTOR if By is not None else "css selector"
+    iframe = base.find_element(by, iframe_selector)
+    base.switch_to.frame(iframe)
+    elem = base.find_element(by, element_selector)
+    er = base.execute_script("const r=arguments[0].getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height};", elem)
+    base.switch_to.default_content()
+    ir = base.execute_script("const r=arguments[0].getBoundingClientRect();return {left:r.left,top:r.top};", iframe)
+    abs_x = ir["left"] + er["left"] + er["width"] / 2 + rng.uniform(-15, 15)
+    abs_y = ir["top"] + er["top"] + er["height"] / 2 + rng.uniform(-5, 5)
+    for evt in ("mousePressed", "mouseReleased"):
+        base.execute_cdp_cmd("Input.dispatchMouseEvent",
+            {"type": evt, "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1})
+    return abs_x, abs_y
+
+
+def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
+    """Click Close on the 'Something went wrong' popup if present (Blueprint §6 Fork 3)."""
+    if WebDriverWait is None or EC is None or By is None:
+        return False
+    base = getattr(driver, "_driver", driver)
+    try:
+        WebDriverWait(base, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, SEL_POPUP_SOMETHING_WRONG)))
+    except TimeoutException:
+        return False
+    try:
+        driver.bounding_box_click(SEL_POPUP_CLOSE)
+        return True
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("popup close failed: %s", exc)
+        return False
+
+
 class GivexDriver:
     """Automates the Givex e-gift card purchase flow using CDP/Selenium.
 
@@ -672,6 +728,17 @@ class GivexDriver:
             if (_GhostCursor is not None and self._rnd is not None)
             else None
         )
+
+    def handle_vbv_challenge(self) -> bool:
+        """Cancel VBV/3DS iframe challenge (Blueprint §6 Fork 3); swallow all errors."""
+        try:
+            vbv_dynamic_wait(rng=self._get_rng())
+            cdp_click_iframe_element(self, SEL_VBV_IFRAME, SEL_VBV_CANCEL_BTN, rng=self._get_rng())
+            handle_something_wrong_popup(self)
+            return True
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning("handle_vbv_challenge failed: %s", _sanitize_error(str(exc)))
+            return False
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 
@@ -1214,15 +1281,7 @@ class GivexDriver:
     # ── Payment & Billing (Step 4 — same page) ──────────────────────────────
 
     def fill_payment_and_billing(self, card_info, billing_profile) -> None:
-        """Fill both card payment fields and billing address fields.
-
-        Card and billing fields are on the same page (``URL_PAYMENT``).
-
-        Args:
-            card_info: CardInfo with ``card_name``, ``card_number``,
-                ``exp_month``, ``exp_year``, and ``cvv``.
-            billing_profile: BillingProfile with address details.
-        """
+        """Fill card (and, if given, billing) fields on the shared payment page."""
         if self._sm is not None:
             self._sm.transition("PAYMENT")
         self._realistic_type_field(SEL_CARD_NAME, card_info.card_name, field_kind="name")
@@ -1230,6 +1289,8 @@ class GivexDriver:
         self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
         self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
         self._realistic_type_field(SEL_CARD_CVV, card_info.cvv, field_kind="cvv")
+        if billing_profile is None:
+            return
         # Billing section
         self._cdp_type_field(SEL_BILLING_ADDRESS, billing_profile.address)
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
@@ -1238,6 +1299,10 @@ class GivexDriver:
         self._cdp_type_field(SEL_BILLING_ZIP, billing_profile.zip_code)
         if billing_profile.phone:
             self._cdp_type_field(SEL_BILLING_PHONE, billing_profile.phone)
+
+    def fill_card_fields(self, card_info) -> None:
+        """Fill card fields only (no billing); used after VBV reload."""
+        self.fill_payment_and_billing(card_info, billing_profile=None)
 
     def fill_billing(self, billing_profile) -> None:
         """Backward-compatibility method that fills only billing fields.
@@ -1277,18 +1342,25 @@ class GivexDriver:
         self._hesitate_before_submit()
         self.bounding_box_click(SEL_COMPLETE_PURCHASE)
 
+    def clear_card_fields_cdp(self) -> None:
+        """Clear card number + CVV via CDP Ctrl+A + Backspace (Blueprint §6 Fork 4)."""
+        for selector in (SEL_CARD_NUMBER, SEL_CARD_CVV):
+            try:
+                if not self.find_elements(selector):
+                    continue
+                self.bounding_box_click(selector)
+                for key, code, vk, mods in (("a", "KeyA", 65, 2), ("Backspace", "Backspace", 8, 0)):
+                    evt = {"key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
+                    if mods:
+                        evt["modifiers"] = mods
+                    for t in ("keyDown", "keyUp"):
+                        self._driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": t, **evt})
+            except Exception:  # pylint: disable=broad-except
+                _log.warning("clear_card_fields_cdp failed; continuing")
+
     def clear_card_fields(self) -> None:
         """Clear all card form fields (best-effort)."""
-        for selector in (
-            SEL_CARD_NUMBER,
-            SEL_CARD_CVV,
-        ):
-            elements = self.find_elements(selector)
-            if elements:
-                try:
-                    elements[0].clear()
-                except Exception:  # field clear is best-effort
-                    _log.debug("Element clear() skipped in clear_card_fields")
+        self.clear_card_fields_cdp()
 
     # ── Post-submit state detection (Step 5) ─────────────────────────────────
 

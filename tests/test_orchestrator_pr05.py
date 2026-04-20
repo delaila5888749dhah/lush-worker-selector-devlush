@@ -56,6 +56,10 @@ def _make_task(order_queue=None):
     )
 
 
+def _action_name(action):
+    return action[0] if isinstance(action, tuple) else action
+
+
 def _clear_idempotency():
     with _idempotency_lock:
         _completed_task_ids.clear()
@@ -538,7 +542,7 @@ class L3IntegrationStubTests(unittest.TestCase):
         self.assertEqual(total, 50.0)
 
     def test_l3_orchestrator_decline_path(self):
-        """run_cycle with declined state returns 'retry' or 'retry_new_card'."""
+        """run_cycle with declined state aborts when no swap cards remain."""
         import modules.cdp.main as cdp_main
 
         stub = self._make_stub_driver()
@@ -558,7 +562,7 @@ class L3IntegrationStubTests(unittest.TestCase):
 
             action, state, total = run_cycle(task, worker_id="l3-worker")
 
-        self.assertIn(action, ("retry", "retry_new_card"))
+        self.assertEqual(_action_name(action), "abort_cycle")
 
     def test_l3_observability_mark_submitted_called_before_submit(self):
         """run_payment_step must call mark_submitted before submit_purchase (observability)."""
