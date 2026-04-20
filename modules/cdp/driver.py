@@ -321,7 +321,7 @@ SEL_NEUTRAL_DIV     = "body"
 
 # ── Popup text-match patterns (P1-1, Blueprint §6 Fork 3 text-verify) ─────────
 # English patterns for error/warning popups
-POPUP_TEXT_PATTERNS_EN: tuple[str, ...] = (
+POPUP_TEXT_PATTERNS_EN = (
     "something went wrong",
     "an error occurred",
     "please try again",
@@ -333,7 +333,7 @@ POPUP_TEXT_PATTERNS_EN: tuple[str, ...] = (
 )
 
 # Vietnamese patterns for error/warning popups
-POPUP_TEXT_PATTERNS_VN: tuple[str, ...] = (
+POPUP_TEXT_PATTERNS_VN = (
     "có lỗi xảy ra",
     "vui lòng thử lại",
     "thanh toán thất bại",
@@ -346,7 +346,7 @@ POPUP_TEXT_PATTERNS_VN: tuple[str, ...] = (
 
 # Combined default pattern set used by check_popup_text_match when no
 # explicit patterns are supplied.
-POPUP_TEXT_PATTERNS_DEFAULT: tuple[str, ...] = (
+POPUP_TEXT_PATTERNS_DEFAULT = (
     POPUP_TEXT_PATTERNS_EN + POPUP_TEXT_PATTERNS_VN
 )
 
@@ -765,7 +765,7 @@ def _get_shadow_text(base_driver, selector: str) -> str:
 
 def check_popup_text_match(
     driver,
-    patterns: tuple[str, ...] | None = None,
+    patterns=None,
     *,
     selector: str = SEL_POPUP_SOMETHING_WRONG,
     shadow_root: bool = True,

@@ -91,7 +91,7 @@ class TestCheckPopupTextMatch(unittest.TestCase):
         else:
             base.find_elements.return_value = []
         wrapper = MagicMock()
-        wrapper._driver = base
+        wrapper._driver = base  # pylint: disable=protected-access
         return wrapper, base
 
     # ── shadow_root=True path ────────────────────────────────────────────────
@@ -105,21 +105,21 @@ class TestCheckPopupTextMatch(unittest.TestCase):
         base.execute_script.assert_called_once()
 
     def test_match_vn_pattern_via_shadow_root(self):
-        wrapper, base = self._make_driver(
+        wrapper, _ = self._make_driver(
             script_return="Có lỗi xảy ra, vui lòng thử lại."
         )
         result = check_popup_text_match(wrapper, shadow_root=True)
         self.assertIn(result, POPUP_TEXT_PATTERNS_VN)
 
     def test_no_match_when_popup_text_irrelevant(self):
-        wrapper, base = self._make_driver(
+        wrapper, _ = self._make_driver(
             script_return="Welcome back! Your order is confirmed."
         )
         result = check_popup_text_match(wrapper, shadow_root=True)
         self.assertIsNone(result)
 
     def test_returns_none_when_no_popup_text(self):
-        wrapper, base = self._make_driver(script_return="")
+        wrapper, _ = self._make_driver(script_return="")
         result = check_popup_text_match(wrapper, shadow_root=True)
         self.assertIsNone(result)
 
@@ -132,7 +132,7 @@ class TestCheckPopupTextMatch(unittest.TestCase):
     # ── shadow_root=False path (find_elements) ───────────────────────────────
 
     def test_match_en_pattern_no_shadow_root(self):
-        wrapper, base = self._make_driver(
+        wrapper, _ = self._make_driver(
             find_elements_texts=["Payment failed. Please try again."]
         )
         with patch.object(drv, "By", drv.By):
@@ -140,14 +140,14 @@ class TestCheckPopupTextMatch(unittest.TestCase):
         self.assertIn(result, ("payment failed", "please try again"))
 
     def test_no_match_no_shadow_root_empty_elements(self):
-        wrapper, base = self._make_driver(find_elements_texts=[])
+        wrapper, _ = self._make_driver(find_elements_texts=[])
         result = check_popup_text_match(wrapper, shadow_root=False)
         self.assertIsNone(result)
 
     # ── custom patterns ──────────────────────────────────────────────────────
 
     def test_custom_patterns_override_default(self):
-        wrapper, base = self._make_driver(
+        wrapper, _ = self._make_driver(
             script_return="CUSTOM_ERROR_XYZ on page"
         )
         result = check_popup_text_match(
@@ -158,7 +158,7 @@ class TestCheckPopupTextMatch(unittest.TestCase):
         self.assertEqual(result, "custom_error_xyz")
 
     def test_custom_patterns_no_match(self):
-        wrapper, base = self._make_driver(
+        wrapper, _ = self._make_driver(
             script_return="something went wrong"
         )
         result = check_popup_text_match(
@@ -238,7 +238,7 @@ class TestCheckPopupTextMatch(unittest.TestCase):
         wrapper, _ = self._make_driver(
             script_return="Something went wrong"
         )
-        with patch.object(drv._log, "debug") as mock_debug:
+        with patch.object(drv._log, "debug") as mock_debug:  # pylint: disable=protected-access
             check_popup_text_match(wrapper, shadow_root=True)
         call_args_list = [str(c) for c in mock_debug.call_args_list]
         self.assertTrue(
@@ -250,7 +250,7 @@ class TestCheckPopupTextMatch(unittest.TestCase):
         wrapper, _ = self._make_driver(
             script_return="Everything is fine, your order is confirmed."
         )
-        with patch.object(drv._log, "debug") as mock_debug:
+        with patch.object(drv._log, "debug") as mock_debug:  # pylint: disable=protected-access
             check_popup_text_match(wrapper, shadow_root=True)
         call_args_list = [str(c) for c in mock_debug.call_args_list]
         self.assertTrue(
@@ -260,7 +260,7 @@ class TestCheckPopupTextMatch(unittest.TestCase):
 
     def test_debug_log_on_empty_text(self):
         wrapper, _ = self._make_driver(script_return="")
-        with patch.object(drv._log, "debug") as mock_debug:
+        with patch.object(drv._log, "debug") as mock_debug:  # pylint: disable=protected-access
             check_popup_text_match(wrapper, shadow_root=True)
         call_args_list = [str(c) for c in mock_debug.call_args_list]
         self.assertTrue(
