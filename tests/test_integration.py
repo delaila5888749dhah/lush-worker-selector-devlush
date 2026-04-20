@@ -317,13 +317,16 @@ class RunCycleTests(unittest.TestCase):
     def test_run_cycle_retry_when_no_state(self):
         with (
             patch("integration.orchestrator.billing") as mock_billing,
-            patch("integration.orchestrator.cdp"),
+            patch("integration.orchestrator.cdp") as mock_cdp,
             patch("integration.orchestrator.watchdog") as mock_watchdog,
             patch("integration.orchestrator.fsm") as mock_fsm,
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = None
+            # Simulate both primary and fallback page-state detection failing so
+            # that state remains None and handle_outcome returns "retry" (P0-1).
+            mock_cdp.detect_page_state.side_effect = RuntimeError("page not detected")
             action, state, total = run_cycle(_make_task())
         self.assertEqual(action, "retry")
         self.assertIsNone(state)

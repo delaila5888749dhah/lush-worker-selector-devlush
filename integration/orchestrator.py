@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.common.exceptions import SessionFlaggedError
+from modules.common.exceptions import InvalidTransitionError, SessionFlaggedError
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
@@ -976,6 +976,22 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             cdp.submit_purchase,
             worker_id=worker_id,
         )
+        # P0-1: Detect page state immediately after submit and wire FSM transition.
+        # This is the primary path for all FSM state changes in production.
+        try:
+            _page_state = cdp.detect_page_state(worker_id)
+            fsm.transition_for_worker(worker_id, _page_state)
+        except InvalidTransitionError as _fsm_exc:
+            _logger.warning(
+                "[trace=%s] FSM InvalidTransitionError after submit for worker=%s: %s",
+                _get_trace_id(), worker_id, _fsm_exc,
+            )
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "[trace=%s] detect_page_state failed after submit for worker=%s — "
+                "FSM transition skipped; fallback will attempt at state read.",
+                _get_trace_id(), worker_id, exc_info=True,
+            )
         # Fallback: read total from DOM to unblock watchdog
         _notify_total_from_dom(driver_obj, worker_id)
         total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
@@ -1021,6 +1037,24 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         watchdog.reset_session(worker_id)
         raise
     state = fsm.get_current_state_for_worker(worker_id)
+    if state is None:
+        # P0-1 fallback: FSM was never transitioned by the primary path (e.g.
+        # detect_page_state raised after submit).  Try once more here before
+        # returning so that handle_outcome receives a real state instead of None.
+        try:
+            _page_state = cdp.detect_page_state(worker_id)
+            state = fsm.transition_for_worker(worker_id, _page_state)
+        except InvalidTransitionError as _fsm_exc:
+            _logger.warning(
+                "[trace=%s] FSM fallback InvalidTransitionError for worker=%s: %s",
+                _get_trace_id(), worker_id, _fsm_exc,
+            )
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "[trace=%s] FSM fallback detect_page_state failed for worker=%s — "
+                "returning state=None; handle_outcome will retry.",
+                _get_trace_id(), worker_id, exc_info=True,
+            )
     return state, total
 
 
