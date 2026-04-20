@@ -472,7 +472,7 @@ class WorkerIdPropagationTests(unittest.TestCase):
             run_payment_step(_make_task(), worker_id="worker-42")
         mock_watchdog.enable_network_monitor.assert_called_once_with("worker-42")
         mock_watchdog.wait_for_total.assert_called_once_with(
-            "worker-42", timeout=30,
+            "worker-42", timeout=10.0,
         )
 
 

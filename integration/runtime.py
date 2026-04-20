@@ -3,6 +3,7 @@ import atexit
 from datetime import datetime, timezone
 import logging
 import os
+import random
 import re
 import signal
 import threading
@@ -71,6 +72,47 @@ _BILLING_CB_PAUSE = max(1, int(os.environ.get("BILLING_CB_PAUSE", "120")))
 _consecutive_billing_failures = 0
 _billing_throttled_until: float = 0.0
 _log_sink_error_count = 0  # incremented on log_sink.emit() failure
+
+# ── C1 — Stagger-start between worker launches (Blueprint §1, §8.4) ──
+# Blueprint §1 requires random.uniform(12, 25) seconds between consecutive
+# worker launches to avoid synchronised access patterns.  Stagger is
+# INDEPENDENT from behavior delay (§8.4) — tracked here separately.
+_STAGGER_RANGE = (12.0, 25.0)
+_last_worker_launch_ts: float = 0.0
+_stagger_lock = threading.Lock()
+
+
+def _stagger_sleep_before_launch(rng=None) -> float:
+    """Sleep between worker launches per Blueprint §1.
+
+    The first launch is immediate (no stagger).  Subsequent launches wait so
+    that the delta since the previous launch falls within
+    ``_STAGGER_RANGE``.  Uses the interruptible ``_stop_event`` so that
+    ``stop()`` can unblock the sleep.
+
+    Returns the number of seconds slept (0.0 when no sleep was required).
+    """
+    global _last_worker_launch_ts
+    rng = rng or random
+    with _stagger_lock:
+        now = time.monotonic()
+        target = rng.uniform(*_STAGGER_RANGE)
+        if _last_worker_launch_ts > 0:
+            elapsed = now - _last_worker_launch_ts
+            wait_s = target - elapsed
+        else:
+            wait_s = 0.0
+    if wait_s > 0:
+        # Interruptible by stop_event so graceful shutdown preempts the wait.
+        _stop_event.wait(timeout=wait_s)
+        slept = wait_s
+    else:
+        slept = 0.0
+    with _stagger_lock:
+        _last_worker_launch_ts = time.monotonic()
+    return slept
+
+
 def _is_billing_throttled() -> bool:
     """Return True if billing circuit breaker is active (must hold _lock)."""
     return time.monotonic() < _billing_throttled_until
@@ -415,7 +457,18 @@ def _apply_scale(target_count, task_fn):
     if target_count > current_count:
         with _lock:
             restarted = min(_pending_restarts, target_count - current_count); _pending_restarts -= restarted
+            stagger_enabled = _behavior_delay_enabled
         for i in range(target_count - current_count):
+            # C1 — Blueprint §1: stagger launches 12–25s apart.  The first
+            # launch in the process lifetime is not delayed (stagger is a
+            # gap-between-launches contract).  Sleep is interruptible by
+            # _stop_event so shutdown preempts it.  Only active in production
+            # mode (_behavior_delay_enabled == True); tests disable it via
+            # set_behavior_delay_enabled(False) to keep runs fast.
+            if stagger_enabled:
+                _stagger_sleep_before_launch()
+                if _stop_event.is_set():
+                    break
             start_worker(task_fn)
             if i < restarted: monitor.record_restart()
         _log_event("runtime", "scaling", "scale_up", {"from": current_count, "to": target_count})
@@ -865,7 +918,7 @@ def reset():
     Raises RuntimeError if called while the runtime is actively running
     in production mode (behavior delay enabled). Call stop() first.
     """
-    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until, _log_sink_error_count
+    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until, _log_sink_error_count, _last_worker_launch_ts
     with _lock:
         if _state == "RUNNING" and _behavior_delay_enabled:
             raise RuntimeError(
@@ -880,6 +933,8 @@ def reset():
         _loop_error_count = 0; _restart_delay = 0
         _consecutive_billing_failures = 0; _billing_throttled_until = 0.0
         _log_sink_error_count = 0
+    with _stagger_lock:
+        _last_worker_launch_ts = 0.0
     with _trace_lock:
         _trace_id = None
     _stop_event.clear()

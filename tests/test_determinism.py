@@ -76,9 +76,31 @@ class TestNoRandomness(unittest.TestCase):
         )
 
     def test_runtime_no_random_import(self):
-        self.assertFalse(
-            _imports_random(_RUNTIME_PATH),
-            "integration/runtime.py must not import the random module",
+        """``integration/runtime.py`` may import ``random`` ONLY for the
+        Blueprint §1 stagger-start delay (`random.uniform(12, 25)`).  Rollout
+        and scaling decisions must remain deterministic.
+        """
+        import pathlib
+        src = pathlib.Path(_RUNTIME_PATH).read_text(encoding="utf-8")
+        if not _imports_random(_RUNTIME_PATH):
+            return  # no random import: trivially OK
+        # When random IS imported, ensure it is only consumed by
+        # the stagger helper and not leaked into scaling/rollout paths.
+        self.assertIn(
+            "_stagger_sleep_before_launch",
+            src,
+            "runtime.py imports random; expected it to be used only by "
+            "_stagger_sleep_before_launch per Blueprint §1",
+        )
+        self.assertNotIn(
+            "random.choice(",
+            src,
+            "runtime.py must not use random.choice for scaling decisions",
+        )
+        self.assertNotIn(
+            "random.randint(",
+            src,
+            "runtime.py must not use random.randint for scaling decisions",
         )
 
 

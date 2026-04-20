@@ -48,6 +48,39 @@ from modules.watchdog import main as watchdog
 # to fire before the cycle can legitimately complete (false timeout).
 # If you change any of these three values, re-verify this invariant.
 _WATCHDOG_TIMEOUT = 30
+# Default caller-supplied timeout documented in spec/watchdog.md.
+_WATCHDOG_TIMEOUT_DEFAULT = _WATCHDOG_TIMEOUT
+
+# C5 — Blueprint §5 payment-step specific watchdog timeout.
+# Blueprint §5 mandates a 10s total-response watchdog on the payment step.
+# spec/watchdog.md keeps the module contract as 30s (caller-controlled);
+# this constant narrows the timeout only for `run_payment_step`.
+# Operators can override via the PAYMENT_WATCHDOG_TIMEOUT_S env var (integer
+# or float seconds, must be > 0).  On invalid override the default 10s is
+# used and a warning is logged.
+def _load_payment_watchdog_timeout() -> float:
+    raw = os.environ.get("PAYMENT_WATCHDOG_TIMEOUT_S", "").strip()
+    if not raw:
+        return 10.0
+    try:
+        value = float(raw)
+    except ValueError:
+        _logger.warning(
+            "PAYMENT_WATCHDOG_TIMEOUT_S=%r is not numeric; defaulting to 10s",
+            raw,
+        )
+        return 10.0
+    if value <= 0:
+        _logger.warning(
+            "PAYMENT_WATCHDOG_TIMEOUT_S=%r must be > 0; defaulting to 10s",
+            raw,
+        )
+        return 10.0
+    return value
+
+
+_WATCHDOG_TIMEOUT_PAYMENT = _load_payment_watchdog_timeout()
+
 
 _logger = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger(f"{__name__}.audit")
@@ -944,7 +977,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         )
         # Fallback: read total from DOM to unblock watchdog
         _notify_total_from_dom(driver_obj, worker_id)
-        total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
+        total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
         if _submitted_before_wait:

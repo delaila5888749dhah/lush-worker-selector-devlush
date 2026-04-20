@@ -109,12 +109,18 @@ class BitBrowserSession:
     """Context manager for BitBrowser profile lifecycle.
 
     __enter__: create_profile() → launch_profile() → return (profile_id, webdriver_url)
-    __exit__: close_profile() → delete_profile() (best-effort, log errors)
+    __exit__: release_profile() — idempotent close + delete, best-effort
     """
 
     def __init__(self, client: BitBrowserClient):
         self._client = client
         self._profile_id: Optional[str] = None
+        self._released: bool = False
+
+    @property
+    def profile_id(self) -> Optional[str]:
+        """Return the bound profile id (or None before __enter__)."""
+        return self._profile_id
 
     def __enter__(self) -> Tuple[str, str]:
         profile_id = self._client.create_profile()
@@ -123,23 +129,46 @@ class BitBrowserSession:
         if not isinstance(webdriver_url, str) or not webdriver_url:
             raise RuntimeError("BitBrowser launch_profile response missing webdriver")
         self._profile_id = profile_id
+        self._released = False
         return profile_id, webdriver_url
 
-    def __exit__(self, exc_type, exc_value, exc_tb) -> bool:
+    def release_profile(self) -> None:
+        """Return the BitBrowser profile to a clean state.
+
+        Blueprint §7: "Trả Profile BitBrowser về trạng thái sạch".  MUST be
+        called on every cycle end (success / abort / exception).  Idempotent
+        — safe to call multiple times.  All best-effort: underlying client
+        calls log and swallow network errors individually, and
+        ``_released`` is set in a ``finally`` block so a transient failure
+        never causes a re-release on a subsequent call.
+        """
+        if self._released:
+            return
         if self._profile_id is None:
-            return False
+            self._released = True
+            return
+        profile_id = self._profile_id
         try:
-            self._client.close_profile(self._profile_id)
-        except (urllib.error.URLError, OSError) as exc:
-            _log.warning(
-                "Best-effort BitBrowser close_profile failed for %s: %s",
-                self._profile_id, exc)
-        try:
-            self._client.delete_profile(self._profile_id)
-        except (urllib.error.URLError, OSError) as exc:
-            _log.warning(
-                "Best-effort BitBrowser delete_profile failed for %s: %s",
-                self._profile_id, exc)
+            # Order: close the browser process first so no in-flight state is
+            # clobbered, then delete the profile from the pool.  Each step
+            # is already best-effort inside the client wrappers.
+            try:
+                self._client.close_profile(profile_id)
+            except (urllib.error.URLError, OSError) as exc:
+                _log.warning(
+                    "Best-effort BitBrowser close_profile failed for %s: %s",
+                    profile_id, exc)
+            try:
+                self._client.delete_profile(profile_id)
+            except (urllib.error.URLError, OSError) as exc:
+                _log.warning(
+                    "Best-effort BitBrowser delete_profile failed for %s: %s",
+                    profile_id, exc)
+        finally:
+            self._released = True
+
+    def __exit__(self, exc_type, exc_value, exc_tb) -> bool:
+        self.release_profile()
         return False
 
 

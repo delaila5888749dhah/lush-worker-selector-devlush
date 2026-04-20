@@ -1,28 +1,32 @@
 # Addendum — Runtime Wiring Posture (U-02, U-08)
 
-**Source:** `integration/runtime.py` (all functions in scope).
+**Source:** `integration/runtime.py`, `integration/worker_task.py`.
 
 ## U-02 — CDP / BitBrowser registration calls
 
-None of `cdp.register_driver`, `cdp._register_pid`, `cdp.register_browser_profile`,
-`BitBrowserSession(...)`, or `get_bitbrowser_client()` appears anywhere in
-`integration/runtime.py`. The only `cdp` usage is `cdp.get_browser_profile()`
-(read-only) in `get_worker_browser_profile()` and the module imports on lines
-25–26. No driver is constructed, no PID registered, no browser profile
-registered, no BitBrowser session opened. F-01/F-03 wiring is not yet present.
+F-01/F-03 have landed.  The BitBrowser session lifecycle now lives in
+`integration/worker_task.py::make_task_fn`: `get_bitbrowser_client()` →
+`BitBrowserSession(...)` → `cdp.register_driver()` → `cdp._register_pid()`
+→ `cdp.register_browser_profile()` → `cdp.unregister_driver()` in a
+`finally` block.  `integration/runtime.py` itself remains free of CDP /
+BitBrowser wiring (only `cdp.get_browser_profile()` read-only accessor).
 
-**Verdict: CLEARED.** Lock-in test `tests/verification/test_runtime_wiring_posture.py`
-breaks if silent wiring is added before F-01/F-03 PRs are reviewed.
+**Verdict: CLEARED.** The former lock-in test
+`tests/verification/test_runtime_wiring_posture.py` has been deleted
+(posture requirement is obsolete now that F-01/F-03 shipped) and
+replaced by `tests/verification/test_runtime_wiring_lifecycle.py`,
+which asserts the positive wiring in `worker_task.py`.
 
 ## U-08 — Stagger-start delay between worker launches
 
-`start_worker` applies an exponential `_restart_delay` only when
-`_pending_restarts > 0` (a restart backoff, not a stagger). `_apply_scale` calls
-`start_worker` in a tight loop with no inter-launch sleep. No `random.uniform(12, 25)`
-exists in the module.
+`_stagger_sleep_before_launch()` (Blueprint §1, §8.4) now enforces a
+`random.uniform(12, 25)` s gap between consecutive worker launches.  The
+call site is `_apply_scale` in the SCALE_UP loop, immediately before
+each `start_worker(task_fn)` invocation.  The sleep is interruptible by
+`_stop_event` so graceful shutdown preempts the wait.  Stagger state is
+independent from the per-worker `_restart_delay` backoff (which handles
+failure restarts, not fresh scale-ups) and from the `modules.delay`
+behavior delay (which operates inside a cycle, not between cycles).
 
-Blueprint §2 requires `random.uniform(12, 25)` s between worker launches.
+**Verdict: CLEARED.** Covered by `tests/test_stagger_start.py`.
 
-**Verdict: REMAINS_OPEN.** Follow-up issue to be filed:
-*"Implement stagger-start delay (random.uniform 12–25 s) between worker launches
-per Blueprint §2"*. Do not fix here.

@@ -94,17 +94,20 @@ Notes:
 Caller convention (xem `integration/orchestrator.py`):
 
 ```
-_WATCHDOG_TIMEOUT = 30  # giây
-watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT)
+_WATCHDOG_TIMEOUT = 30  # giây (caller-controlled default)
+_WATCHDOG_TIMEOUT_PAYMENT = 10  # giây — Blueprint §5, dùng trong run_payment_step
+watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
 ```
 
-- Timeout mặc định được dùng trong orchestrator là **30 giây**.
-- Delay layer đảm bảo tổng behavioral delay ≤ 7.0s/bước, để lại ≥ 23s headroom.
-- `spec/blueprint.md` (§5 và §Timing Invariants) đề cập "watchdog timeout = 10s" là
-  narrative cũ và không phản ánh giá trị triển khai thực tế; contract triển khai là 30s
-  (xem `integration/orchestrator.py: _WATCHDOG_TIMEOUT = 30` và `spec/cdp-timeout-contract.md`).
-- Module watchdog không enforce giá trị timeout cụ thể — timeout được truyền từ caller.
-  Caller có trách nhiệm dùng giá trị phù hợp với SLA của hệ thống.
+- **Timeout contract mặc định** vẫn là **30 giây** — module `watchdog` không enforce,
+  caller truyền giá trị phù hợp với SLA của từng step.
+- **Payment step (Blueprint §5)** yêu cầu timeout ngắn hơn (10s) vì sau `submit_purchase`
+  mình chỉ chờ response network trả về total amount — không còn behavioral delay nào
+  được cộng thêm.  Caller `integration/orchestrator.py::run_payment_step` sử dụng hằng số
+  `_WATCHDOG_TIMEOUT_PAYMENT` (override qua env `PAYMENT_WATCHDOG_TIMEOUT_S`, mặc định 10s).
+- **Các step khác** (non-payment callers) tiếp tục dùng `_WATCHDOG_TIMEOUT_DEFAULT = 30s`.
+  Delay layer đảm bảo tổng behavioral delay ≤ 7.0s/bước, để lại ≥ 23s headroom trên 30s.
+- Timeout hết → `wait_for_total` raise `SessionFlaggedError` (caller quyết xử lý retry).
 
 ## Threading Model
 
