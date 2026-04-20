@@ -15,9 +15,8 @@ Also covers the module-level helpers:
   - detect_popup_thank_you (cdp.main wrapper)
 """
 # pylint: disable=protected-access
-import os
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import integration.orchestrator as _orch
 from integration.orchestrator import (
@@ -31,8 +30,9 @@ from modules.cdp.driver import (
     URL_CONFIRM_FRAGMENTS,
     detect_popup_thank_you,
 )
-from modules.common.types import CardInfo, CycleContext, State, WorkerTask
+from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import cleanup_worker, reset_registry
+import modules.cdp.main as cdp_main
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ class TestRunCycleClearRefillWiring(unittest.TestCase):
         cleanup_worker(_WORKER_ID)
         reset_registry()
 
-    def _run_cycle_with_mocks(
+    def _run_cycle_with_mocks(  # pylint: disable=too-many-locals
         self,
         *,
         order_queue=(),
@@ -269,7 +269,6 @@ class TestRunCycleClearRefillWiring(unittest.TestCase):
         driver_fill_side_effect=None,
     ):
         """Helper: run run_cycle with all external dependencies mocked."""
-        next_card = _make_card("999999") if order_queue else None
         task = _make_task(order_queue=order_queue)
 
         mock_driver = MagicMock()
@@ -277,13 +276,11 @@ class TestRunCycleClearRefillWiring(unittest.TestCase):
         mock_driver.fill_card_fields = MagicMock(side_effect=driver_fill_side_effect)
 
         success_state = State("success")
-        billing_mock = _make_billing_mock()
-        store_mock = _make_store_mock()
 
         with patch.object(_orch, "_ENABLE_RETRY_LOOP", True), \
              patch.object(_orch, "_ENABLE_CLEAR_REFILL_AFTER_POPUP", enable_flag), \
-             patch("integration.orchestrator.billing", billing_mock), \
-             patch(_STORE_PATCH, return_value=store_mock), \
+             patch("integration.orchestrator.billing", _make_billing_mock()), \
+             patch(_STORE_PATCH, return_value=_make_store_mock()), \
              patch("integration.orchestrator.watchdog") as mock_wd, \
              patch("integration.orchestrator.fsm") as mock_fsm, \
              patch("integration.orchestrator.cdp") as mock_cdp, \
@@ -427,7 +424,6 @@ class TestCdpMainDetectPopupThankYou(unittest.TestCase):
     """Tests for the cdp.main.detect_popup_thank_you public wrapper."""
 
     def test_wrapper_delegates_to_driver(self):
-        import modules.cdp.main as cdp_main
         mock_driver = MagicMock()
         # Ensure _driver is not auto-created as a sub-mock; use the driver itself as base.
         mock_driver._driver = mock_driver
@@ -442,7 +438,6 @@ class TestCdpMainDetectPopupThankYou(unittest.TestCase):
         self.assertTrue(result)
 
     def test_wrapper_returns_false_when_no_signal(self):
-        import modules.cdp.main as cdp_main
         mock_driver = MagicMock()
         mock_driver.current_url = "https://example.com/payment.html"
         body_el = MagicMock()
@@ -455,7 +450,6 @@ class TestCdpMainDetectPopupThankYou(unittest.TestCase):
         self.assertFalse(result)
 
     def test_wrapper_raises_when_no_driver(self):
-        import modules.cdp.main as cdp_main
         with patch.object(cdp_main, "_get_driver", side_effect=RuntimeError("No driver")):
             with self.assertRaises(RuntimeError):
                 cdp_main.detect_popup_thank_you("missing-worker")
