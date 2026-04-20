@@ -720,8 +720,8 @@ def handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20)) -> bool:
     """Focus-Shift Retry per Blueprint §6 Ngã rẽ 1.
 
     Steps:
-      1. Click a neutral point (e.g. ``(20, 20)`` on the page ``body``) to
-         shift focus away from the locked submit button.
+      1. Click ``SEL_NEUTRAL_DIV`` (``body``) to shift focus away from the
+         locked submit button.
       2. Wait 0.5s to let any animation settle.
       3. Re-locate ``SEL_COMPLETE_PURCHASE`` and click it once via
          ``ActionChains.click``.
@@ -733,14 +733,14 @@ def handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20)) -> bool:
 
     Args:
         driver: Selenium-compatible driver.
-        neutral_xy: Pixel offset from the current mouse position for the
-            neutral click.  Defaults to ``(20, 20)``.
+        neutral_xy: Kept for backward-compatibility; no longer used.
     """
     if _ActionChains is None:  # pragma: no cover - selenium always present in prod
         _log.warning("handle_ui_lock_focus_shift: ActionChains unavailable")
         return False
     try:
-        _ActionChains(driver).move_by_offset(*neutral_xy).click().perform()
+        neutral = driver.find_element("css selector", SEL_NEUTRAL_DIV)
+        _ActionChains(driver).move_to_element(neutral).click().perform()
         time.sleep(0.5)
         btn = driver.find_element("css selector", SEL_COMPLETE_PURCHASE)
         _ActionChains(driver).move_to_element(btn).click().perform()
