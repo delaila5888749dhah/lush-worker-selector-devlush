@@ -94,6 +94,13 @@ _ENABLE_RETRY_LOOP: bool = os.getenv("ENABLE_RETRY_LOOP", "1") not in ("0", "fal
 _ENABLE_RETRY_UI_LOCK: bool = os.getenv("ENABLE_RETRY_UI_LOCK", "1") not in ("0", "false", "no")
 _MAX_UI_LOCK_RETRIES: int = 2
 
+# P1-2 — Clear/refill after "Thank you" popup feature flag.
+# Set ENABLE_CLEAR_REFILL_AFTER_POPUP=0 to disable clear/refill after confirmation.
+# Default is enabled (any value other than "0", "false", or "no").
+_ENABLE_CLEAR_REFILL_AFTER_POPUP: bool = (
+    os.getenv("ENABLE_CLEAR_REFILL_AFTER_POPUP", "1") not in ("0", "false", "no")
+)
+
 _logger = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger(f"{__name__}.audit")
 
@@ -1075,6 +1082,34 @@ def _ctx_next_swap_card(ctx):
     return ctx.task.order_queue[ctx.swap_count]
 
 
+def clear_refill_after_thank_you_popup(driver, new_card) -> None:
+    """Clear card fields then refill with *new_card* after a "Thank you" popup.
+
+    This implements the P1-2 workflow: after :func:`detect_popup_thank_you`
+    confirms that the payment page is showing a success/confirmation signal,
+    the card form fields are cleared via CDP (Ctrl+A + Backspace) and then
+    refilled with the next card from the order queue.
+
+    Steps:
+    1. ``clear_card_fields_cdp`` — wipe card-number and CVV fields.
+    2. ``fill_card_fields``      — fill card fields with *new_card*.
+
+    Args:
+        driver: GivexDriver instance (or compatible test double).
+        new_card: :class:`~modules.common.types.CardInfo` for the next order.
+    """
+    try:
+        _logger.info("[thank-you-refill] step=clear_card_fields_cdp")
+        driver.clear_card_fields_cdp()
+        _logger.info("[thank-you-refill] step=fill_card_fields (new card)")
+        driver.fill_card_fields(new_card)
+        _logger.info("[thank-you-refill] clear/refill sequence complete")
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning(
+            "[thank-you-refill] clear/refill failed: %s", _sanitize_error(exc)
+        )
+
+
 def is_payment_page_reloaded(driver) -> bool:
     """True if billing field is missing/empty after VBV cancel."""
     try:
@@ -1332,6 +1367,31 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
             action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
 
             _action_key = action[0] if isinstance(action, tuple) else action
+
+            # P1-2 — Clear/refill after "Thank you" popup.
+            # When the payment was successful and more cards remain in the queue,
+            # verify the thank-you popup via text/URL match then clear card fields
+            # and refill with the next card so the form is ready for the caller.
+            # ctx is always set by this point (created at top of run_cycle when None).
+            if _ENABLE_CLEAR_REFILL_AFTER_POPUP and _action_key == "complete":
+                _next_refill_card = _ctx_next_swap_card(ctx)
+
+                if _next_refill_card is not None:
+                    try:
+                        _ty_detected = cdp.detect_popup_thank_you(worker_id)
+                    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                        _ty_detected = False
+                    if _ty_detected:
+                        try:
+                            _ty_driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+                            if _ty_driver is not None:
+                                clear_refill_after_thank_you_popup(_ty_driver, _next_refill_card)
+                        except Exception as _ty_exc:  # noqa: BLE001  # pylint: disable=broad-except
+                            _logger.warning(
+                                "[trace=%s] clear_refill_after_thank_you_popup failed "
+                                "for worker=%s: %s",
+                                _get_trace_id(), worker_id, _sanitize_error(_ty_exc),
+                            )
 
             if _action_key in ("complete", "abort_cycle", "await_3ds"):
                 break
