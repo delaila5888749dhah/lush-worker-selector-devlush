@@ -265,10 +265,16 @@ def _sanitize_error(msg: str) -> str:
 # ── URL constants ─────────────────────────────────────────────────────────
 URL_GEO_CHECK = "https://lumtest.com/myip.json"
 URL_BASE      = "https://wwws-usa2.givex.com/cws4.0/lushusa/"
-URL_EGIFT     = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/"
+URL_EGIFT     = os.getenv(
+    "GIVEX_EGIFT_URL",
+    "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/",
+)
 URL_CART      = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/shopping-cart.html"
 URL_CHECKOUT  = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/checkout.html"
-URL_PAYMENT   = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html"
+URL_PAYMENT   = os.getenv(
+    "GIVEX_PAYMENT_URL",
+    "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html",
+)
 
 # ── URL fragments used to detect order confirmation ─────────────────────────
 URL_CONFIRM_FRAGMENTS = ("/confirmation", "/order-confirmation", "order-confirm")
