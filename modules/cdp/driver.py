@@ -350,6 +350,38 @@ POPUP_TEXT_PATTERNS_DEFAULT = (
     POPUP_TEXT_PATTERNS_EN + POPUP_TEXT_PATTERNS_VN
 )
 
+# ── Thank-you confirmation popup patterns (P1-3, Blueprint §6 Fork 2 success) ──
+# English patterns for the "Thank you" order-confirmation popup/page
+POPUP_TEXT_PATTERNS_THANK_YOU_EN = (
+    "thank you for your order",
+    "thank you for your purchase",
+    "order confirmed",
+    "order placed successfully",
+    "your order has been placed",
+    "purchase confirmed",
+)
+
+# Vietnamese patterns for the "Thank you" order-confirmation popup/page
+POPUP_TEXT_PATTERNS_THANK_YOU_VN = (
+    "cảm ơn đơn hàng của bạn",
+    "cảm ơn quý khách",
+    "đơn hàng đã được xác nhận",
+    "mua hàng thành công",
+    "đặt hàng thành công",
+    "đơn hàng của bạn đã được đặt",
+)
+
+# Combined thank-you pattern set (EN + VN)
+POPUP_TEXT_PATTERNS_THANK_YOU = (
+    POPUP_TEXT_PATTERNS_THANK_YOU_EN + POPUP_TEXT_PATTERNS_THANK_YOU_VN
+)
+
+# CSS selector targeting confirmation/thank-you page elements
+SEL_THANK_YOU_CONFIRMATION = (
+    ".order-confirmation, .confirmation-message, .thank-you-message, "
+    "#orderConfirmation, .order-complete, .purchase-confirmation"
+)
+
 _GREETINGS = [
     "Happy gifting!",
     "Enjoy this little treat!",
@@ -819,6 +851,78 @@ def check_popup_text_match(
         len(patterns),
         selector,
         normalised[:120],
+    )
+    return None
+
+
+def detect_popup_thank_you(
+    driver,
+    *,
+    selector: str = SEL_THANK_YOU_CONFIRMATION,
+    shadow_root: bool = True,
+) -> str | None:
+    """Detect whether the "Thank you" order-confirmation popup/page is visible.
+
+    Checks both the dedicated confirmation element (via *selector*) and the full
+    page body for any known "Thank you" pattern in English or Vietnamese.  Falls
+    back to a full-body scan when no confirmation element is found, so that inline
+    confirmation banners (Blueprint §6 Fork 2) are also detected.
+
+    Args:
+        driver: GivexDriver wrapper or raw Selenium WebDriver.
+        selector: CSS selector targeting the confirmation container.  Defaults to
+            :data:`SEL_THANK_YOU_CONFIRMATION`.
+        shadow_root: When ``True`` (default) shadow-DOM children are also traversed.
+
+    Returns:
+        The first matching "Thank you" pattern string if detected; ``None``
+        otherwise.  On detection failure a WARNING-level log line is emitted so
+        that on-call engineers can diagnose flaky confirmation pages.
+    """
+    patterns = POPUP_TEXT_PATTERNS_THANK_YOU
+
+    # Primary: scan the dedicated confirmation element
+    result = check_popup_text_match(
+        driver,
+        patterns=patterns,
+        selector=selector,
+        shadow_root=shadow_root,
+    )
+    if result is not None:
+        _log.debug(
+            "detect_popup_thank_you: confirmed via selector=%r pattern=%r",
+            selector,
+            result,
+        )
+        return result
+
+    # Fallback: scan the full page body (catches inline banners)
+    base = getattr(driver, "_driver", driver)
+    body_text = ""
+    try:
+        # The JS expression already returns "" when document.body is absent;
+        # the Python `or ""` guards against execute_script returning None.
+        body_text = base.execute_script(
+            "return document.body ? document.body.innerText : '';"
+        ) or ""
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    normalised = body_text.lower().strip()
+    for pat in patterns:
+        if pat in normalised:
+            _log.debug(
+                "detect_popup_thank_you: confirmed via body fallback pattern=%r",
+                pat,
+            )
+            return pat
+
+    _log.warning(
+        "detect_popup_thank_you: FAIL — 'Thank you' popup not detected "
+        "(selector=%r, body_snippet=%r). "
+        "DOM may not have injected the confirmation element yet.",
+        selector,
+        normalised[:200],
     )
     return None
 
