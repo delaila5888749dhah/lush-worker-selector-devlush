@@ -11,17 +11,14 @@ Strategy: patch run_payment_step and handle_outcome to control the action
 returned, then assert whether mark_completed / release_inflight were called.
 """
 
-from __future__ import annotations
-
 import sys
 import os
 import unittest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-import modules.cdp.main as _cdp_main
-from modules.common.types import CardInfo, CycleContext, State, WorkerTask
+from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import (
     cleanup_worker,
     reset_registry,
