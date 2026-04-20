@@ -198,7 +198,7 @@ class TestDetectPopupThankYouShadowDOM(unittest.TestCase):
     can isolate the shadow-root code path.
     """
 
-    def _make_shadow_driver(self, shadow_text: str, selector: str = SEL_CONFIRMATION_EL):
+    def _make_shadow_driver(self, shadow_text: str):
         """Driver mock where body is empty but execute_script returns shadow text."""
         wrapper, base = _make_driver(
             url="https://store.example.com/payment.html",
@@ -244,7 +244,6 @@ class TestDetectPopupThankYouShadowDOM(unittest.TestCase):
         custom_sel = ".confirmation-banner"
         wrapper, base = self._make_shadow_driver(
             shadow_text="thank you for your order",
-            selector=custom_sel,
         )
         detect_popup_thank_you(wrapper, shadow_root=True, selector=custom_sel)
         call_args = base.execute_script.call_args
