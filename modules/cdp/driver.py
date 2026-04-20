@@ -733,13 +733,13 @@ def _get_shadow_text(base_driver, selector: str) -> str:
 (function(selector) {
     function collectText(node) {
         if (!node) return '';
-        var text = '';
+        let text = '';
         if (node.shadowRoot) {
             text += collectText(node.shadowRoot);
         }
         if (node.childNodes) {
-            for (var i = 0; i < node.childNodes.length; i++) {
-                var child = node.childNodes[i];
+            for (let i = 0; i < node.childNodes.length; i++) {
+                const child = node.childNodes[i];
                 if (child.nodeType === 3) {
                     text += child.textContent || '';
                 } else if (child.nodeType === 1) {
@@ -749,9 +749,9 @@ def _get_shadow_text(base_driver, selector: str) -> str:
         }
         return text;
     }
-    var els = document.querySelectorAll(selector);
-    var result = '';
-    for (var j = 0; j < els.length; j++) {
+    const els = document.querySelectorAll(selector);
+    let result = '';
+    for (let j = 0; j < els.length; j++) {
         result += collectText(els[j]) + ' ';
     }
     return result;
@@ -796,6 +796,7 @@ def check_popup_text_match(
         raw_text = _get_shadow_text(base, selector)
     else:
         try:
+            # By may be None when selenium is not installed (module-level try/except)
             elements = base.find_elements(By.CSS_SELECTOR, selector) if By is not None else []
         except Exception:  # pylint: disable=broad-except
             elements = []
