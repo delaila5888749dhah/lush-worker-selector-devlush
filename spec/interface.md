@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 5.0
+spec-version: 6.0
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,9 @@ spec-version: 5.0
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v6.0 Breaking Changes:**
+> - Added CDPCommandError exception type to modules.common.exceptions (inherits SessionFlaggedError)
 >
 > **v5.0 Breaking Changes:**
 > - CDP functions (detect_page_state, fill_card, fill_billing, clear_card_fields) now require worker_id parameter

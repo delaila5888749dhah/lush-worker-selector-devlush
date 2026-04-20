@@ -44,9 +44,9 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 5.0 | 2026-04-08 |
-| `spec/integration/interface.md` | 5.3 | 2026-04-19 |
-| `spec/interface.md` (aggregated) | 5.0 | 2026-04-08 |
+| `spec/core/interface.md` | 6.0 | 2026-04-20 |
+| `spec/integration/interface.md` | 6.0 | 2026-04-20 |
+| `spec/interface.md` (aggregated) | 6.0 | 2026-04-20 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -54,6 +54,11 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v6.0 (2026-04-20) — BREAKING
+- Added `CDPCommandError` exception type to `modules.common.exceptions` (inherits `SessionFlaggedError`)
+- Attributes: `command` (CDP method name), `detail` (PII-sanitized error string)
+- Used by `_safe_cdp_cmd()` helper in `modules/cdp/driver.py` for typed CDP error handling
 
 ### v1.1 (2026-04-16) — ADDITIVE
 - `spec/cdp-timeout-contract.md`: Added INV-CDP-EXEC-01 (executor saturation, orphaned threads), INV-CDP-NOTIFY-01 (first-notify-wins dual-notify race safety), INV-CDP-SHUTDOWN-01 (bounded shutdown observability), and executor health metrics table

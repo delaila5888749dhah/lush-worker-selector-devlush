@@ -10,9 +10,8 @@ Covers:
 - Log output verification: structured error fields (cmd=, detail=) appear in logs.
 """
 
-import logging
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from modules.cdp.driver import (
     GivexDriver,

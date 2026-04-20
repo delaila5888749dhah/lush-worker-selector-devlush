@@ -1,7 +1,10 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 5.3
+spec-version: 6.0
 
+> **v6.0 Breaking Changes:**
+> - Added CDPCommandError exception type to modules.common.exceptions (inherits SessionFlaggedError)
+>
 > **v5.3 Breaking Changes:**
 > - billing.select_profile now accepts optional worker_id parameter for per-worker state isolation (Blueprint §5 billing_pool rule)
 >
