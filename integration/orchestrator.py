@@ -7,6 +7,7 @@ this file is the single integration point that wires them together.
 
 import atexit
 import concurrent.futures
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -82,6 +83,10 @@ def _load_payment_watchdog_timeout() -> float:
 
 _WATCHDOG_TIMEOUT_PAYMENT = _load_payment_watchdog_timeout()
 
+# P0-2 — Retry loop feature flag.
+# Set ENABLE_RETRY_LOOP=0 to fall back to the original single-shot behaviour.
+# Default is enabled (any value other than "0", "false", or "no").
+_ENABLE_RETRY_LOOP: bool = os.getenv("ENABLE_RETRY_LOOP", "1") not in ("0", "false", "no")
 
 _logger = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger(f"{__name__}.audit")
@@ -1215,11 +1220,81 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
         )
 
     try:
-        initialize_cycle(worker_id)
-        state, total = run_payment_step(
-            task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
-        )
-        action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+        if not _ENABLE_RETRY_LOOP:
+            initialize_cycle(worker_id)
+            state, total = run_payment_step(
+                task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
+            )
+            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            if action == "complete":
+                success = True
+                _record_autoscaler_success(worker_id)
+                # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
+                _notify_success(task, worker_id, total)
+                if task_id is not None:
+                    _get_idempotency_store().mark_completed(task_id)
+            else:
+                _record_autoscaler_failure(worker_id)
+            return action, state, total
+
+        # P0-2 — Retry loop: wrap run_payment_step + handle_outcome so that
+        # declined/retry_new_card outcomes are consumed instead of silently dropped.
+        current_card = task.primary_card
+        retry_count = 0
+        # Cap: len(order_queue) card-swap slots + 2 buffer for ui_lock retries.
+        max_iters = len(ctx.task.order_queue) + 2
+        # action is str for simple outcomes or (str, CardInfo) for retry_new_card.
+        action: str | tuple = "abort_cycle"
+        state = None
+        total = None
+
+        for _loop_iter in range(max_iters):
+            initialize_cycle(worker_id)
+            # Build an effective task that carries the current (possibly swapped) card.
+            effective_task = (
+                dataclasses.replace(task, primary_card=current_card)
+                if current_card is not task.primary_card
+                else task
+            )
+            state, total = run_payment_step(
+                effective_task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
+            )
+            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+
+            _action_key = action[0] if isinstance(action, tuple) else action
+
+            if _action_key in ("complete", "abort_cycle", "await_3ds"):
+                break
+
+            if isinstance(action, tuple) and _action_key == "retry_new_card":
+                _, new_card = action
+                # CDP card-swap: clear existing card fields then fill with new card.
+                try:
+                    _swap_driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+                    if _swap_driver is not None:
+                        _swap_driver.clear_card_fields_cdp()
+                        _swap_driver.fill_card_fields(new_card)
+                except Exception as _swap_exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.warning(
+                        "[trace=%s] Card swap CDP prep failed for worker=%s: %s",
+                        _get_trace_id(), worker_id, _sanitize_error(_swap_exc),
+                    )
+                current_card = new_card
+                retry_count = 0  # reset ui_lock retry counter after a card swap
+            elif action == "retry_new_card":
+                # Legacy path (ctx=None): no card info available — abort.
+                action = "abort_cycle"
+                break
+            elif action == "retry":
+                retry_count += 1
+                if retry_count >= 2:
+                    action = "abort_cycle"
+                    break
+            # Unknown actions: continue loop (guards against future outcome additions).
+        else:
+            # Loop cap exhausted without a terminal break — treat as abort.
+            action = "abort_cycle"
+
         if action == "complete":
             success = True
             _record_autoscaler_success(worker_id)

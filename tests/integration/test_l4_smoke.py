@@ -227,25 +227,28 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
     # ── L4 Scenario 2: decline ─────────────────────────────────────────────────
 
     def test_l4_decline(self):
-        """L4-S2: Card declined → action in ('retry', 'retry_new_card').
+        """L4-S2: Card declined → retry loop exhausts swaps → abort_cycle.
 
         Smoke log entry documents:
           - Full driver call sequence (including submit_purchase) recorded.
           - FSM transitioned to 'declined'.
-          - run_cycle returns retry action.
+          - Retry loop exhausts order_queue swap cards then aborts.
         """
         _smoke_log.info(
             "SMOKE_LOG | scenario=l4_decline | phase=start | "
-            "description='Card declined: retry or retry_new_card expected'"
+            "description='Card declined: retry loop exhausts swaps'"
         )
         action, state, _total = self._stub_run_cycle(
             scenario="l4_decline",
             final_state="declined",
             task_id="l4-smoke-decline-001",
         )
-        self.assertIn(
-            _action_name(action), ("retry", "retry_new_card"),
-            f"L4 decline: expected retry action, got '{action}'",
+        # With ENABLE_RETRY_LOOP=1 (default), a permanently-declined card
+        # exhausts the order_queue swap slots and returns abort_cycle.
+        self.assertEqual(
+            _action_name(action), "abort_cycle",
+            f"L4 decline: expected abort_cycle after retry exhaustion, "
+            f"got '{_action_name(action)}'",
         )
         self.assertIsNotNone(state, "L4 decline: state must not be None")
         self.assertEqual(state.name, "declined",

@@ -187,12 +187,19 @@ class TestMarkCompletedNotCalledOnDeclined(_IdmBase):
 # ---------------------------------------------------------------------------
 
 class TestMarkCompletedNotCalledOnRetry(_IdmBase):
-    """Test 3: 'retry' outcome → mark_completed must NOT be called."""
+    """Test 3: 'retry' outcome → mark_completed must NOT be called.
+
+    With the P0-2 retry loop enabled, persistent 'retry' outcomes are capped at
+    2 attempts and then converted to 'abort_cycle', so the final action is
+    'abort_cycle' rather than 'retry'.  The core invariant (mark_completed is
+    never called for a non-success outcome) remains unchanged.
+    """
 
     def test_retry_does_not_call_mark_completed(self):
-        """retry outcome → mark_completed must be skipped."""
+        """retry outcome (capped to abort_cycle by retry loop) → mark_completed must be skipped."""
         action, store = self._run(action_return="retry")
-        self.assertEqual(action, "retry")
+        # Retry loop: handle_outcome returns "retry" twice → abort_cycle
+        self.assertEqual(action, "abort_cycle")
         store.mark_completed.assert_not_called()
 
     def test_retry_releases_inflight(self):
@@ -250,7 +257,11 @@ class TestCrossCycleRetryAfterDeclined(_IdmBase):
              patch("integration.orchestrator._notify_success"):
             action1, _state1, _total1 = run_cycle(task, worker_id=_WORKER_ID)
 
-        self.assertEqual(action1, "retry", "Cycle 1 must return retry")
+        self.assertIn(
+            action1,
+            ("retry", "abort_cycle"),
+            "Cycle 1 must not complete (retry or abort_cycle with retry loop)",
+        )
         # mark_completed must NOT have been called after cycle 1
         store.mark_completed.assert_not_called()
 

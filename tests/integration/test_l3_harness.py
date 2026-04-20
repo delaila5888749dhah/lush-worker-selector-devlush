@@ -261,10 +261,12 @@ class TestL3OrchestratorScenarios(_IntegrationBase, unittest.TestCase):
         self.assertEqual(state.name, "success")
         self.assertEqual(total, 50.0)
 
-    def test_declined_state_returns_retry_or_retry_new_card(self):
-        """Stub in 'declined' final state → run_cycle returns 'retry' or 'retry_new_card'."""
+    def test_declined_state_returns_abort_after_retry_exhaustion(self):
+        """Stub in 'declined' final state → retry loop exhausts swaps → abort_cycle."""
         action, state, _total = self._run_cycle("declined")
-        self.assertIn(_action_name(action), ("retry", "retry_new_card"))
+        # With ENABLE_RETRY_LOOP=1 (default), a permanently-declined card exhausts
+        # the order_queue swap slots and returns abort_cycle.
+        self.assertEqual(_action_name(action), "abort_cycle")
         self.assertIsNotNone(state)
         self.assertEqual(state.name, "declined")
 
