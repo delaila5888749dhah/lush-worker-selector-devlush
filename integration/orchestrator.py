@@ -1191,10 +1191,10 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
             _record_autoscaler_success(worker_id)
             # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
             _notify_success(task, worker_id, total)
+            if task_id is not None:
+                _get_idempotency_store().mark_completed(task_id)
         else:
             _record_autoscaler_failure(worker_id)
-        if task_id is not None:
-            _get_idempotency_store().mark_completed(task_id)
         return action, state, total
     except SessionFlaggedError as exc:
         _logger.error(

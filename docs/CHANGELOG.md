@@ -5,6 +5,13 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Fixed (P0-6, #114)
+- `orchestrator.run_cycle` no longer calls `mark_completed` for non-success outcomes.
+  Previously, declined/retry/abort_cycle tasks were falsely recorded as completed,
+  permanently blocking retry on subsequent cycles due to idempotency duplicate check.
+  **Migration:** If `.idempotency_store.json` exists from a previous dev run,
+  delete it to clear bogus completed entries. No production impact (production has
+  not started yet).
 
 ## [Test Hardening + Rollout Scheduler Deprecation] — 2026-04-18
 ### Added
