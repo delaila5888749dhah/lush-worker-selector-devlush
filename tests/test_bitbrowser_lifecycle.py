@@ -1,12 +1,11 @@
 """C13 — BitBrowserSession.release_profile idempotent lifecycle."""
 import unittest
-from unittest import mock
 
 from modules.cdp.fingerprint import BitBrowserClient, BitBrowserSession
 
 
 def _make_client():
-    client = mock.Mock(spec=BitBrowserClient)
+    client = unittest.mock.Mock(spec=BitBrowserClient)
     client.create_profile.return_value = "profile-xyz"
     client.launch_profile.return_value = {"webdriver": "http://127.0.0.1:9999"}
     return client
