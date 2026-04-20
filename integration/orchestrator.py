@@ -1243,7 +1243,8 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None):
         retry_count = 0
         # Cap: len(order_queue) card-swap slots + 2 buffer for ui_lock retries.
         max_iters = len(ctx.task.order_queue) + 2
-        action: Any = "abort_cycle"
+        # action is str for simple outcomes or (str, CardInfo) for retry_new_card.
+        action: str | tuple = "abort_cycle"
         state = None
         total = None
 

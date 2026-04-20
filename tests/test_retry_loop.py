@@ -236,10 +236,10 @@ class TestRetryLoopUiLockCap(_RetryLoopBase):
         task = _make_task(primary_card=card1, order_queue=())
 
         # ui_lock always returns "retry" → loop must cap and abort
-        retry_state = State("ui_lock")
+        ui_lock_state = State("ui_lock")
 
         def _fake_rps(*_args, **_kwargs):
-            return retry_state, "0.00"
+            return ui_lock_state, "0.00"
 
         ctx = CycleContext(cycle_id="rlt-cycle-5", worker_id=_WORKER_ID)
         mock_driver = MagicMock()
