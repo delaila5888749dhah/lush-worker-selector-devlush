@@ -1371,8 +1371,9 @@ class GivexDriver:
         1. ``success``   — URL contains a confirmation fragment, OR
                            ``.order-confirmation`` element is present.
         2. ``vbv_3ds``   — A 3-D Secure / Adyen iframe is present.
-        3. ``declined``  — A payment-error element is present, OR page text
-                           contains "declined" / "transaction failed".
+        3. ``declined``  — URL contains ``error=vv`` (Givex VBV/3DS failure
+                           signal), OR a payment-error element is present, OR
+                           page text contains "declined" / "transaction failed".
         4. ``ui_lock``   — A loading overlay or spinner is present.
         5. Raises ``PageStateError`` if none of the above matched.
 
@@ -1396,6 +1397,9 @@ class GivexDriver:
             return "vbv_3ds"
 
         # 3 — declined
+        # Givex: error=vv là tín hiệu VBV/3DS thất bại (Verified by Visa / 3D Secure failed)
+        if "error=vv" in current_url.lower():
+            return "declined"
         if self.find_elements(SEL_DECLINED_MSG):
             return "declined"
         page_text = self._driver.find_element("tag name", "body").text.lower()

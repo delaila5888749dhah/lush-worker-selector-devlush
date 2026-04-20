@@ -697,6 +697,24 @@ class TestDetectPageState(unittest.TestCase):
                 gd = GivexDriver(selenium)
                 self.assertEqual(gd.detect_page_state(), "success")
 
+    def test_detect_page_state_declined_via_error_vv(self):
+        """URL containing error=vv must return 'declined' (Givex VBV/3DS fail)."""
+        selenium = _make_driver(
+            current_url="https://wwws-usa2.givex.com/payment.html?error=vv"
+        )
+        selenium.find_elements.return_value = []
+        gd = GivexDriver(selenium)
+        self.assertEqual(gd.detect_page_state(), "declined")
+
+    def test_detect_page_state_declined_via_error_vv_with_extra_params(self):
+        """URL with error=vv plus additional query params must return 'declined'."""
+        selenium = _make_driver(
+            current_url="https://wwws-usa2.givex.com/payment.html?error=vv&foo=bar"
+        )
+        selenium.find_elements.return_value = []
+        gd = GivexDriver(selenium)
+        self.assertEqual(gd.detect_page_state(), "declined")
+
 
 class TestNavigateToEgift(unittest.TestCase):
     """navigate_to_egift waits for URL_EGIFT after clicking buy button."""
