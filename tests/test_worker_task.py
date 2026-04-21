@@ -525,7 +525,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
                 "integration.worker_task.maxmind_lookup_zip",
                 return_value=mock_zip,
             ),
-            patch("integration.orchestrator.run_cycle") as mock_run_cycle,
+            patch("integration.orchestrator.run_cycle", return_value=("complete", None, None)) as mock_run_cycle,
         ):
             from integration.worker_task import make_task_fn
             make_task_fn(task_source=mock_task_source)(worker_id)
@@ -691,7 +691,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
                 "integration.worker_task.maxmind_lookup_zip",
                 return_value="90210",
             ) as mock_zip_lookup,
-            patch("integration.orchestrator.run_cycle"),
+            patch("integration.orchestrator.run_cycle", return_value=("complete", None, None)),
         ):
             from integration.worker_task import make_task_fn
             make_task_fn(task_source=MagicMock(return_value=task))("w")

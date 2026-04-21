@@ -850,6 +850,7 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
 
         def capture_run_cycle(_task, zip_code=None, worker_id="default", ctx=None, **_kwargs):
             run_cycle_kwargs.append({"zip_code": zip_code, "worker_id": worker_id})
+            return "complete", None, None
 
         with patch(
             "integration.worker_task.get_bitbrowser_client",

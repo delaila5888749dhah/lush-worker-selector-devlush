@@ -159,11 +159,17 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                             "integration.orchestrator"
                         )
                         run_cycle = orchestrator_module.run_cycle
-                        run_cycle(
+                        action, _state, _total = run_cycle(
                             task, zip_code=zip_code, worker_id=worker_id,
                             ctx=ctx,
                             abort_check=lambda: is_task_aborted(worker_id),
                         )
+                        if action == "abort_cycle":
+                            _log.info(
+                                "worker=%s abort_cycle — releasing profile",
+                                worker_id,
+                            )
+                            return  # BitBrowserSession.__exit__ releases profile
                 else:
                     _log.debug(
                         "worker=%s profile=%s driver registered; "

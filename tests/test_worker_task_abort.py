@@ -96,7 +96,7 @@ class TestAbortCheckWiredIntoRunCycle(unittest.TestCase):
             patch("integration.runtime.probe_cdp_listener_support"),
             patch("integration.worker_task._get_current_ip_best_effort", return_value=None),
             patch("integration.worker_task.maxmind_lookup_zip", return_value=None),
-            patch("integration.orchestrator.run_cycle") as mock_run_cycle,
+            patch("integration.orchestrator.run_cycle", return_value=("complete", None, None)) as mock_run_cycle,
         ):
             make_task_fn(task_source=MagicMock(return_value=task))("w1")
 
@@ -152,6 +152,45 @@ class TestRunCycleAbortCheck(unittest.TestCase):
 
         self.assertEqual(action, "abort_cycle")
         mock_init.assert_not_called()
+
+
+class TestAbortCycleReturn(unittest.TestCase):
+    """task_fn captures run_cycle return; on 'abort_cycle' returns early."""
+
+    def setUp(self):
+        _reset_abort_registry()
+
+    def tearDown(self):
+        _reset_abort_registry()
+
+    def test_abort_cycle_return_releases_profile_and_no_retry(self):
+        from integration.worker_task import make_task_fn
+        task = MagicMock()
+        bb_client = _make_bitbrowser_client()
+
+        with (
+            patch("integration.worker_task.get_bitbrowser_client", return_value=bb_client),
+            patch("integration.worker_task._build_remote_driver", return_value=_make_selenium_driver()),
+            patch("modules.cdp.driver.GivexDriver", return_value=MagicMock()),
+            patch("integration.worker_task.cdp") as mock_cdp,
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch("integration.worker_task._get_current_ip_best_effort", return_value=None),
+            patch("integration.worker_task.maxmind_lookup_zip", return_value=None),
+            patch(
+                "integration.orchestrator.run_cycle",
+                return_value=("abort_cycle", None, None),
+            ) as mock_run_cycle,
+        ):
+            # Should return normally (no exception, no retry loop) and release
+            # profile via BitBrowserSession.__exit__ → client.close_profile.
+            result = make_task_fn(task_source=MagicMock(return_value=task))("w-abort")
+
+        self.assertIsNone(result)
+        mock_run_cycle.assert_called_once()
+        # Profile released via BitBrowserSession context manager exit.
+        bb_client.close_profile.assert_called_once()
+        # Driver unregistered even on early return.
+        mock_cdp.unregister_driver.assert_called_once_with("w-abort")
 
 
 if __name__ == "__main__":
