@@ -12,6 +12,7 @@ from modules.cdp.driver import (
     POPUP_TEXT_PATTERNS_EN,
     POPUP_TEXT_PATTERNS_VN,
     POPUP_TEXT_PATTERNS_DEFAULT,
+    PopupCloseOutcome,
     check_popup_text_match,
     handle_something_wrong_popup,
 )
@@ -393,6 +394,93 @@ class TestPopupXPathLocator(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(captured["locator"], (drv.By.XPATH, XPATH_POPUP_SWW))
         wrapper.bounding_box_click.assert_called_once_with(SEL_POPUP_CLOSE)
+
+
+class TestPopupClearAfterClose(unittest.TestCase):
+    """P1-2 — after close popup → clear card fields + return signal."""
+
+    def setUp(self):
+        self._saved = os.environ.get("POPUP_CLEAR_AFTER_CLOSE")
+        os.environ.pop("POPUP_CLEAR_AFTER_CLOSE", None)
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("POPUP_CLEAR_AFTER_CLOSE", None)
+        else:
+            os.environ["POPUP_CLEAR_AFTER_CLOSE"] = self._saved
+
+    def _make_wrapper(self):
+        wrapper = SimpleNamespace(
+            _driver=MagicMock(),
+            bounding_box_click=MagicMock(),
+            clear_card_fields_cdp=MagicMock(),
+        )
+        return wrapper
+
+    def test_close_success_calls_clear_and_returns_needs_refill(self):
+        wrapper = self._make_wrapper()
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        self.assertTrue(bool(result))  # enum is truthy for bool-compat
+        wrapper.bounding_box_click.assert_called_once_with(SEL_POPUP_CLOSE)
+        wrapper.clear_card_fields_cdp.assert_called_once_with()
+
+    def test_no_popup_returns_not_present_and_skips_clear(self):
+        from selenium.common.exceptions import TimeoutException
+
+        wrapper = self._make_wrapper()
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.side_effect = TimeoutException()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.NOT_PRESENT)
+        self.assertFalse(bool(result))
+        wrapper.clear_card_fields_cdp.assert_not_called()
+
+    def test_close_click_failure_returns_close_failed_and_skips_clear(self):
+        wrapper = self._make_wrapper()
+        wrapper.bounding_box_click.side_effect = RuntimeError("boom")
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
+        self.assertFalse(bool(result))
+        wrapper.clear_card_fields_cdp.assert_not_called()
+
+    def test_clear_failure_is_swallowed_and_still_signals_refill(self):
+        wrapper = self._make_wrapper()
+        wrapper.clear_card_fields_cdp.side_effect = RuntimeError("cdp down")
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        wrapper.clear_card_fields_cdp.assert_called_once_with()
+
+    def test_env_disable_skips_clear_but_still_signals_refill(self):
+        os.environ["POPUP_CLEAR_AFTER_CLOSE"] = "0"
+        wrapper = self._make_wrapper()
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        wrapper.clear_card_fields_cdp.assert_not_called()
+
+    def test_driver_without_clear_method_does_not_raise(self):
+        wrapper = SimpleNamespace(
+            _driver=MagicMock(),
+            bounding_box_click=MagicMock(),
+        )
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
 
 
 if __name__ == "__main__":
