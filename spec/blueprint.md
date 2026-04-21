@@ -4,6 +4,15 @@ Kiến trúc lõi & Cấu hình hệ thống:
 
 · Quy mô vận hành: WorkerPool quản lý 10+ luồng (Workers) chạy song song độc lập.(Có thể nâng cấp mạnh về sau)
 
+· Giới hạn số lượng worker (MAX_WORKER_COUNT):
+  - Biến môi trường `MAX_WORKER_COUNT` do operator cấu hình là giới hạn trên THẬT SỰ của WorkerPool (không chỉ để nới mức 10).
+  - Giá trị mặc định là 10 (giữ nguyên hành vi hiện hữu khi biến không được đặt hoặc giá trị `≤ 0` / không hợp lệ — có log cảnh báo).
+  - `modules/rollout/main.py` xây dựng `SCALE_STEPS` tại thời điểm import/reset: prefix chuẩn `(1, 3, 5, 10)` được lọc tới các giá trị `< MAX_WORKER_COUNT`, sau đó thêm chính `MAX_WORKER_COUNT` làm step cuối.
+  - Rollout vẫn tăng cấp tuần tự (progressive) qua các step nhưng KHÔNG BAO GIỜ vượt quá giá trị đã cấu hình.
+  - Với `MAX_WORKER_COUNT > 10`, các bước trung gian theo hệ thập phân 2/5/10 (`20, 50, 100, 200, 500, …`) được chèn trước cap.
+  - Ví dụ giá trị nhỏ: `1 → (1,)`, `2 → (1, 2)`, `4 → (1, 3, 4)`, `7 → (1, 3, 5, 7)`, `10 → (1, 3, 5, 10)`.
+  - Ví dụ giá trị lớn: `12 → (1, 3, 5, 10, 12)`, `20 → (1, 3, 5, 10, 20)`, `50 → (1, 3, 5, 10, 20, 50)`, `100 → (1, 3, 5, 10, 20, 50, 100)`.
+
 · Stagger Start (Khởi động so le): Sử dụng random.uniform(12, 25) giây giữa các lần gọi Worker để chống màng lọc nhận diện chu kỳ mạng của Givex.
 
 · Công nghệ lõi: Python + Selenium bọc qua CDP (Chrome DevTools Protocol) và ghost-cursor. Toàn bộ thao tác chuột và phím được đẩy thẳng xuống cấp độ hệ điều hành (OS-level events), đảm bảo cờ isTrusted=True 100%.

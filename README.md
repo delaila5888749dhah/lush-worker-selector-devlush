@@ -137,27 +137,38 @@ to all subscribed hosts — no application change required.
 the `SCALE_STEPS` tuple. By default the pool is capped at **10 workers**
 (`SCALE_STEPS = (1, 3, 5, 10)`), matching the Blueprint baseline.
 
-To scale past 10, set the `MAX_WORKER_COUNT` environment variable before
-starting the worker:
+To change the cap, set the `MAX_WORKER_COUNT` environment variable
+before starting the worker. The value is the **true upper bound**:
+rollout always walks through the tuple progressively and **never
+exceeds** the configured cap.
 
 ```bash
-MAX_WORKER_COUNT=50 python -m app
+MAX_WORKER_COUNT=2  python -m app   # cap at 2 workers
+MAX_WORKER_COUNT=7  python -m app   # cap at 7 workers
+MAX_WORKER_COUNT=50 python -m app   # cap at 50 workers
 ```
 
-When `MAX_WORKER_COUNT` is greater than 10, `SCALE_STEPS` is extended at
-import time with a 2/5/10 decade progression up to — and including — the
-requested cap. Examples:
+`SCALE_STEPS` is rebuilt at import time from `MAX_WORKER_COUNT`. The
+canonical default prefix `(1, 3, 5, 10)` is filtered to values strictly
+below the cap, and the cap itself is always the final step. For caps
+above 10 a 2/5/10 decade progression (`20, 50, 100, 200, 500, …`) is
+inserted before the cap. Examples:
 
 | `MAX_WORKER_COUNT` | Resulting `SCALE_STEPS`                        |
 | ------------------ | ---------------------------------------------- |
 | unset / `10`       | `(1, 3, 5, 10)` *(default, unchanged)*         |
+| `1`                | `(1,)`                                         |
+| `2`                | `(1, 2)`                                       |
+| `4`                | `(1, 3, 4)`                                    |
+| `7`                | `(1, 3, 5, 7)`                                 |
+| `12`               | `(1, 3, 5, 10, 12)`                            |
 | `20`               | `(1, 3, 5, 10, 20)`                            |
 | `50`               | `(1, 3, 5, 10, 20, 50)`                        |
 | `100`              | `(1, 3, 5, 10, 20, 50, 100)`                   |
 | `500`              | `(1, 3, 5, 10, 20, 50, 100, 200, 500)`         |
 
-Invalid, empty, or below-default values fall back to the default cap of
-10 and a warning is logged. Per `spec/audit-lock.md` (INV-SCALE-01),
+Invalid, empty, or below-1 values fall back to the default cap of 10
+and a warning is logged. Per `spec/audit-lock.md` (INV-SCALE-01),
 adding headroom beyond 10 workers should be validated with a load test
 before being rolled out to production.
 

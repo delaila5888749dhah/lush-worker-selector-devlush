@@ -8,19 +8,21 @@ _logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 
-# Default scaling steps (cap at 10 workers).  The tuple is extended at import
+# Default scaling steps (cap at 10 workers).  The tuple is rebuilt at import
 # time — and whenever :func:`reset` is called — based on the ``MAX_WORKER_COUNT``
-# environment variable so deployments can scale past 10 without code changes.
+# environment variable so operators can configure the exact worker cap.
 _DEFAULT_SCALE_STEPS = (1, 3, 5, 10)
 _DEFAULT_MAX_WORKER_COUNT = 10
+# Canonical progression used to pick intermediate steps between 10 and the cap.
+_DECADE_MULTIPLIERS = (2, 5, 10)
 
 
 def _read_max_worker_count():
     """Return the target maximum worker count from the environment.
 
     Falls back to :data:`_DEFAULT_MAX_WORKER_COUNT` (10) when the env var is
-    unset, empty, non-numeric, or below the default cap.  A warning is logged
-    on invalid input so the misconfiguration is observable.
+    unset, empty, non-numeric, or less than 1.  A warning is logged on invalid
+    input so the misconfiguration is observable.
     """
     raw = os.environ.get("MAX_WORKER_COUNT", "").strip()
     if not raw:
@@ -33,9 +35,9 @@ def _read_max_worker_count():
             raw, _DEFAULT_MAX_WORKER_COUNT,
         )
         return _DEFAULT_MAX_WORKER_COUNT
-    if value < _DEFAULT_MAX_WORKER_COUNT:
+    if value < 1:
         _logger.warning(
-            "MAX_WORKER_COUNT=%d is below default %d; clamping to default",
+            "MAX_WORKER_COUNT=%d is below 1; falling back to default %d",
             value, _DEFAULT_MAX_WORKER_COUNT,
         )
         return _DEFAULT_MAX_WORKER_COUNT
@@ -45,32 +47,40 @@ def _read_max_worker_count():
 def _build_scale_steps(max_count):
     """Build the scaling-step tuple for a given maximum worker count.
 
-    Default behavior (``max_count <= 10``) returns the hard-coded
-    ``(1, 3, 5, 10)`` tuple unchanged.  For larger caps the tuple is
-    extended with a 2/5/10 decade progression (``20, 50, 100, 200, 500,
-    ...``) up to — and including — ``max_count``.
+    ``max_count`` is the operator-configured true upper bound.  The returned
+    tuple always progresses strictly upward and always ends with exactly
+    ``max_count``.  For ``max_count`` in ``1..10`` the canonical default
+    steps ``(1, 3, 5, 10)`` are filtered to values strictly below
+    ``max_count`` before the cap is appended — so ``1 → (1,)``,
+    ``2 → (1, 2)``, ``4 → (1, 3, 4)``, ``7 → (1, 3, 5, 7)``, and
+    ``10 → (1, 3, 5, 10)``.  For ``max_count > 10`` the canonical
+    ``(1, 3, 5, 10)`` prefix is kept and extended with a 2/5/10 decade
+    progression (``20, 50, 100, 200, 500, …``) up to — but not including —
+    ``max_count``, which is then appended as the final step.
     """
-    if max_count <= _DEFAULT_MAX_WORKER_COUNT:
-        return _DEFAULT_SCALE_STEPS
-    steps = list(_DEFAULT_SCALE_STEPS)
-    decade = 10
-    # Guard against pathological inputs: the progression grows by 10× each
-    # outer iteration, so 20 iterations already reaches 10**21.
-    for _ in range(20):
-        appended_any = False
-        reached_cap = False
-        for multiplier in (2, 5, 10):
-            value = decade * multiplier
-            if value >= max_count:
-                reached_cap = True
+    if max_count <= 1:
+        return (1,)
+    steps = [value for value in _DEFAULT_SCALE_STEPS if value < max_count]
+    if not steps or steps[0] != 1:
+        steps.insert(0, 1)
+    if max_count > _DEFAULT_MAX_WORKER_COUNT:
+        decade = 10
+        # Guard against pathological inputs: the progression grows by 10× each
+        # outer iteration, so 20 iterations already reaches 10**21.
+        for _ in range(20):
+            appended_any = False
+            reached_cap = False
+            for multiplier in _DECADE_MULTIPLIERS:
+                value = decade * multiplier
+                if value >= max_count:
+                    reached_cap = True
+                    break
+                steps.append(value)
+                appended_any = True
+            if reached_cap or not appended_any:
                 break
-            steps.append(value)
-            appended_any = True
-        if reached_cap or not appended_any:
-            break
-        decade *= 10
-    if steps[-1] != max_count:
-        steps.append(max_count)
+            decade *= 10
+    steps.append(max_count)
     return tuple(steps)
 
 

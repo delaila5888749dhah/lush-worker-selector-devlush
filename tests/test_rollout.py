@@ -1,3 +1,5 @@
+"""Unit tests for :mod:`modules.rollout.main`."""
+
 import os
 import threading
 import unittest
@@ -501,7 +503,7 @@ class TestRollbackAtomicity(RolloutResetMixin, unittest.TestCase):
 
 
 class TestMaxWorkerCountEnv(unittest.TestCase):
-    """Verify MAX_WORKER_COUNT env var extends SCALE_STEPS beyond the default cap."""
+    """Verify MAX_WORKER_COUNT env var controls the true worker cap in SCALE_STEPS."""
 
     def setUp(self):
         self._saved_env = os.environ.get("MAX_WORKER_COUNT")
@@ -514,7 +516,9 @@ class TestMaxWorkerCountEnv(unittest.TestCase):
             os.environ["MAX_WORKER_COUNT"] = self._saved_env
         reset()
 
-    def _reload_steps(self, value):
+    @staticmethod
+    def _reload_steps(value):
+        """Set (or clear) MAX_WORKER_COUNT, rebuild SCALE_STEPS, and return it."""
         if value is None:
             os.environ.pop("MAX_WORKER_COUNT", None)
         else:
@@ -523,54 +527,113 @@ class TestMaxWorkerCountEnv(unittest.TestCase):
         return rollout_module.SCALE_STEPS
 
     def test_default_behavior_unchanged_when_env_unset(self):
+        """Unset env → default (1, 3, 5, 10)."""
         steps = self._reload_steps(None)
         self.assertEqual(steps, (1, 3, 5, 10))
 
     def test_default_behavior_unchanged_when_env_empty(self):
+        """Empty env → default (1, 3, 5, 10)."""
         steps = self._reload_steps("")
         self.assertEqual(steps, (1, 3, 5, 10))
 
     def test_env_equal_to_default_keeps_default(self):
+        """MAX_WORKER_COUNT=10 → (1, 3, 5, 10)."""
         steps = self._reload_steps("10")
         self.assertEqual(steps, (1, 3, 5, 10))
 
-    def test_env_below_default_is_clamped(self):
-        steps = self._reload_steps("5")
-        self.assertEqual(steps, (1, 3, 5, 10))
-
     def test_env_invalid_falls_back_to_default(self):
+        """Non-numeric env is rejected and falls back to the default cap."""
         steps = self._reload_steps("not-a-number")
         self.assertEqual(steps, (1, 3, 5, 10))
 
+    def test_env_zero_falls_back_to_default(self):
+        """MAX_WORKER_COUNT=0 is invalid and falls back to the default cap."""
+        steps = self._reload_steps("0")
+        self.assertEqual(steps, (1, 3, 5, 10))
+
+    def test_env_negative_falls_back_to_default(self):
+        """MAX_WORKER_COUNT=-5 is invalid and falls back to the default cap."""
+        steps = self._reload_steps("-5")
+        self.assertEqual(steps, (1, 3, 5, 10))
+
+    def test_env_one_caps_at_one(self):
+        """MAX_WORKER_COUNT=1 → (1,): pool cannot scale up at all."""
+        steps = self._reload_steps("1")
+        self.assertEqual(steps, (1,))
+        self.assertFalse(rollout_module.can_scale_up())
+
+    def test_env_two_caps_at_two(self):
+        """MAX_WORKER_COUNT=2 → (1, 2): exact operator-configured cap."""
+        steps = self._reload_steps("2")
+        self.assertEqual(steps, (1, 2))
+
+    def test_env_four_caps_at_four(self):
+        """MAX_WORKER_COUNT=4 → (1, 3, 4): progressive but never exceeds 4."""
+        steps = self._reload_steps("4")
+        self.assertEqual(steps, (1, 3, 4))
+
+    def test_env_seven_caps_at_seven(self):
+        """MAX_WORKER_COUNT=7 → (1, 3, 5, 7): progressive but never exceeds 7."""
+        steps = self._reload_steps("7")
+        self.assertEqual(steps, (1, 3, 5, 7))
+
+    def test_env_twelve_extends_past_default(self):
+        """MAX_WORKER_COUNT=12 → (1, 3, 5, 10, 12): keeps default prefix, adds cap."""
+        steps = self._reload_steps("12")
+        self.assertEqual(steps, (1, 3, 5, 10, 12))
+
     def test_env_50_extends_steps_to_50(self):
+        """MAX_WORKER_COUNT=50 → (1, 3, 5, 10, 20, 50)."""
         steps = self._reload_steps("50")
         self.assertEqual(steps, (1, 3, 5, 10, 20, 50))
         self.assertEqual(rollout_module.get_current_workers(), 1)
         self.assertTrue(rollout_module.can_scale_up())
 
     def test_env_100_extends_steps_to_100(self):
+        """MAX_WORKER_COUNT=100 → (1, 3, 5, 10, 20, 50, 100)."""
         steps = self._reload_steps("100")
         self.assertEqual(steps, (1, 3, 5, 10, 20, 50, 100))
 
     def test_env_500_extends_steps_across_decades(self):
+        """MAX_WORKER_COUNT=500 progresses through the decade series."""
         steps = self._reload_steps("500")
         self.assertEqual(steps, (1, 3, 5, 10, 20, 50, 100, 200, 500))
 
     def test_env_20_extends_minimally(self):
+        """MAX_WORKER_COUNT=20 → (1, 3, 5, 10, 20)."""
         steps = self._reload_steps("20")
         self.assertEqual(steps, (1, 3, 5, 10, 20))
 
     def test_env_non_canonical_cap_is_appended(self):
+        """A cap that isn't on the canonical progression is still the final step."""
         steps = self._reload_steps("30")
         self.assertEqual(steps, (1, 3, 5, 10, 20, 30))
 
     def test_steps_strictly_ascending_for_large_cap(self):
+        """Regardless of cap, SCALE_STEPS must be strictly ascending."""
         steps = self._reload_steps("1000")
         for i in range(len(steps) - 1):
             self.assertLess(steps[i], steps[i + 1])
         self.assertEqual(steps[-1], 1000)
 
+    def test_rollout_never_exceeds_configured_cap(self):
+        """Rollout progression must never scale above MAX_WORKER_COUNT."""
+        for cap_str, cap_int in (("2", 2), ("4", 4), ("7", 7), ("50", 50)):
+            with self.subTest(cap=cap_str):
+                self._reload_steps(cap_str)
+                rollout_module.configure(
+                    check_rollback_fn=lambda: [],
+                    save_baseline_fn=lambda: None,
+                )
+                last_count = rollout_module.get_current_workers()
+                while rollout_module.can_scale_up():
+                    last_count, action, _ = rollout_module.try_scale_up()
+                    self.assertEqual(action, "scaled_up")
+                    self.assertLessEqual(last_count, cap_int)
+                self.assertEqual(last_count, cap_int)
+
     def test_can_scale_all_the_way_up_to_50(self):
+        """End-to-end: with MAX_WORKER_COUNT=50, rollout reaches exactly 50."""
         self._reload_steps("50")
         rollout_module.configure(
             check_rollback_fn=lambda: [],
