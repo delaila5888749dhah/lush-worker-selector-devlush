@@ -1,11 +1,14 @@
 import inspect
+import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     SEL_POPUP_CLOSE,
     SEL_POPUP_SOMETHING_WRONG,
+    XPATH_POPUP_SWW,
     POPUP_TEXT_PATTERNS_EN,
     POPUP_TEXT_PATTERNS_VN,
     POPUP_TEXT_PATTERNS_DEFAULT,
@@ -267,6 +270,129 @@ class TestCheckPopupTextMatch(unittest.TestCase):
             any("no popup text" in s for s in call_args_list),
             "Expected a debug log about no popup text found",
         )
+
+
+class TestPopupXPathLocator(unittest.TestCase):
+    """P1-1: verify XPath text-match locator + POPUP_USE_XPATH rollback flag."""
+
+    # Exact spec from issue P1-1 acceptance criteria.
+    EXPECTED_XPATH = (
+        "//*[self::div or self::section or self::dialog]"
+        "[contains(translate(normalize-space(.),"
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),"
+        "'something went wrong')]"
+    )
+
+    def setUp(self):
+        """Preserve and clear the popup locator flag for each test."""
+        self._saved_env = os.environ.get("POPUP_USE_XPATH")
+        if "POPUP_USE_XPATH" in os.environ:
+            del os.environ["POPUP_USE_XPATH"]
+
+    def tearDown(self):
+        """Restore the popup locator flag after each test."""
+        if self._saved_env is None:
+            os.environ.pop("POPUP_USE_XPATH", None)
+        else:
+            os.environ["POPUP_USE_XPATH"] = self._saved_env
+
+    def test_xpath_constant_matches_issue_spec(self):
+        """The XPath literal must remain byte-for-byte aligned with the AC."""
+        self.assertEqual(XPATH_POPUP_SWW, self.EXPECTED_XPATH)
+
+    @staticmethod
+    def _make_popup_wrapper(base_driver=None):
+        """Build a minimal wrapper that matches handle_something_wrong_popup()."""
+        return SimpleNamespace(
+            _driver=base_driver or MagicMock(),
+            bounding_box_click=MagicMock(),
+        )
+
+    @staticmethod
+    def _run_handler_capturing_locator():
+        """Execute the popup handler and return the locator it uses."""
+        wrapper = TestPopupXPathLocator._make_popup_wrapper()
+        captured = {}
+
+        def fake_presence(locator):
+            """Capture the locator passed to Selenium expected-conditions."""
+            captured["locator"] = locator
+            return lambda d: MagicMock()
+
+        with patch.object(drv.EC, "presence_of_element_located",
+                          side_effect=fake_presence), \
+             patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            handle_something_wrong_popup(wrapper, timeout=0.1)
+        return captured.get("locator")
+
+    def test_uses_xpath_locator_by_default(self):
+        """Default configuration should route popup detection through XPath."""
+        locator = self._run_handler_capturing_locator()
+        self.assertEqual(locator, (drv.By.XPATH, XPATH_POPUP_SWW))
+
+    def test_uses_xpath_when_env_enabled_explicitly(self):
+        """Explicitly enabling the flag should still use the XPath locator."""
+        os.environ["POPUP_USE_XPATH"] = "1"
+        locator = self._run_handler_capturing_locator()
+        self.assertEqual(locator, (drv.By.XPATH, XPATH_POPUP_SWW))
+
+    def test_falls_back_to_css_when_env_disabled(self):
+        """Disabling the flag should restore the legacy CSS selector path."""
+        os.environ["POPUP_USE_XPATH"] = "0"
+        locator = self._run_handler_capturing_locator()
+        self.assertEqual(locator, (drv.By.CSS_SELECTOR, SEL_POPUP_SOMETHING_WRONG))
+
+    def test_cookie_banner_without_text_does_not_match(self):
+        """AC: DOM có cookie banner `.modal` không text → KHÔNG match.
+
+        Simulates XPath evaluation: a cookie banner modal without the target
+        phrase produces no XPath hit, so WebDriverWait raises TimeoutException
+        and the handler returns False (no click, no false-positive flow loss).
+        """
+        wrapper = self._make_popup_wrapper()
+
+        captured = {}
+
+        def fake_presence(locator):
+            """Capture the XPath locator while simulating a no-match result."""
+            captured["locator"] = locator
+            return lambda d: None
+
+        with patch.object(drv.EC, "presence_of_element_located",
+                          side_effect=fake_presence), \
+             patch.object(drv, "WebDriverWait") as mock_wait:
+            # XPath locator finds no element containing "something went wrong"
+            # → WebDriverWait.until raises TimeoutException.
+            mock_wait.return_value.until.side_effect = drv.TimeoutException()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertFalse(result)
+        self.assertEqual(captured["locator"], (drv.By.XPATH, XPATH_POPUP_SWW))
+        wrapper.bounding_box_click.assert_not_called()
+
+    def test_modal_with_target_text_does_match(self):
+        """AC: DOM có modal với text 'Something went wrong, please try again' → match."""
+        wrapper = self._make_popup_wrapper()
+
+        captured = {}
+
+        def fake_presence(locator):
+            """Capture the XPath locator while simulating a positive match."""
+            captured["locator"] = locator
+            # Simulate XPath hit — predicate returns a matched element.
+            return lambda d: MagicMock(text="Something went wrong, please try again")
+
+        with patch.object(drv.EC, "presence_of_element_located",
+                          side_effect=fake_presence), \
+             patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock(
+                text="Something went wrong, please try again")
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertTrue(result)
+        self.assertEqual(captured["locator"], (drv.By.XPATH, XPATH_POPUP_SWW))
+        wrapper.bounding_box_click.assert_called_once_with(SEL_POPUP_CLOSE)
 
 
 if __name__ == "__main__":

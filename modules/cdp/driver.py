@@ -323,6 +323,16 @@ SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*
 SEL_VBV_CANCEL_BTN  = "button[id*='cancel'], a[id*='cancel'], button[id*='return'], a[id*='return']"
 SEL_POPUP_CLOSE_BTN = "button.modal-close, button[aria-label='Close'], .modal button[type='button']"
 SEL_POPUP_SOMETHING_WRONG = ".modal, .popup, .dialog, .alert, .error-modal"
+# P1-1: XPath text-match for "Something went wrong" popup — avoids false
+# positives from cookie banners / newsletter modals / success modals that also
+# use generic .modal classes. Case-insensitive via translate() on the
+# normalized text content of any div/section/dialog descendant.
+XPATH_POPUP_SWW = (
+    "//*[self::div or self::section or self::dialog]"
+    "[contains(translate(normalize-space(.),"
+    "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),"
+    "'something went wrong')]"
+)
 SEL_POPUP_CLOSE = SEL_POPUP_CLOSE_BTN
 SEL_NEUTRAL_DIV     = "body"
 
@@ -779,14 +789,34 @@ def cdp_click_iframe_element(
     return abs_x, abs_y
 
 
+def _popup_use_xpath() -> bool:
+    """Return True if the XPath text-match locator should be used (P1-1).
+
+    Default: True. Set env ``POPUP_USE_XPATH=0`` (or ``false``/``no``) to
+    roll back to the legacy CSS selector (:data:`SEL_POPUP_SOMETHING_WRONG`).
+    """
+    raw = os.environ.get("POPUP_USE_XPATH", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
+
+
 def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
-    """Click Close on the 'Something went wrong' popup if present (Blueprint §6 Fork 3)."""
+    """Click Close on the 'Something went wrong' popup if present (Blueprint §6 Fork 3).
+
+    P1-1: By default uses an XPath text-match locator so generic ``.modal`` /
+    ``.popup`` elements (cookie banners, newsletter modals, success modals)
+    without the target text do NOT trigger a false-positive close. Set env
+    ``POPUP_USE_XPATH=0`` to roll back to the legacy CSS selector.
+    """
     if WebDriverWait is None or EC is None or By is None:
         return False
     base = getattr(driver, "_driver", driver)
+    if _popup_use_xpath():
+        locator = (By.XPATH, XPATH_POPUP_SWW)
+    else:
+        locator = (By.CSS_SELECTOR, SEL_POPUP_SOMETHING_WRONG)
     try:
         WebDriverWait(base, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, SEL_POPUP_SOMETHING_WRONG)))
+            EC.presence_of_element_located(locator))
     except TimeoutException:
         return False
     try:
