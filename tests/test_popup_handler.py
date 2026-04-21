@@ -338,30 +338,26 @@ class TestPopupXPathLocator(unittest.TestCase):
         """
         from selenium.common.exceptions import TimeoutException
 
-        cookie_banner_dom = [
-            {"tag": "div", "class": "modal cookie-banner",
-             "text": "We use cookies. Accept all?"},
-        ]
-
-        def fake_find_element(by, value):
-            # Emulate XPath matching: only divs containing target phrase match.
-            target = "something went wrong"
-            if by == By.XPATH:
-                for el in cookie_banner_dom:
-                    if target in el["text"].lower():
-                        return MagicMock()
-                raise drv.TimeoutException() if hasattr(drv, "TimeoutException") else Exception()
-            raise Exception("unexpected locator")
-
         wrapper = MagicMock()
         wrapper._driver = MagicMock()
         wrapper.bounding_box_click = MagicMock()
 
-        with patch.object(drv, "WebDriverWait") as mock_wait:
+        captured = {}
+
+        def fake_presence(locator):
+            captured["locator"] = locator
+            return lambda d: None
+
+        with patch.object(drv.EC, "presence_of_element_located",
+                          side_effect=fake_presence), \
+             patch.object(drv, "WebDriverWait") as mock_wait:
+            # XPath locator finds no element containing "something went wrong"
+            # → WebDriverWait.until raises TimeoutException.
             mock_wait.return_value.until.side_effect = TimeoutException()
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertFalse(result)
+        self.assertEqual(captured["locator"], (By.XPATH, XPATH_POPUP_SWW))
         wrapper.bounding_box_click.assert_not_called()
 
     def test_modal_with_target_text_does_match(self):
