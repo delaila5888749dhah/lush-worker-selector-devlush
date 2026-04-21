@@ -62,7 +62,8 @@ class TestFocusShiftRetry(unittest.TestCase):
         self.assertTrue(result)
         # Two ActionChains instances: one for neutral, one for retry click.
         self.assertEqual(len(_FakeActionChains.instances), 2)
-        neutral_chain, retry_chain = _FakeActionChains.instances
+        neutral_chain = _FakeActionChains.instances[0]
+        retry_chain = _FakeActionChains.instances[1]
         self.assertEqual(neutral_chain.calls[0], ("move_to_element", neutral_el))
         self.assertEqual(neutral_chain.calls[1], ("click",))
         self.assertEqual(neutral_chain.calls[-1], ("perform",))
