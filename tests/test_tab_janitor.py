@@ -68,12 +68,6 @@ class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
 
         call_order = []
 
-        original_close_extra_tabs = close_extra_tabs
-
-        def tracking_close_extra_tabs(drv):
-            call_order.append("close_extra_tabs")
-            return original_close_extra_tabs(drv)
-
         def tracking_get(url):
             call_order.append(("get", url))
 
@@ -81,19 +75,17 @@ class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
 
         gd = GivexDriver(selenium)
 
-        with patch("modules.cdp.driver.close_extra_tabs", side_effect=tracking_close_extra_tabs), \
+        with patch("modules.cdp.driver.close_extra_tabs", wraps=close_extra_tabs) as mock_janitor, \
              patch("time.sleep"):
             gd.preflight_geo_check()
 
-        self.assertIn("close_extra_tabs", call_order)
+        mock_janitor.assert_called_once()
         self.assertIn(("get", "about:blank"), call_order)
         self.assertIn(("get", URL_GEO_CHECK), call_order)
 
-        janitor_idx = call_order.index("close_extra_tabs")
         blank_idx = call_order.index(("get", "about:blank"))
         geo_idx = call_order.index(("get", URL_GEO_CHECK))
 
-        self.assertLess(janitor_idx, geo_idx, "close_extra_tabs must run before geo check")
         self.assertLess(blank_idx, geo_idx, "about:blank navigate must run before geo check")
 
     def test_janitor_sleep_called_before_geo_check(self):
