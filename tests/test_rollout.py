@@ -502,8 +502,8 @@ class TestRollbackAtomicity(RolloutResetMixin, unittest.TestCase):
         self.assertEqual(idx, save_count[0])
 
 
-class TestMaxWorkerCountEnv(unittest.TestCase):
-    """Verify MAX_WORKER_COUNT env var controls the true worker cap in SCALE_STEPS."""
+class _MaxWorkerCountEnvTestCase(unittest.TestCase):
+    """Shared MAX_WORKER_COUNT env setup/teardown helpers."""
 
     def setUp(self):
         self._saved_env = os.environ.get("MAX_WORKER_COUNT")
@@ -525,6 +525,10 @@ class TestMaxWorkerCountEnv(unittest.TestCase):
             os.environ["MAX_WORKER_COUNT"] = value
         reset()
         return rollout_module.SCALE_STEPS
+
+
+class TestMaxWorkerCountEnvParsing(_MaxWorkerCountEnvTestCase):
+    """Verify parsing and exact SCALE_STEPS generation for MAX_WORKER_COUNT."""
 
     def test_default_behavior_unchanged_when_env_unset(self):
         """Unset env → default (1, 3, 5, 10)."""
@@ -615,6 +619,10 @@ class TestMaxWorkerCountEnv(unittest.TestCase):
         for i in range(len(steps) - 1):
             self.assertLess(steps[i], steps[i + 1])
         self.assertEqual(steps[-1], 1000)
+
+
+class TestMaxWorkerCountEnvRollout(_MaxWorkerCountEnvTestCase):
+    """Verify rollout behavior respects the configured MAX_WORKER_COUNT cap."""
 
     def test_rollout_never_exceeds_configured_cap(self):
         """Rollout progression must never scale above MAX_WORKER_COUNT."""
