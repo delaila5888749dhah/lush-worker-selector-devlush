@@ -18,6 +18,7 @@ import socket
 import threading
 import time
 import datetime
+import enum
 import importlib
 import ipaddress
 import urllib.parse
@@ -799,16 +800,58 @@ def _popup_use_xpath() -> bool:
     return raw not in ("0", "false", "no", "off", "")
 
 
-def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
+def _popup_clear_after_close() -> bool:
+    """Return True if card fields should be cleared after popup close (P1-2).
+
+    Default: True. Set env ``POPUP_CLEAR_AFTER_CLOSE=0`` (or ``false``/``no``)
+    to roll back to legacy behavior (close popup only, no card-field clear).
+    """
+    raw = os.environ.get("POPUP_CLEAR_AFTER_CLOSE", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
+
+
+class PopupCloseOutcome(enum.Enum):
+    """Signal returned by :func:`handle_something_wrong_popup` (P1-2).
+
+    Allows the orchestrator retry loop to distinguish "popup was not
+    present" (no-op) from "popup closed — card fields wiped, re-fill
+    required" so a fresh card from the order queue can be submitted
+    instead of silently re-submitting the stale value.
+
+    The enum is bool-compatible: ``CLOSED_NEEDS_REFILL`` is truthy and
+    every other value is falsy, preserving ``if handle_...():`` call
+    sites that existed before P1-2.
+    """
+
+    NOT_PRESENT = "not_present"
+    CLOSED_NEEDS_REFILL = "closed_needs_refill"
+    CLOSE_FAILED = "close_failed"
+
+    def __bool__(self) -> bool:  # pragma: no cover - trivial
+        return self is PopupCloseOutcome.CLOSED_NEEDS_REFILL
+
+
+def handle_something_wrong_popup(
+    driver, timeout: float = 2.0
+) -> "PopupCloseOutcome":
     """Click Close on the 'Something went wrong' popup if present (Blueprint §6 Fork 3).
 
     P1-1: By default uses an XPath text-match locator so generic ``.modal`` /
     ``.popup`` elements (cookie banners, newsletter modals, success modals)
     without the target text do NOT trigger a false-positive close. Set env
     ``POPUP_USE_XPATH=0`` to roll back to the legacy CSS selector.
+
+    P1-2: After a successful close the driver's card-number and CVV fields
+    are wiped via :meth:`GivexDriver.clear_card_fields_cdp` so the stale
+    card that triggered the error is not re-submitted on the next attempt.
+    The return value switches from ``bool`` to :class:`PopupCloseOutcome`
+    so the orchestrator retry loop can tell "no popup" apart from
+    "popup closed — re-fill required". The enum is bool-compatible to
+    preserve existing ``if handle_...():`` call sites. Set env
+    ``POPUP_CLEAR_AFTER_CLOSE=0`` to disable the clear step.
     """
     if WebDriverWait is None or EC is None or By is None:
-        return False
+        return PopupCloseOutcome.NOT_PRESENT
     base = getattr(driver, "_driver", driver)
     if _popup_use_xpath():
         locator = (By.XPATH, XPATH_POPUP_SWW)
@@ -818,13 +861,25 @@ def handle_something_wrong_popup(driver, timeout: float = 2.0) -> bool:
         WebDriverWait(base, timeout).until(
             EC.presence_of_element_located(locator))
     except TimeoutException:
-        return False
+        return PopupCloseOutcome.NOT_PRESENT
     try:
         driver.bounding_box_click(SEL_POPUP_CLOSE)
-        return True
     except Exception as exc:  # pylint: disable=broad-except
         _log.warning("popup close failed: %s", exc)
-        return False
+        return PopupCloseOutcome.CLOSE_FAILED
+    if _popup_clear_after_close():
+        clear = getattr(driver, "clear_card_fields_cdp", None)
+        if callable(clear):
+            try:
+                clear()
+            except Exception as exc:  # pylint: disable=broad-except
+                # Never let a clear failure mask the close-success signal —
+                # the orchestrator will attempt its own clear during the
+                # swap path (P0-2 retry loop).
+                _log.warning(
+                    "clear_card_fields_cdp after popup close failed: %s", exc
+                )
+    return PopupCloseOutcome.CLOSED_NEEDS_REFILL
 
 
 def _get_shadow_text(base_driver, selector: str) -> str:
