@@ -14,7 +14,7 @@ import os
 import sys
 import unittest
 from typing import Optional, Sequence
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Make the sibling ``_integration_harness`` module importable regardless of
 # how unittest discovers this suite (with or without __init__.py).
