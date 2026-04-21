@@ -523,7 +523,6 @@ class GenerateEmailTests(unittest.TestCase):
 
     def test_deterministic_with_seeded_rng(self):
         """Same RNG seed produces the same email every time."""
-        rng = random.Random(42)
         result1 = billing._generate_email("Jane", "Doe", rng=random.Random(42))
         result2 = billing._generate_email("Jane", "Doe", rng=random.Random(42))
         self.assertEqual(result1, result2)
