@@ -85,6 +85,14 @@ def _build_scale_steps(max_count):
 # Scaling steps — evaluated at import time from the current environment.
 SCALE_STEPS = _build_scale_steps(_read_max_worker_count())
 
+# Runtime configuration overrides.  When either is non-``None``, :func:`reset`
+# rebuilds :data:`SCALE_STEPS` from the override instead of the environment so
+# that values installed via :func:`configure_max_workers` / :func:`set_scale_steps`
+# survive subsequent ``reset()`` calls (e.g. from ``integration/runtime.py``).
+# ``_runtime_scale_steps`` takes precedence over ``_runtime_max_worker_count``.
+_runtime_max_worker_count = None
+_runtime_scale_steps = None
+
 # Current step index into SCALE_STEPS
 _current_step_index = 0
 
@@ -328,13 +336,22 @@ def get_status():
 def reset():  # pylint: disable=global-statement
     """Reset all rollout state.  Intended for testing.
 
-    Also re-reads ``MAX_WORKER_COUNT`` from the environment and rebuilds
-    :data:`SCALE_STEPS` so tests can vary the cap between cases.
+    Rebuilds :data:`SCALE_STEPS` from the most recently installed runtime
+    configuration if any (:func:`configure_max_workers` or
+    :func:`set_scale_steps`), otherwise from the ``MAX_WORKER_COUNT``
+    environment variable.  Runtime overrides are preserved across
+    ``reset()`` so integration layers may safely reset rollout state
+    without dropping an operator-configured cap.
     """
     global _current_step_index, _check_rollback_fn, _save_baseline_fn
     global _ROLLBACK_HISTORY, _ROLLBACK_APPLIED, SCALE_STEPS
     with _lock:
-        SCALE_STEPS = _build_scale_steps(_read_max_worker_count())
+        if _runtime_scale_steps is not None:
+            SCALE_STEPS = _runtime_scale_steps
+        elif _runtime_max_worker_count is not None:
+            SCALE_STEPS = _build_scale_steps(_runtime_max_worker_count)
+        else:
+            SCALE_STEPS = _build_scale_steps(_read_max_worker_count())
         _current_step_index = 0
         _check_rollback_fn = None
         _save_baseline_fn = None
@@ -347,53 +364,64 @@ _MIN_MAX_WORKER_COUNT = 1
 _MAX_MAX_WORKER_COUNT = 50
 
 
-def configure_max_workers(n: int) -> None:
+def configure_max_workers(count: int) -> None:
     """Set the worker cap and re-derive :data:`SCALE_STEPS` at runtime.
 
     Must be called before the rollout scheduler loop is started.  Validates
-    ``n`` is an ``int`` in ``[1, 50]``, rebuilds the scaling-step tuple, and
-    calls :func:`reset` so any pre-existing state is cleared.
+    ``count`` is an ``int`` in ``[1, 50]``, installs it as the runtime cap
+    override (so subsequent :func:`reset` calls rebuild from it instead of
+    the environment), and resets rollout state.
 
     Args:
-        n: Target maximum worker count.
+        count: Target maximum worker count.
 
     Raises:
-        TypeError: If ``n`` is not an ``int`` (``bool`` is rejected too).
-        ValueError: If ``n`` is outside ``[1, 50]``.
+        TypeError: If ``count`` is not an ``int`` (``bool`` is rejected too).
+        ValueError: If ``count`` is outside ``[1, 50]``.
     """
-    if isinstance(n, bool) or not isinstance(n, int):
-        raise TypeError(f"MAX_WORKER_COUNT must be int, got {type(n).__name__}")
-    if not _MIN_MAX_WORKER_COUNT <= n <= _MAX_MAX_WORKER_COUNT:
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise TypeError(
+            f"MAX_WORKER_COUNT must be int, got {type(count).__name__}"
+        )
+    if not _MIN_MAX_WORKER_COUNT <= count <= _MAX_MAX_WORKER_COUNT:
         raise ValueError(
-            f"MAX_WORKER_COUNT={n} out of range "
+            f"MAX_WORKER_COUNT={count} out of range "
             f"[{_MIN_MAX_WORKER_COUNT},{_MAX_MAX_WORKER_COUNT}]"
         )
-    new_steps = _build_scale_steps(n)
-    reset()
-    # reset() re-reads the env var; override with the explicitly requested cap
-    # so callers don't have to mutate the environment.
-    global SCALE_STEPS  # pylint: disable=global-statement
+    global _runtime_max_worker_count, _runtime_scale_steps  # pylint: disable=global-statement
     with _lock:
-        SCALE_STEPS = new_steps
-    _logger.info("configure_max_workers: cap=%d steps=%s", n, new_steps)
+        _runtime_max_worker_count = count
+        _runtime_scale_steps = None
+    # reset() picks up the override we just installed and rebuilds SCALE_STEPS
+    # from it, so the cap survives subsequent reset() calls.
+    reset()
+    _logger.info(
+        "configure_max_workers: cap=%d steps=%s", count, SCALE_STEPS
+    )
 
 
 def set_scale_steps(steps) -> None:
     """Install an explicit scaling-step tuple and reset rollout state.
 
     The supplied ``steps`` must be a non-empty iterable of positive ``int``s
-    that is strictly ascending and whose final element is at most ``50``.
-    Starting at ``1`` is the recommended convention used by the default
-    scaling progression, but any positive starting value is accepted so
-    callers can install custom progressions in tests.
+    that is strictly ascending, starts at ``1``, and whose final element is
+    at most ``50``.  Starting at ``1`` is a rollout invariant (initial worker
+    count must always be ``1``) so this helper is primarily intended for
+    installing custom progressions in tests; production code should prefer
+    :func:`configure_max_workers`.
+
+    The installed tuple is preserved across subsequent :func:`reset` calls
+    until another override (via this function or
+    :func:`configure_max_workers`) replaces it.
 
     Args:
         steps: Iterable of ``int`` scaling steps (e.g. ``(1, 2, 4)``).
 
     Raises:
         TypeError: If ``steps`` is not iterable or contains non-ints.
-        ValueError: If ``steps`` is empty, not strictly ascending, contains a
-            non-positive value, or exceeds the ``50`` cap.
+        ValueError: If ``steps`` is empty, does not start at ``1``, is not
+            strictly ascending, contains a non-positive value, or exceeds
+            the ``50`` cap.
     """
     try:
         candidate = tuple(steps)
@@ -408,6 +436,10 @@ def set_scale_steps(steps) -> None:
             )
         if value < 1:
             raise ValueError(f"steps must be positive, got {value}")
+    if candidate[0] != 1:
+        raise ValueError(
+            f"steps must start at 1 (rollout invariant), got {candidate[0]}"
+        )
     for prev, nxt in zip(candidate, candidate[1:]):
         if nxt <= prev:
             raise ValueError(f"steps must be strictly ascending: {candidate}")
@@ -415,8 +447,9 @@ def set_scale_steps(steps) -> None:
         raise ValueError(
             f"final step {candidate[-1]} exceeds cap {_MAX_MAX_WORKER_COUNT}"
         )
-    reset()
-    global SCALE_STEPS  # pylint: disable=global-statement
+    global _runtime_max_worker_count, _runtime_scale_steps  # pylint: disable=global-statement
     with _lock:
-        SCALE_STEPS = candidate
+        _runtime_scale_steps = candidate
+        _runtime_max_worker_count = None
+    reset()
     _logger.info("set_scale_steps: steps=%s", candidate)
