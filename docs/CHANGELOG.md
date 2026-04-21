@@ -54,7 +54,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ## [Phase 11] — 2026-04-12
 
 ### Added
-- `inject_card_entry_delays(bio, stop_event=None)` in `modules/delay/wrapper.py` — exposes a helper for applying `BiometricProfile` Layer 2 per-keystroke timing during card entry simulation (19 delays per card entry: 4 groups × 4 fast keystrokes + 3 inter-group pauses).
+- `inject_card_entry_delays(bio, stop_event=None)` in `modules/delay/wrapper.py` — exposes a helper for applying `BiometricProfile` Layer 2 per-keystroke timing during card entry simulation (16 delays per card entry, with inter-group pauses at indices 3/7/11).
 - `inject_card_entry_delays` exported from `modules/delay/main.py` for integration by callers.
 ### Changed
 - `modules/delay/biometrics.py` docstring updated to describe Phase 11 helper/export availability rather than completed production-path wiring.
