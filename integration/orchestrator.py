@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.common.exceptions import InvalidTransitionError, SessionFlaggedError
+from modules.common.exceptions import CDPError, InvalidTransitionError, SessionFlaggedError
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
@@ -1427,11 +1427,22 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             if isinstance(action, tuple) and _action_key == "retry_new_card":
                 _, new_card = action
                 # CDP card-swap: clear existing card fields then fill with new card.
+                # P1-4: a CDPError from clear_card_fields_cdp means the field may
+                # still hold stale card data — abort the cycle instead of resubmitting
+                # to avoid a double-charge.
                 try:
                     _swap_driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
                     if _swap_driver is not None:
                         _swap_driver.clear_card_fields_cdp()
                         _swap_driver.fill_card_fields(new_card)
+                except CDPError as _cdp_exc:
+                    _logger.error(
+                        "[trace=%s] CDP card-swap clear failed for worker=%s: %s "
+                        "— aborting cycle to avoid double-charge",
+                        _get_trace_id(), worker_id, _sanitize_error(_cdp_exc),
+                    )
+                    action = "abort_cycle"
+                    break
                 except Exception as _swap_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
                         "[trace=%s] Card swap CDP prep failed for worker=%s: %s",

@@ -1,7 +1,10 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 6.0
+spec-version: 7.0
 
+> **v7.0 Breaking Changes:**
+> - Added CDPError exception type to modules.common.exceptions (raised by GivexDriver.clear_card_fields_cdp on CDP failure — P1-4)
+>
 > **v6.0 Breaking Changes:**
 > - Added CDPCommandError exception type to modules.common.exceptions (inherits SessionFlaggedError)
 >

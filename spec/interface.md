@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 6.0
+spec-version: 7.0
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,9 @@ spec-version: 6.0
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v7.0 Breaking Changes:**
+> - Added CDPError exception type to modules.common.exceptions (raised by GivexDriver.clear_card_fields_cdp on CDP failure — P1-4)
 >
 > **v6.0 Breaking Changes:**
 > - Added CDPCommandError exception type to modules.common.exceptions (inherits SessionFlaggedError)

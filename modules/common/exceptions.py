@@ -48,6 +48,16 @@ class PageStateError(SessionFlaggedError):
         )
 
 
+class CDPError(Exception):
+    """Raised when a CDP operation fails in a way that must abort the cycle.
+
+    Used to propagate failures from low-level CDP helpers (e.g.
+    :meth:`modules.cdp.driver.GivexDriver.clear_card_fields_cdp`) so that the
+    orchestrator retry loop can mark the cycle as failed and **not** submit
+    again. Swallowing such errors would risk double-charging (P1-4).
+    """
+
+
 class CDPCommandError(SessionFlaggedError):
     """Raised when a CDP command fails in a non-retryable manner.
 

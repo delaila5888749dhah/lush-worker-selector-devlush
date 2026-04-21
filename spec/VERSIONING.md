@@ -44,9 +44,9 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 6.0 | 2026-04-20 |
-| `spec/integration/interface.md` | 6.0 | 2026-04-20 |
-| `spec/interface.md` (aggregated) | 6.0 | 2026-04-20 |
+| `spec/core/interface.md` | 7.0 | 2026-04-21 |
+| `spec/integration/interface.md` | 7.0 | 2026-04-21 |
+| `spec/interface.md` (aggregated) | 7.0 | 2026-04-21 |
 | `spec/fsm.md` | 1.0 | 2026-04-01 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -54,6 +54,11 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v7.0 (2026-04-21) — BREAKING
+- Added `CDPError` exception type to `modules.common.exceptions` (plain `Exception` subclass)
+- Raised by `GivexDriver.clear_card_fields_cdp` when the underlying CDP command fails (P1-4)
+- Orchestrator `retry_new_card` block catches `CDPError` and aborts the cycle instead of resubmitting — prevents double-charge when card fields still contain stale data
 
 ### v6.0 (2026-04-20) — BREAKING
 - Added `CDPCommandError` exception type to `modules.common.exceptions` (inherits `SessionFlaggedError`)

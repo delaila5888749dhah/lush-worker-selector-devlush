@@ -49,6 +49,7 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
 
 from modules.common.exceptions import (
     CDPCommandError,
+    CDPError,
     PageStateError,
     SelectorTimeoutError,
     SessionFlaggedError,
@@ -1729,7 +1730,13 @@ class GivexDriver:
         self.bounding_box_click(SEL_COMPLETE_PURCHASE)
 
     def clear_card_fields_cdp(self) -> None:
-        """Clear card number + CVV via CDP Ctrl+A + Backspace (Blueprint §6 Fork 4)."""
+        """Clear card number + CVV via CDP Ctrl+A + Backspace (Blueprint §6 Fork 4).
+
+        Raises:
+            CDPError: If the underlying CDP command fails. Swallowing the
+                error would leave stale card data in the form and risk a
+                double-charge on submit (P1-4).
+        """
         for selector in (SEL_CARD_NUMBER, SEL_CARD_CVV):
             try:
                 if not self.find_elements(selector):
@@ -1741,8 +1748,12 @@ class GivexDriver:
                         evt["modifiers"] = mods
                     for t in ("keyDown", "keyUp"):
                         self._driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": t, **evt})
-            except Exception:  # pylint: disable=broad-except
-                _log.warning("clear_card_fields_cdp failed; continuing")
+            except Exception as exc:  # pylint: disable=broad-except
+                _detail = _sanitize_error(str(exc))
+                _log.warning("clear_card_fields_cdp failed; aborting")
+                raise CDPError(
+                    f"clear_card_fields_cdp failed: {_detail}"
+                ) from exc
 
     def clear_card_fields(self) -> None:
         """Clear all card form fields (best-effort)."""
