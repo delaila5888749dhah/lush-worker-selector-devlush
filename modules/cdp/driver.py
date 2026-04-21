@@ -1700,7 +1700,9 @@ class GivexDriver:
 
         Detection order:
         1. ``success``   — URL contains a confirmation fragment, OR
-                           ``.order-confirmation`` element is present.
+                           ``.order-confirmation`` element is present, OR
+                           page text contains "thank you for your order"
+                           (SPA fallback when URL does not change).
         2. ``vbv_3ds``   — A 3-D Secure / Adyen iframe is present.
         3. ``declined``  — URL contains ``error=vv`` (Givex VBV/3DS failure
                            signal), OR a payment-error element is present, OR
@@ -1722,6 +1724,10 @@ class GivexDriver:
             return "success"
         if self.find_elements(SEL_CONFIRMATION_EL):
             return "success"
+        # SPA fallback: DOM renders confirmation text without URL change
+        page_text = self._driver.find_element("tag name", "body").text.lower()
+        if "thank you for your order" in page_text:
+            return "success"
 
         # 2 — vbv_3ds
         if self.find_elements(SEL_VBV_IFRAME):
@@ -1733,7 +1739,6 @@ class GivexDriver:
             return "declined"
         if self.find_elements(SEL_DECLINED_MSG):
             return "declined"
-        page_text = self._driver.find_element("tag name", "body").text.lower()
         if "declined" in page_text or "transaction failed" in page_text:
             return "declined"
 

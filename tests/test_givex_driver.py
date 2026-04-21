@@ -715,6 +715,26 @@ class TestDetectPageState(unittest.TestCase):
         gd = GivexDriver(selenium)
         self.assertEqual(gd.detect_page_state(), "declined")
 
+    def test_detect_page_state_success_via_page_text_spa(self):
+        """P1-3: SPA renders 'Thank you for your order' without URL change → success."""
+        selenium = _make_driver(current_url="https://example.com/checkout")
+        selenium.find_elements.return_value = []
+        body_el = MagicMock()
+        body_el.text = "Thank you for your order! Order #12345 has been placed."
+        selenium.find_element.return_value = body_el
+        gd = GivexDriver(selenium)
+        self.assertEqual(gd.detect_page_state(), "success")
+
+    def test_detect_page_state_success_via_page_text_case_insensitive(self):
+        """P1-3: text match is case-insensitive."""
+        selenium = _make_driver(current_url="https://example.com/checkout")
+        selenium.find_elements.return_value = []
+        body_el = MagicMock()
+        body_el.text = "THANK YOU FOR YOUR ORDER"
+        selenium.find_element.return_value = body_el
+        gd = GivexDriver(selenium)
+        self.assertEqual(gd.detect_page_state(), "success")
+
 
 class TestNavigateToEgift(unittest.TestCase):
     """navigate_to_egift waits for URL_EGIFT after clicking buy button."""
