@@ -352,8 +352,18 @@ def _generate_email(
         _last_name: str | None = None,
         rng: random.Random | None = None,
 ) -> str:
-    # _first_name/_last_name unused intentionally; randomized token prevents PII leakage
+    def _sanitize(name: str) -> str:
+        return "".join(c for c in name.lower() if c.isalnum() or c in ".-")[:20]
+
     fill_rng = rng or _get_fill_rng()
+    stripped_first_name = (_first_name or "").strip()
+    stripped_last_name = (_last_name or "").strip()
+    sanitized_first_name = _sanitize(stripped_first_name)
+    sanitized_last_name = _sanitize(stripped_last_name)
+    if stripped_first_name and stripped_last_name and sanitized_first_name and sanitized_last_name:
+        local = f"{sanitized_first_name}.{sanitized_last_name}"
+        domain = fill_rng.choice(_EMAIL_DOMAINS)
+        return f"{local}@{domain}"
     token = "".join(fill_rng.choice(_HEX_CHARS) for _ in range(8))
     domain = fill_rng.choice(_EMAIL_DOMAINS)
     return f"user{token}@{domain}"
@@ -555,4 +565,3 @@ def _select_profile_legacy(zip_code: str | int | None) -> BillingProfile:
             profile = _fill_missing(profile)
         _profiles.append(profile)
         return profile
-

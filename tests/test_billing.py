@@ -1,5 +1,6 @@
 import collections
 import os
+import random
 import tempfile
 import threading
 import unittest
@@ -456,6 +457,80 @@ class ZipAffinityTests(unittest.TestCase):
         second = billing.select_profile("10001")
         self.assertEqual(first.first_name, "M1")
         self.assertEqual(second.first_name, "M2")
+
+
+class GenerateEmailTests(unittest.TestCase):
+    """Unit tests for the _generate_email name-based email generation (issue #158)."""
+
+    _VALID_DOMAINS = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com"}
+
+    def test_both_names_present_returns_name_based_email(self):
+        """When both first and last name are provided, return first.last@domain."""
+        result = billing._generate_email("John", "Doe")
+        local, domain = result.split("@")
+        self.assertEqual(local, "john.doe")
+        self.assertIn(domain, self._VALID_DOMAINS)
+
+    def test_both_names_produces_lowercase_email(self):
+        """Names are lowercased in the generated email."""
+        result = billing._generate_email("ALICE", "SMITH")
+        self.assertTrue(result.startswith("alice.smith@"))
+
+    def test_first_name_missing_falls_back_to_hex(self):
+        """When first_name is empty, fall back to user{hex}@{domain}."""
+        result = billing._generate_email("", "Doe")
+        self.assertRegex(result, r"^user[0-9a-f]{8}@")
+
+    def test_last_name_missing_falls_back_to_hex(self):
+        """When last_name is empty, fall back to user{hex}@{domain}."""
+        result = billing._generate_email("John", "")
+        self.assertRegex(result, r"^user[0-9a-f]{8}@")
+
+    def test_both_names_none_falls_back_to_hex(self):
+        """When both names are None, fall back to user{hex}@{domain}."""
+        result = billing._generate_email(None, None)
+        self.assertRegex(result, r"^user[0-9a-f]{8}@")
+
+    def test_both_names_whitespace_falls_back_to_hex(self):
+        """Whitespace-only names are treated as missing; fall back to hex form."""
+        result = billing._generate_email("   ", "   ")
+        self.assertRegex(result, r"^user[0-9a-f]{8}@")
+
+    def test_special_chars_stripped_from_names(self):
+        """Non-alphanumeric characters (except . and -) are removed from names."""
+        result = billing._generate_email("O'Brien!", "St@nley#")
+        local, _ = result.split("@")
+        first_part, last_part = local.split(".")
+        self.assertFalse(any(c in first_part for c in "'! "))
+        self.assertFalse(any(c in last_part for c in "@# "))
+
+    def test_names_sanitized_to_empty_fall_back_to_hex(self):
+        """Names that sanitize to empty components fall back to the hex form."""
+        result = billing._generate_email("!!!", "@@@")
+        self.assertRegex(result, r"^user[0-9a-f]{8}@")
+
+    def test_names_truncated_to_20_chars(self):
+        """Each name component is truncated to 20 characters."""
+        long_first = "a" * 30
+        long_last = "b" * 30
+        result = billing._generate_email(long_first, long_last)
+        local, _ = result.split("@")
+        first_part, last_part = local.split(".")
+        self.assertLessEqual(len(first_part), 20)
+        self.assertLessEqual(len(last_part), 20)
+
+    def test_domain_chosen_from_allowed_list(self):
+        """Generated email always uses a domain from _EMAIL_DOMAINS."""
+        for first, last in [("Jane", "Doe"), ("", ""), (None, None), ("X", "Y")]:
+            result = billing._generate_email(first, last)
+            domain = result.split("@")[1]
+            self.assertIn(domain, self._VALID_DOMAINS)
+
+    def test_deterministic_with_seeded_rng(self):
+        """Same RNG seed produces the same email every time."""
+        result1 = billing._generate_email("Jane", "Doe", rng=random.Random(42))
+        result2 = billing._generate_email("Jane", "Doe", rng=random.Random(42))
+        self.assertEqual(result1, result2)
 
 
 if __name__ == "__main__":
