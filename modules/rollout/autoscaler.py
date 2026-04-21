@@ -19,6 +19,19 @@ class AutoScaler:
         self._CONSECUTIVE_FAILURE_THRESHOLD: int = 5
 
     def _scale_down(self, reason: str) -> int:  # pylint: disable=no-self-use
+        # Guard: when the rollout has only one scaling step (MAX_WORKER_COUNT=1)
+        # there is nowhere to roll back to.  Skip the force_rollback call so we
+        # don't emit spurious "1 → 1 workers" warnings from the rollout module.
+        # Read status via the lock-safe rollout API rather than touching
+        # SCALE_STEPS directly — SCALE_STEPS is rebound under rollout._lock by
+        # reset() / configure_max_workers() / set_scale_steps().
+        status = rollout.get_status()
+        if status["max_step_index"] <= 0:
+            _logger.info(
+                "scale-down skipped: only one scaling step configured (reason=%s)",
+                reason,
+            )
+            return status["current_workers"]
         return rollout.force_rollback(reason=reason)
 
     def _scale_down_worker(self, worker_id: str) -> None:

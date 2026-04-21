@@ -53,7 +53,8 @@ def evaluate(
             custom callers are not guarded against and may produce
             unreliable decisions.
         current_step_index: zero-based index of the current scaling step.
-        max_step_index: maximum step index (len(SCALE_STEPS) - 1).
+        max_step_index: inclusive upper bound for ``current_step_index``;
+            equivalently, the index of the final (maximum-workers) step.
 
     Returns:
         ``(action, reasons)`` where *action* is one of :data:`SCALE_UP`,

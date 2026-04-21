@@ -5,6 +5,7 @@ from unittest.mock import patch
 from integration import runtime as runtime_module
 from modules.common.thresholds import ERROR_RATE_THRESHOLD
 from modules.rollout import autoscaler as autoscaler_module
+from modules.rollout import main as rollout_module
 
 
 class AutoScalerResetMixin:
@@ -154,3 +155,39 @@ class TestAutoscalerReset(AutoScalerResetMixin, unittest.TestCase):
         self.assertEqual(scaler.get_consecutive_failures("worker-1"), 3)
         runtime_module.reset()
         self.assertEqual(autoscaler_module.get_autoscaler().get_consecutive_failures("worker-1"), 0)
+
+
+class TestScaleDownSingleStep(AutoScalerResetMixin, unittest.TestCase):
+    """N=1 safety: ``_scale_down`` must skip ``force_rollback`` via the
+    lock-safe :func:`rollout.get_status` API (not raw ``SCALE_STEPS``)."""
+
+    def setUp(self):
+        super().setUp()
+        rollout_module.configure_max_workers(1)
+
+    def tearDown(self):
+        super().tearDown()
+        with rollout_module._lock:  # pylint: disable=protected-access
+            rollout_module._runtime_max_worker_count = None  # pylint: disable=protected-access
+            rollout_module._runtime_scale_steps = None  # pylint: disable=protected-access
+        rollout_module.reset()
+
+    def test_scale_down_skips_force_rollback_when_single_step(self):
+        """With N=1, ``_scale_down`` must skip ``force_rollback`` and return 1."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(rollout_module, "force_rollback") as mock_force_rollback:
+            workers = scaler._scale_down(reason="test")  # pylint: disable=protected-access
+        mock_force_rollback.assert_not_called()
+        self.assertEqual(workers, 1)
+
+    def test_scale_down_reads_status_via_lock_safe_api(self):
+        """``_scale_down`` must read rollout state via the lock-safe ``get_status`` API."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(
+            rollout_module,
+            "get_status",
+            wraps=rollout_module.get_status,
+        ) as mock_get_status:
+            with patch.object(rollout_module, "force_rollback"):
+                scaler._scale_down(reason="test")  # pylint: disable=protected-access
+        mock_get_status.assert_called_once()

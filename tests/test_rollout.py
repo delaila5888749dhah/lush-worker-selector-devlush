@@ -22,11 +22,25 @@ from modules.rollout.main import (
 TEST_TIMEOUT_SECONDS = 1
 
 
+def _clear_rollout_runtime_overrides():
+    """Clear rollout runtime config overrides under the module lock.
+
+    Tests never touch ``_runtime_*`` module-level state directly; all
+    writes go through ``_lock`` to match the concurrency contract of
+    ``modules/rollout/main.py`` (threading.Lock on shared state).
+    """
+    with rollout_module._lock:  # pylint: disable=protected-access
+        rollout_module._runtime_max_worker_count = None  # pylint: disable=protected-access
+        rollout_module._runtime_scale_steps = None  # pylint: disable=protected-access
+
+
 class RolloutResetMixin:
     def setUp(self):
+        _clear_rollout_runtime_overrides()
         reset()
 
     def tearDown(self):
+        _clear_rollout_runtime_overrides()
         reset()
 
 
@@ -282,8 +296,158 @@ class TestScaleSteps(unittest.TestCase):
         for i in range(len(SCALE_STEPS) - 1):
             self.assertLess(SCALE_STEPS[i], SCALE_STEPS[i + 1])
 
-    def test_scale_steps_match_spec(self):
-        self.assertEqual(SCALE_STEPS, (1, 3, 5, 10))
+    def test_scale_steps_start_at_one(self):
+        self.assertEqual(SCALE_STEPS[0], 1)
+
+    def test_scale_steps_end_at_max_worker_count(self):
+        # The final step must equal the configured cap — whether the cap came
+        # from the MAX_WORKER_COUNT env var or the default (10).
+        expected_cap = rollout_module._read_max_worker_count()  # pylint: disable=protected-access
+        self.assertEqual(SCALE_STEPS[-1], expected_cap)
+
+    def test_scale_steps_bounded_by_cap(self):
+        expected_cap = rollout_module._read_max_worker_count()  # pylint: disable=protected-access
+        for step in SCALE_STEPS:
+            self.assertGreaterEqual(step, 1)
+            self.assertLessEqual(step, expected_cap)
+
+
+class TestConfigureMaxWorkers(RolloutResetMixin, unittest.TestCase):
+    """Property-based tests for :func:`configure_max_workers`."""
+
+    def _assert_valid_steps(self, steps, cap):
+        self.assertGreater(len(steps), 0)
+        self.assertEqual(steps[0], 1)
+        self.assertEqual(steps[-1], cap)
+        for prev, nxt in zip(steps, steps[1:]):
+            self.assertLess(prev, nxt)
+        for step in steps:
+            self.assertLessEqual(step, cap)
+            self.assertGreaterEqual(step, 1)
+
+    def test_configure_rebuilds_scale_steps_for_each_cap(self):
+        for cap in (1, 2, 3, 4, 5, 7, 10, 15, 25, 50):
+            with self.subTest(cap=cap):
+                rollout_module.configure_max_workers(cap)
+                self._assert_valid_steps(rollout_module.SCALE_STEPS, cap)
+                # reset() side-effect must hold for every cap, not just the
+                # dedicated reset test below.
+                self.assertEqual(get_current_step_index(), 0)
+                self.assertEqual(get_current_workers(), 1)
+
+    def test_configure_resets_state(self):
+        configure(check_rollback_fn=lambda: [], save_baseline_fn=lambda: None)
+        try_scale_up()
+        force_rollback("test")
+        rollout_module.configure_max_workers(5)
+        self.assertEqual(get_current_step_index(), 0)
+        self.assertEqual(get_current_workers(), 1)
+        self.assertEqual(get_rollback_history(), [])
+
+    def test_configure_max_workers_one_makes_single_step(self):
+        rollout_module.configure_max_workers(1)
+        self.assertEqual(rollout_module.SCALE_STEPS, (1,))
+        self.assertFalse(can_scale_up())
+        workers, action, _ = try_scale_up()
+        self.assertEqual(action, "at_max")
+        self.assertEqual(workers, 1)
+
+    def test_configure_rejects_out_of_range(self):
+        for bad in (0, -1, 51, 100):
+            with self.subTest(n=bad):
+                with self.assertRaises(ValueError):
+                    rollout_module.configure_max_workers(bad)
+
+    def test_configure_rejects_non_int(self):
+        for bad in (1.0, "5", None, True):
+            with self.subTest(n=bad):
+                with self.assertRaises(TypeError):
+                    rollout_module.configure_max_workers(bad)
+
+    def test_configured_cap_persists_across_reset(self):
+        """BLOCKER regression: reset() must rebuild from the runtime
+        override, not fall back to env/default."""
+        rollout_module.configure_max_workers(25)
+        self.assertEqual(rollout_module.SCALE_STEPS[-1], 25)
+        reset()
+        self.assertEqual(rollout_module.SCALE_STEPS[-1], 25)
+        self.assertEqual(rollout_module.SCALE_STEPS[0], 1)
+
+    def test_configured_cap_persists_when_env_changes(self):
+        """Runtime override wins over MAX_WORKER_COUNT env var after reset()."""
+        rollout_module.configure_max_workers(15)
+        os.environ["MAX_WORKER_COUNT"] = "4"
+        try:
+            reset()
+            self.assertEqual(rollout_module.SCALE_STEPS[-1], 15)
+        finally:
+            os.environ.pop("MAX_WORKER_COUNT", None)
+
+
+class TestSetScaleSteps(RolloutResetMixin, unittest.TestCase):
+    def test_installs_custom_steps(self):
+        rollout_module.set_scale_steps((1, 2, 4, 8))
+        self.assertEqual(rollout_module.SCALE_STEPS, (1, 2, 4, 8))
+        self.assertEqual(get_current_workers(), 1)
+        self.assertEqual(get_current_step_index(), 0)
+
+    def test_single_step_allowed(self):
+        rollout_module.set_scale_steps((1,))
+        self.assertEqual(rollout_module.SCALE_STEPS, (1,))
+        self.assertFalse(can_scale_up())
+
+    def test_rejects_non_ascending(self):
+        with self.assertRaises(ValueError):
+            rollout_module.set_scale_steps((1, 3, 2))
+
+    def test_rejects_duplicates(self):
+        with self.assertRaises(ValueError):
+            rollout_module.set_scale_steps((1, 3, 3, 5))
+
+    def test_rejects_empty(self):
+        with self.assertRaises(ValueError):
+            rollout_module.set_scale_steps(())
+
+    def test_rejects_non_positive(self):
+        with self.assertRaises(ValueError):
+            rollout_module.set_scale_steps((0, 2, 5))
+
+    def test_rejects_exceeds_cap(self):
+        with self.assertRaises(ValueError):
+            rollout_module.set_scale_steps((1, 10, 100))
+
+    def test_rejects_non_int_element(self):
+        with self.assertRaises(TypeError):
+            rollout_module.set_scale_steps((1, 2.5, 4))
+
+    def test_rejects_not_starting_at_one(self):
+        """MAJOR regression: rollout invariant requires steps[0] == 1."""
+        for bad in ((2, 4), (3, 5, 10), (5,)):
+            with self.subTest(steps=bad):
+                with self.assertRaises(ValueError):
+                    rollout_module.set_scale_steps(bad)
+
+    def test_custom_steps_persist_across_reset(self):
+        """Custom steps installed via set_scale_steps() must survive reset()."""
+        rollout_module.set_scale_steps((1, 2, 4, 8))
+        reset()
+        self.assertEqual(rollout_module.SCALE_STEPS, (1, 2, 4, 8))
+
+
+class TestResetRereadsEnv(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("MAX_WORKER_COUNT", None)
+        _clear_rollout_runtime_overrides()
+        reset()
+
+    def test_reset_rebuilds_scale_steps_from_env(self):
+        os.environ["MAX_WORKER_COUNT"] = "4"
+        reset()
+        self.assertEqual(rollout_module.SCALE_STEPS[-1], 4)
+        self.assertEqual(rollout_module.SCALE_STEPS[0], 1)
+        os.environ["MAX_WORKER_COUNT"] = "15"
+        reset()
+        self.assertEqual(rollout_module.SCALE_STEPS[-1], 15)
 
 
 class TestTOCTOURacePrevention(RolloutResetMixin, unittest.TestCase):
