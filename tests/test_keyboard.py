@@ -452,5 +452,40 @@ class TestFieldTypoCapAmount(unittest.TestCase):
         self.assertAlmostEqual(result["eff_typo_rate"], 0.0)
 
 
+class TestTypoHesitationDelay(unittest.TestCase):
+    """Typo hesitation sleep is between 0.4 and 0.6 seconds (jittered)."""
+
+    def test_typo_sleep_duration_between_04_and_06(self):
+        """When a typo is forced, the hesitation sleep must be in [0.4, 0.6]."""
+        drv = _mock_driver()
+        el = MagicMock()
+        # rnd.random() returns 0.0 → forces typo branch every time.
+        # rnd.choice() returns a valid neighbour from _ADJACENT['a'] = 'sqwz'.
+        # rnd.uniform(0.4, 0.6) drives the actual hesitation sleep.
+        rnd = _rnd(0)
+        rnd.random = lambda: 0.0  # force typo path
+
+        slept = []
+        with patch("time.sleep", side_effect=slept.append):
+            result = type_value(drv, el, "a", rnd, typo_rate=1.0, field_kind="text")
+
+        self.assertGreater(result["typos_injected"], 0, "Expected at least one typo")
+        # The first sleep call after the typo dispatch must be the hesitation delay.
+        hesitation = slept[0]
+        self.assertGreaterEqual(hesitation, 0.4, f"Hesitation {hesitation} < 0.4")
+        self.assertLessEqual(hesitation, 0.6, f"Hesitation {hesitation} > 0.6")
+
+    def test_non_typo_path_delay_unchanged(self):
+        """Normal per-character delay is unaffected by the typo fix."""
+        drv = _mock_driver()
+        el = MagicMock()
+        delays = [0.07, 0.09]
+        slept = []
+        with patch("time.sleep", side_effect=slept.append):
+            type_value(drv, el, "ab", _rnd(), typo_rate=0.0, delays=delays)
+        self.assertIn(0.07, slept)
+        self.assertIn(0.09, slept)
+
+
 if __name__ == "__main__":
     unittest.main()

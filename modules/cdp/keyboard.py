@@ -84,7 +84,7 @@ def type_value(driver, element, value, rnd, *, typo_rate=0.0, delays=None,
             if w != ch:
                 if _dispatch(driver, element, w, strict):
                     res["typos_injected"] += 1
-                _sleep(max(0.08, d * 1.5))
+                _sleep(rnd.uniform(0.4, 0.6))
                 if _dispatch(driver, element, _BACKSPACE, strict):
                     res["corrections_made"] += 1
         if _dispatch(driver, element, ch, strict):
