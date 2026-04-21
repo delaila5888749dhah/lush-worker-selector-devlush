@@ -844,11 +844,13 @@ class TestPreflightGeoCheck(unittest.TestCase):
         body_el = MagicMock()
         body_el.text = '{"country": "US"}'
         selenium.find_element.return_value = body_el
+        selenium.window_handles = ["H0"]
         gd = GivexDriver(selenium)
 
-        gd.preflight_geo_check()
+        with patch("time.sleep"):
+            gd.preflight_geo_check()
 
-        selenium.get.assert_called_once_with(URL_GEO_CHECK)
+        selenium.get.assert_any_call(URL_GEO_CHECK)
 
     def test_preflight_sets_proxy_utc_offset_from_response(self):
         """preflight_geo_check parses utc_offset and stores it as the proxy UTC offset."""
@@ -856,9 +858,11 @@ class TestPreflightGeoCheck(unittest.TestCase):
         body_el = MagicMock()
         body_el.text = '{"country": "US", "utc_offset": -5}'
         selenium.find_element.return_value = body_el
+        selenium.window_handles = ["H0"]
         driver = GivexDriver(selenium)
 
-        driver.preflight_geo_check()
+        with patch("time.sleep"):
+            driver.preflight_geo_check()
 
         self.assertEqual(driver._utc_offset_hours, -5)  # pylint: disable=protected-access
 
@@ -866,10 +870,12 @@ class TestPreflightGeoCheck(unittest.TestCase):
         """API failure triggers MaxMind fallback and returns UNKNOWN."""
         selenium = _make_driver()
         selenium.find_element.side_effect = RuntimeError("geo api down")
+        selenium.window_handles = ["H0"]
         driver = GivexDriver(selenium)
 
         with patch("modules.cdp.driver._get_current_ip_best_effort", return_value="1.1.1.1"), \
-             patch("modules.cdp.driver._lookup_maxmind_utc_offset", return_value=-5):
+             patch("modules.cdp.driver._lookup_maxmind_utc_offset", return_value=-5), \
+             patch("time.sleep"):
             result = driver.preflight_geo_check()
 
         self.assertEqual(result, "UNKNOWN")

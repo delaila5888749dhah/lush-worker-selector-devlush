@@ -1482,6 +1482,16 @@ class GivexDriver:
 
     # ── Navigation ──────────────────────────────────────────────────────────
 
+    def _run_tab_janitor(self) -> None:
+        """Close extra tabs, navigate to about:blank, and wait 2 s to settle.
+
+        Blueprint §2 Tab Janitor: must run before the pre-flight geo check so
+        that only one window handle exists and it is in a clean state.
+        """
+        close_extra_tabs(self._driver)
+        self._driver.get("about:blank")
+        time.sleep(2)
+
     def preflight_geo_check(self) -> str:
         """Navigate to geo-check URL and assert the IP is US-based.
 
@@ -1498,6 +1508,7 @@ class GivexDriver:
         Raises:
             RuntimeError: if the detected country is not ``"US"``.
         """
+        self._run_tab_janitor()
         self._driver.get(URL_GEO_CHECK)
         try:
             body = self._driver.find_element("tag name", "body").text
