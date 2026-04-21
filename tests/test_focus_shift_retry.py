@@ -3,7 +3,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from modules.cdp import driver as drv
-from modules.cdp.driver import SEL_COMPLETE_PURCHASE, handle_ui_lock_focus_shift
+from modules.cdp.driver import (
+    SEL_COMPLETE_PURCHASE,
+    SEL_NEUTRAL_DIV,
+    handle_ui_lock_focus_shift,
+)
 
 
 class _FakeActionChains:
@@ -47,28 +51,31 @@ class TestFocusShiftRetry(unittest.TestCase):
 
     def test_neutral_click_then_recompute_bbox_then_click(self):
         driver = MagicMock()
+        neutral_el = MagicMock(name="neutral_body")
         btn = MagicMock(name="complete_purchase_btn")
-        driver.find_element.return_value = btn
+        driver.find_element.side_effect = lambda by, sel: (
+            neutral_el if sel == SEL_NEUTRAL_DIV else btn
+        )
 
-        result = handle_ui_lock_focus_shift(driver, neutral_xy=(20, 20))
+        result = handle_ui_lock_focus_shift(driver)
 
         self.assertTrue(result)
         # Two ActionChains instances: one for neutral, one for retry click.
         self.assertEqual(len(_FakeActionChains.instances), 2)
-        neutral, retry = _FakeActionChains.instances
-        self.assertEqual(neutral.calls[0], ("move_by_offset", 20, 20))
-        self.assertEqual(neutral.calls[1], ("click",))
-        self.assertEqual(neutral.calls[-1], ("perform",))
+        neutral_chain, retry_chain = _FakeActionChains.instances
+        self.assertEqual(neutral_chain.calls[0], ("move_to_element", neutral_el))
+        self.assertEqual(neutral_chain.calls[1], ("click",))
+        self.assertEqual(neutral_chain.calls[-1], ("perform",))
         # 0.5s wait between the two clicks.
         self.mock_sleep.assert_called_once_with(0.5)
-        # Re-located the complete-purchase button by CSS selector.
-        driver.find_element.assert_called_once_with(
-            "css selector", SEL_COMPLETE_PURCHASE
-        )
+        # Two find_element calls: neutral div + purchase button.
+        self.assertEqual(driver.find_element.call_count, 2)
+        driver.find_element.assert_any_call("css selector", SEL_NEUTRAL_DIV)
+        driver.find_element.assert_any_call("css selector", SEL_COMPLETE_PURCHASE)
         # Retry click targeted the re-located element.
-        self.assertEqual(retry.calls[0], ("move_to_element", btn))
-        self.assertEqual(retry.calls[1], ("click",))
-        self.assertEqual(retry.calls[-1], ("perform",))
+        self.assertEqual(retry_chain.calls[0], ("move_to_element", btn))
+        self.assertEqual(retry_chain.calls[1], ("click",))
+        self.assertEqual(retry_chain.calls[-1], ("perform",))
 
     def test_returns_false_on_exception(self):
         driver = MagicMock()
@@ -87,8 +94,9 @@ class TestFocusShiftRetry(unittest.TestCase):
         driver = MagicMock()
         driver.find_element.return_value = MagicMock()
         handle_ui_lock_focus_shift(driver)
-        # Exactly one find_element call and exactly two ActionChains instances.
-        self.assertEqual(driver.find_element.call_count, 1)
+        # Exactly two find_element calls (neutral div + purchase btn)
+        # and exactly two ActionChains instances.
+        self.assertEqual(driver.find_element.call_count, 2)
         self.assertEqual(len(_FakeActionChains.instances), 2)
 
 
