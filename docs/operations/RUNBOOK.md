@@ -31,6 +31,8 @@ Set the following variables before starting:
 | `BITBROWSER_API_KEY` | **yes** (production) | — | API key for the BitBrowser automation service. Required when `ENABLE_PRODUCTION_TASK_FN` is on. |
 | `BITBROWSER_ENDPOINT` | no | `http://127.0.0.1:54345` | Base URL for the local BitBrowser API server. |
 | `GIVEX_ENDPOINT` | no | — | Givex service endpoint URL. A warning is logged on startup if unset. |
+| `GIVEX_EGIFT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/` | Override the eGift page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. |
+| `GIVEX_PAYMENT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html` | Override the payment page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. |
 | `PROXY_LIST_FILE` | no | — | Path to a newline-delimited proxy list file consumed by the proxy rotator. |
 | `GEOIP_DB_PATH` | no | `data/GeoLite2-City.mmdb` | Path to the MaxMind GeoLite2 City database used for zip-code derivation (F-07). |
 | `REDIS_URL` | no | `""` | Redis connection URL used for deduplication and idempotency. Leave unset to disable Redis-backed idempotency. |
