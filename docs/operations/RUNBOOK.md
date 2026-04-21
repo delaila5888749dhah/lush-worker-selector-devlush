@@ -103,3 +103,9 @@ monitor.get_metrics()  # success_rate, error_rate, restarts_last_hour, memory_us
 2. `runtime.get_deployment_status()`
 3. `runtime.reset()`
 4. Restart via `python -m app` (see §2.1).
+
+## 11. Canary & Rollback
+- Canary rollout (5 steps, final gate before full production): see
+  [`docs/canary_rollout.md`](../canary_rollout.md).
+- Rollback via feature flags (no code revert): see
+  [`docs/rollback.md`](../rollback.md).

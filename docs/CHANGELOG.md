@@ -5,6 +5,17 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Added (P2-5, canary / final gate)
+- `docs/rollback.md` — rollback plan documenting every feature-flag
+  kill-switch (`ENABLE_RETRY_LOOP=0`, `ENABLE_RETRY_UI_LOCK=0`,
+  `ENABLE_CLEAR_REFILL_AFTER_POPUP=0`, `ENABLE_PRODUCTION_TASK_FN`),
+  verification steps, and re-enablement criteria.
+- `docs/canary_rollout.md` — 5-step canary runbook (smoke → mini →
+  soak → multi → full) with per-step PASS criteria, 24 h observation
+  window, abort criteria, and monitoring-dashboard specification
+  (`success_rate` / `swap_rate` / `cdp_timeout_rate`).
+- `docs/operations/RUNBOOK.md` §11 cross-links the two docs above.
+
 ### Fixed (P0-5, #113)
 - `orchestrator.refill_after_vbv_reload` now executes the complete purchase
   sequence — preflight → navigate → eGift → cart → guest → payment — when
