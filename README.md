@@ -172,6 +172,10 @@ and a warning is logged. Per `spec/audit-lock.md` (INV-SCALE-01),
 adding headroom beyond 10 workers should be validated with a load test
 before being rolled out to production.
 
+For canary rollout guidance (per-step `WORKER_COUNT` / `MAX_WORKER_COUNT`
+settings) see `docs/canary_rollout.md` §7; for the day-to-day env table
+see `docs/operations/RUNBOOK.md` §2.2.
+
 ## Running tests
 
 ```bash
