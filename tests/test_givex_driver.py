@@ -170,6 +170,23 @@ class TestFindElements(unittest.TestCase):
             gd.find_elements("#any-selector")
 
 
+class TestRandomGreeting(unittest.TestCase):
+    """_GREETINGS covers blueprint-specified messages and _random_greeting picks one."""
+
+    def test_blueprint_greetings_present(self):
+        """Blueprint-specified greeting messages must all be in _GREETINGS."""
+        for expected in (
+            "Happy Birthday!",
+            "Best wishes",
+            "Enjoy your gift!",
+            "Thank you for being you",
+        ):
+            self.assertIn(expected, drv._GREETINGS)
+
+    def test_random_greeting_returns_member(self):
+        self.assertIn(drv._random_greeting(), drv._GREETINGS)
+
+
 class TestFillEgiftForm(unittest.TestCase):
     """fill_egift_form types the correct value into each eGift field."""
 

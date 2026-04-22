@@ -401,6 +401,10 @@ _GREETINGS = [
     "Thinking of you!",
     "With love and best wishes!",
     "Hope this brightens your day!",
+    "Happy Birthday!",
+    "Best wishes",
+    "Enjoy your gift!",
+    "Thank you for being you",
 ]
 
 def _random_greeting() -> str:
