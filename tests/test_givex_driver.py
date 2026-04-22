@@ -866,20 +866,75 @@ class TestPreflightGeoCheck(unittest.TestCase):
 
         self.assertEqual(driver._utc_offset_hours, -5)  # pylint: disable=protected-access
 
-    def test_preflight_api_failure_uses_maxmind_fallback_and_returns_unknown(self):
-        """API failure triggers MaxMind fallback and returns UNKNOWN."""
+    def test_preflight_api_failure_retries_then_raises(self):
+        """API failure is retried up to 2x (3 attempts) then raises."""
         selenium = _make_driver()
         selenium.find_element.side_effect = RuntimeError("geo api down")
         selenium.window_handles = ["H0"]
         driver = GivexDriver(selenium)
 
-        with patch("modules.cdp.driver._get_current_ip_best_effort", return_value="1.1.1.1"), \
-             patch("modules.cdp.driver._lookup_maxmind_utc_offset", return_value=-5), \
-             patch("time.sleep"):
+        with patch("time.sleep") as mock_sleep:
+            with self.assertRaises(RuntimeError) as ctx:
+                driver.preflight_geo_check()
+
+        self.assertIn("preflight_geo_check failed", str(ctx.exception))
+        # 3 attempts means find_element is called 3 times.
+        self.assertEqual(selenium.find_element.call_count, 3)
+        # time.sleep(2) is called twice between the 3 attempts (others
+        # mocked-out in the janitor path also pass through mock_sleep).
+        sleep_two_calls = [c for c in mock_sleep.call_args_list if c.args == (2,)]
+        self.assertGreaterEqual(len(sleep_two_calls), 2)
+
+    def test_preflight_non_us_country_raises(self):
+        """Non-US country response raises after retries, never returns."""
+        selenium = _make_driver()
+        body_el = MagicMock()
+        body_el.text = '{"country": "CA"}'
+        selenium.find_element.return_value = body_el
+        selenium.window_handles = ["H0"]
+        driver = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                driver.preflight_geo_check()
+
+        self.assertIn("preflight_geo_check failed", str(ctx.exception))
+
+    def test_preflight_success_on_second_attempt(self):
+        """Transient failure on attempt 1 is recovered on attempt 2."""
+        selenium = _make_driver()
+        body_el = MagicMock()
+        body_el.text = '{"country": "US"}'
+        selenium.find_element.side_effect = [
+            RuntimeError("transient"),
+            body_el,
+        ]
+        selenium.window_handles = ["H0"]
+        driver = GivexDriver(selenium)
+
+        with patch("time.sleep"):
             result = driver.preflight_geo_check()
 
-        self.assertEqual(result, "UNKNOWN")
-        self.assertEqual(driver._utc_offset_hours, -5)  # pylint: disable=protected-access
+        self.assertEqual(result, "US")
+        self.assertEqual(selenium.find_element.call_count, 2)
+
+    def test_preflight_switches_to_main_window_each_attempt(self):
+        """Each attempt switches focus to handles[0] before navigation."""
+        selenium = _make_driver()
+        selenium.find_element.side_effect = RuntimeError("geo api down")
+        selenium.window_handles = ["MAIN", "POPUP"]
+        driver = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            with self.assertRaises(RuntimeError):
+                driver.preflight_geo_check()
+
+        main_switches = [
+            c for c in selenium.switch_to.window.call_args_list
+            if c.args == ("MAIN",)
+        ]
+        # At least 3 (one per attempt). Tab janitor may also switch back.
+        self.assertGreaterEqual(len(main_switches), 3)
 
 
 class TestMaxMindGeoLookup(unittest.TestCase):
