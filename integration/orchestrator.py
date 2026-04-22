@@ -192,8 +192,12 @@ def _notify_success(task, worker_id: str, total) -> None:
 # TTL-based idempotency cache with in-flight tracking.
 _IDEMPOTENCY_TTL = 3600  # 1 hour
 _IN_FLIGHT_TTL_SECONDS: int = 300  # 5 min — stale in-flight eviction
+# TTL for submitted-but-unconfirmed tasks (watchdog timed out AFTER submit); 24h default.
+_UNCONFIRMED_TTL_SECONDS: int = int(os.getenv("IDEMPOTENCY_UNCONFIRMED_TTL_SECONDS", "86400"))
 _completed_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp
 _submitted_task_ids: dict[str, float] = {}  # task_id → monotonic timestamp; payment sent but result unconfirmed
+# task_id → (monotonic insertion ts, ttl_seconds); per-entry TTL for manual reconciliation.
+_unconfirmed_task_ids: dict[str, tuple[float, float]] = {}
 _idempotency_lock = threading.Lock()
 
 
@@ -279,6 +283,7 @@ def _load_idempotency_store() -> None:
             data = json.loads(_IDEMPOTENCY_STORE_PATH.read_text(encoding="utf-8"))
             completed = data.get("completed", {})
             submitted = data.get("submitted", [])
+            unconfirmed = data.get("unconfirmed", {})
             now_wall = time.time()
             now_mono = time.monotonic()
             if isinstance(completed, dict):
@@ -290,6 +295,27 @@ def _load_idempotency_store() -> None:
                     _submitted_task_ids[str(s)] = now_mono
             elif isinstance(submitted, dict):
                 _restore_entries(submitted, _submitted_task_ids, now_wall, now_mono)
+            if isinstance(unconfirmed, dict):
+                _loaded_unconfirmed_keys: list[str] = []
+                for k, entry in unconfirmed.items():
+                    try:
+                        # Entry format: {"ts": wall_ts, "ttl": ttl_seconds}
+                        wall_ts = float(entry.get("ts"))
+                        ttl_seconds = float(entry.get("ttl", _UNCONFIRMED_TTL_SECONDS))
+                        age = max(0.0, now_wall - wall_ts)
+                        if age < ttl_seconds:
+                            _unconfirmed_task_ids[k] = (now_mono - age, ttl_seconds)
+                            _loaded_unconfirmed_keys.append(k)
+                    except (ValueError, TypeError, AttributeError) as parse_err:
+                        _logger.warning(
+                            "Skipping malformed unconfirmed entry: key=%r value=%r error=%s",
+                            k, entry, parse_err,
+                        )
+                if _loaded_unconfirmed_keys:
+                    _logger.warning(
+                        "Crash-recovery: %d unconfirmed task(s) reloaded — manual review required.",
+                        len(_loaded_unconfirmed_keys),
+                    )
             if _submitted_task_ids:
                 _logger.warning(
                     "Crash-recovery: %d submitted task(s) reloaded from idempotency store. "
@@ -331,6 +357,14 @@ def _save_idempotency_store() -> None:
                 for k, ts in _submitted_task_ids.items()
                 if ts >= cutoff_mono
             },
+            "unconfirmed": {
+                k: {
+                    "ts": now_wall - (now_mono - ts),
+                    "ttl": ttl,
+                }
+                for k, (ts, ttl) in _unconfirmed_task_ids.items()
+                if (now_mono - ts) < ttl
+            },
         }
         parent = _IDEMPOTENCY_STORE_PATH.parent
         parent.mkdir(parents=True, exist_ok=True)
@@ -365,6 +399,18 @@ class _IdempotencyStore:
         """Record that payment was submitted for task_id (but not yet confirmed)."""
         raise NotImplementedError
 
+    def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
+        """Track *task_id* as submitted-but-unconfirmed for ``ttl_seconds`` (see ``reconcile_unconfirmed``)."""
+        raise NotImplementedError
+
+    def list_unconfirmed(self) -> list[str]:
+        """Return task_ids currently in the unconfirmed state (for manual reconciliation)."""
+        raise NotImplementedError
+
+    def clear_unconfirmed(self, task_id: str) -> None:
+        """Remove *task_id* from the unconfirmed set (after manual verification)."""
+        raise NotImplementedError
+
     def mark_completed(self, task_id: str) -> None:
         """Record that task_id completed successfully."""
         raise NotImplementedError
@@ -392,6 +438,7 @@ class _FileIdempotencyStore(_IdempotencyStore):
                 task_id in _completed_task_ids
                 or task_id in _in_flight_task_ids
                 or task_id in _submitted_task_ids
+                or task_id in _unconfirmed_task_ids
             ):
                 return True
             # Mark as in-flight immediately to block concurrent duplicates.
@@ -403,10 +450,32 @@ class _FileIdempotencyStore(_IdempotencyStore):
             _submitted_task_ids[task_id] = time.monotonic()
             _save_idempotency_store()
 
+    def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
+        ttl = float(ttl_seconds) if ttl_seconds is not None else float(_UNCONFIRMED_TTL_SECONDS)
+        with _idempotency_lock:
+            _unconfirmed_task_ids[task_id] = (time.monotonic(), ttl)
+            # Also remove from submitted set — unconfirmed is a strictly stronger state.
+            _submitted_task_ids.pop(task_id, None)
+            _save_idempotency_store()
+
+    def list_unconfirmed(self) -> list[str]:
+        with _idempotency_lock:
+            now_mono = time.monotonic()
+            return [
+                k for k, (ts, ttl) in _unconfirmed_task_ids.items()
+                if (now_mono - ts) < ttl
+            ]
+
+    def clear_unconfirmed(self, task_id: str) -> None:
+        with _idempotency_lock:
+            if _unconfirmed_task_ids.pop(task_id, None) is not None:
+                _save_idempotency_store()
+
     def mark_completed(self, task_id: str) -> None:
         with _idempotency_lock:
             _completed_task_ids[task_id] = time.monotonic()
             _submitted_task_ids.pop(task_id, None)
+            _unconfirmed_task_ids.pop(task_id, None)
             _save_idempotency_store()
 
     def release_inflight(self, task_id: str) -> None:
@@ -465,6 +534,51 @@ class _RedisIdempotencyStore(_IdempotencyStore):
                 "RedisIdempotencyStore.mark_submitted failed for task_id=%s: %s", task_id, exc,
             )
             raise
+
+    def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
+        ttl = int(ttl_seconds) if ttl_seconds is not None else int(_UNCONFIRMED_TTL_SECONDS)
+        try:
+            # Value carries wall-clock submit ts so operators can see when it was flagged.
+            self._redis.set(self._key(task_id), f"unconfirmed:{int(time.time())}", ex=ttl)
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.error(
+                "RedisIdempotencyStore.mark_unconfirmed failed for task_id=%s: %s", task_id, exc,
+            )
+            raise
+
+    def list_unconfirmed(self) -> list[str]:
+        """Scan Redis for keys whose value is prefixed ``unconfirmed:``."""
+        prefix = self._key("")
+        try:
+            result: list[str] = []
+            for key in self._redis.scan_iter(match=f"{prefix}*"):
+                try:
+                    val = self._redis.get(key)
+                except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.warning(
+                        "RedisIdempotencyStore.list_unconfirmed: GET failed for key=%r (skipped): %s",
+                        key, exc,
+                    )
+                    val = None
+                if isinstance(val, bytes):
+                    val = val.decode("utf-8", errors="replace")
+                if isinstance(val, str) and val.startswith("unconfirmed"):
+                    key_str = key.decode("utf-8", errors="replace") if isinstance(key, bytes) else str(key)
+                    result.append(key_str[len(prefix):])
+            return result
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "RedisIdempotencyStore.list_unconfirmed failed: %s", exc,
+            )
+            return []
+
+    def clear_unconfirmed(self, task_id: str) -> None:
+        try:
+            self._redis.delete(self._key(task_id))
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "RedisIdempotencyStore.clear_unconfirmed failed for task_id=%s: %s", task_id, exc,
+            )
 
     def mark_completed(self, task_id: str) -> None:
         try:
@@ -533,6 +647,60 @@ def _flush_idempotency_store() -> None:
     _get_idempotency_store().flush()
 
 
+def list_unconfirmed_task_ids() -> list[str]:
+    """Return task IDs currently in the submitted-but-unconfirmed state (operator tooling)."""
+    try:
+        return _get_idempotency_store().list_unconfirmed()
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning("list_unconfirmed_task_ids failed", exc_info=True)
+        return []
+
+
+def reconcile_unconfirmed(
+    verifier: Callable[[str], bool] | None = None,
+) -> dict[str, int]:
+    """Reconcile submitted-but-unconfirmed tasks.
+
+    For each unconfirmed task_id: ``verifier(task_id)`` True → promote to
+    completed; False → clear (eligible for retry); raises → leave intact for
+    next pass / TTL eviction. If *verifier* is None, only TTL eviction runs.
+
+    Returns counters ``{"checked", "confirmed", "cleared", "remaining"}``.
+    """
+    store = _get_idempotency_store()
+    task_ids = store.list_unconfirmed()
+    stats = {"checked": 0, "confirmed": 0, "cleared": 0, "remaining": 0}
+    for task_id in task_ids:
+        stats["checked"] += 1
+        if verifier is None:
+            continue
+        try:
+            ok = bool(verifier(task_id))
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "reconcile_unconfirmed verifier raised for task_id=%s — leaving entry intact",
+                task_id, exc_info=True,
+            )
+            continue
+        try:
+            if ok:
+                store.mark_completed(task_id)
+                stats["confirmed"] += 1
+            else:
+                store.clear_unconfirmed(task_id)
+                stats["cleared"] += 1
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "reconcile_unconfirmed failed to update store for task_id=%s",
+                task_id, exc_info=True,
+            )
+    # Trigger TTL-based eviction for anything that aged out without reconciliation.
+    with _idempotency_lock:
+        _evict_expired_task_ids()
+    stats["remaining"] = len(store.list_unconfirmed())
+    return stats
+
+
 def _shutdown_cdp_executor() -> None:
     """Shutdown the shared CDP executor. Called on graceful shutdown or process exit.
 
@@ -596,6 +764,17 @@ def _evict_expired_task_ids() -> None:
     expired_sub = [k for k, ts in _submitted_task_ids.items() if ts < cutoff]
     for k in expired_sub:
         del _submitted_task_ids[k]
+    # Unconfirmed entries use their own per-entry TTL (not _IDEMPOTENCY_TTL).
+    now_mono = time.monotonic()
+    expired_unconf = [
+        k for k, (ts, ttl) in _unconfirmed_task_ids.items() if (now_mono - ts) >= ttl
+    ]
+    for k in expired_unconf:
+        del _unconfirmed_task_ids[k]
+        _logger.warning(
+            "Unconfirmed task_id=%s TTL expired without reconciliation — "
+            "entry cleared; manual review may still be required", k,
+        )
     inflight_cutoff = time.monotonic() - _IN_FLIGHT_TTL_SECONDS
     stale_inflight = [k for k, ts in _in_flight_task_ids.items() if ts < inflight_cutoff]
     for k in stale_inflight:
@@ -1040,8 +1219,18 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 "confirmed; manual review required before retrying",
                 _task_id_log, worker_id,
             )
-            # TODO: _get_idempotency_store().mark_unconfirmed(task_id)
-            # — hook point for future unconfirmed-state TTL retry
+            # Track as unconfirmed (TTL); is_duplicate blocks retries until
+            # reconcile_unconfirmed promotes/clears or the TTL expires.
+            if _task_id_log is not None:
+                try:
+                    _get_idempotency_store().mark_unconfirmed(
+                        _task_id_log, ttl_seconds=_UNCONFIRMED_TTL_SECONDS,
+                    )
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.error(
+                        "Failed to mark task_id=%s as unconfirmed in idempotency store",
+                        _task_id_log, exc_info=True,
+                    )
         raise
     except Exception as exc:
         _logger.error(
