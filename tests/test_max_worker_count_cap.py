@@ -84,7 +84,8 @@ class TestMaxWorkerCountCap(_CapRuntimeMixin, unittest.TestCase):
                 self.assertEqual(rollout.SCALE_STEPS[-1], cap)
         rollout.configure_max_workers(4)
         os.environ.pop("MAX_WORKER_COUNT", None)
-        self._run_for_cap(10)
+        applied = self._run_for_cap(10)
+        self.assertTrue(all(target <= 10 for target in applied))
         self.assertEqual(rollout.SCALE_STEPS[-1], 10)
 
     def test_validate_startup_config_rejects_invalid_max_worker_count(self):
