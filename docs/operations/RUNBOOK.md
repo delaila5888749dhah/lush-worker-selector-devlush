@@ -36,7 +36,8 @@ Set the following variables before starting:
 | `PROXY_LIST_FILE` | no | — | Path to a newline-delimited proxy list file consumed by the proxy rotator. |
 | `GEOIP_DB_PATH` | no | `data/GeoLite2-City.mmdb` | Path to the MaxMind GeoLite2 City database used for zip-code derivation (F-07). |
 | `REDIS_URL` | no | `""` | Redis connection URL used for deduplication and idempotency. Leave unset to disable Redis-backed idempotency. |
-| `WORKER_COUNT` | no | `1` | Number of concurrent worker threads. Valid range: 1–50. |
+| `WORKER_COUNT` | no | `1` | Number of concurrent worker threads. Valid range: 1–50. Must be ≤ `MAX_WORKER_COUNT`. |
+| `MAX_WORKER_COUNT` | no | `10` | Upper bound (cap) for rollout worker count. Valid range: 1–50. `SCALE_STEPS` in `modules/rollout/main.py` is derived from this value; the cap is always the final step and rollout never exceeds it. See `docs/canary_rollout.md` §7 and the "Scaling the worker pool" section of `README.md`. |
 | `BILLING_POOL_DIR` | no | `billing_pool` | Directory containing `.txt` billing profile files. |
 | `BILLING_CB_THRESHOLD` | no | `3` | Number of consecutive billing failures before the circuit breaker trips. |
 | `BILLING_CB_PAUSE` | no | `120` | Seconds the circuit breaker pauses new billing after tripping. |

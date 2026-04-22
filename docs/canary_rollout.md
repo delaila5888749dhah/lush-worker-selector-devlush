@@ -185,3 +185,48 @@ elapsed without triggering any abort criterion:
 - Staging checklist: `docs/staging/PHASE4_CHECKLIST.md`
 - Feature-flag defaults: `integration/orchestrator.py` (§"ENABLE_*"),
   `integration/runtime.py`.
+
+---
+
+## 7. `MAX_WORKER_COUNT` — rollout cap
+
+Two environment variables control the worker pool during canary
+rollout. They are distinct and must be kept in sync:
+
+| Var                | Role                                 | Default |
+|--------------------|--------------------------------------|---------|
+| `WORKER_COUNT`     | Initial workers at boot              | 1       |
+| `MAX_WORKER_COUNT` | Rollout cap (upper bound for scale)  | 10      |
+
+Invariants enforced by `integration.runtime._validate_startup_config`:
+
+- `WORKER_COUNT ≤ MAX_WORKER_COUNT`
+- `1 ≤ MAX_WORKER_COUNT ≤ 50`
+
+`SCALE_STEPS` is derived at import time by
+`modules/rollout/main.py::_build_scale_steps(MAX_WORKER_COUNT)` — the
+cap is always the last step and the rollout never exceeds it. See the
+"Scaling the worker pool" section in `README.md` for the full table of
+derived step tuples.
+
+### Small canary (cap=2)
+
+```sh
+export WORKER_COUNT=1
+export MAX_WORKER_COUNT=2
+python -m integration.runtime
+# SCALE_STEPS will be derived as (1, 2); rollout never exceeds 2 workers.
+```
+
+### Staging canary (cap=4)
+
+```sh
+export WORKER_COUNT=1
+export MAX_WORKER_COUNT=4
+# SCALE_STEPS = (1, 3, 4); rollout walks 1 → 3 → 4 and stops.
+```
+
+Pair these settings with the canary steps in §1: Step 1 / Step 2 run
+at `WORKER_COUNT=1`, Step 4 bumps to `WORKER_COUNT=3` under
+`MAX_WORKER_COUNT=4`, and Step 5 (full production) raises
+`MAX_WORKER_COUNT` to its configured production value.
