@@ -466,6 +466,19 @@ def is_safe_to_control():
         return _is_safe_locked()
 def _apply_scale(target_count, task_fn):
     global _pending_restarts
+    # Defensive cap clamp: rollout decisions should never emit a target above
+    # SCALE_STEPS[-1] (== MAX_WORKER_COUNT), but clamp here as a belt-and-
+    # suspenders guard so a drift bug upstream can't scale us past the cap.
+    cap = rollout.SCALE_STEPS[-1]
+    if target_count > cap:
+        _logger.warning(
+            "clamp target %d -> cap %d (SCALE_STEPS[-1])", target_count, cap,
+        )
+        _log_event(
+            "runtime", "warning", "scale_target_clamped",
+            {"requested": target_count, "cap": cap},
+        )
+        target_count = cap
     with _lock: current_ids = list(_workers.keys())
     current_count = len(current_ids)
     if target_count > current_count:
@@ -613,6 +626,7 @@ def register_signal_handlers():
 def _validate_startup_config() -> None:
     """Validate critical startup config. Raises ConfigError on invalid values."""
     raw = os.environ.get("WORKER_COUNT", "")
+    worker_count: int | None = None
     if not raw:
         _logger.warning("WORKER_COUNT not set — defaulting to 1")
     else:
@@ -622,6 +636,25 @@ def _validate_startup_config() -> None:
             raise ConfigError(f"WORKER_COUNT={raw!r} is not a valid integer") from exc
         if worker_count < 1 or worker_count > 50:
             raise ConfigError(f"WORKER_COUNT={worker_count} out of range [1, 50]")
+
+    max_raw = os.environ.get("MAX_WORKER_COUNT", "")
+    max_worker_count: int | None = None
+    if max_raw:
+        try:
+            max_worker_count = int(max_raw)
+        except ValueError as exc:
+            raise ConfigError(
+                f"MAX_WORKER_COUNT={max_raw!r} is not a valid integer"
+            ) from exc
+        if max_worker_count < 1 or max_worker_count > 50:
+            raise ConfigError(
+                f"MAX_WORKER_COUNT={max_worker_count} out of range [1, 50]"
+            )
+        if worker_count is not None and worker_count > max_worker_count:
+            raise ConfigError(
+                f"WORKER_COUNT={worker_count} exceeds "
+                f"MAX_WORKER_COUNT={max_worker_count}"
+            )
 
     try:
         validate_config()
@@ -711,6 +744,28 @@ def start(task_fn, interval=None):
         if _state not in ("INIT", "STOPPED"):
             return False
         _validate_startup_config()
+    # Propagate the effective worker cap BEFORE the loop starts. This also
+    # clears any stale runtime override from a previous start() call when the
+    # env var is now unset (defaulting back to 10).
+    max_raw = os.environ.get("MAX_WORKER_COUNT", "").strip()
+    try:
+        cap = int(max_raw) if max_raw else 10
+    except ValueError as exc:
+        raise ConfigError(
+            f"Failed to configure rollout cap from MAX_WORKER_COUNT={max_raw!r}: {exc}"
+        ) from exc
+    if rollout.SCALE_STEPS[-1] != cap:
+        try:
+            rollout.configure_max_workers(cap)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                f"Failed to configure rollout cap from MAX_WORKER_COUNT={max_raw!r}: {exc}"
+            ) from exc
+    if rollout.SCALE_STEPS[-1] != cap:
+        raise ConfigError(
+            f"rollout.SCALE_STEPS[-1]={rollout.SCALE_STEPS[-1]} != "
+            f"MAX_WORKER_COUNT={cap}"
+        )
     _ensure_rollout_configured()
     try:
         _validate_billing_pool_preflight()

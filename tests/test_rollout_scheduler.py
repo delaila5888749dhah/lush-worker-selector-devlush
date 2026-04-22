@@ -116,7 +116,7 @@ class TestAdvanceStep(SchedulerResetMixin, unittest.TestCase):
         self.assertIn("3 workers", reason)
 
     def test_advance_step_at_max_returns_false(self):
-        for _ in range(len(sched.ROLLOUT_STEPS) - 1):
+        for _ in range(len(rollout.SCALE_STEPS) - 1):
             rollout.try_scale_up()
         success, reason = sched.advance_step()
         self.assertFalse(success)
@@ -211,10 +211,10 @@ class TestRolloutComplete(SchedulerResetMixin, unittest.TestCase):
     """rollout_complete flag derived from rollout step index"""
 
     def test_rollout_complete_at_max_step(self):
-        for _ in range(len(sched.ROLLOUT_STEPS) - 1):
+        for _ in range(len(rollout.SCALE_STEPS) - 1):
             rollout.try_scale_up()
         self.assertEqual(rollout.get_current_step_index(),
-                         len(sched.ROLLOUT_STEPS) - 1)
+                         len(rollout.SCALE_STEPS) - 1)
         status = sched.get_scheduler_status()
         self.assertTrue(status["rollout_complete"])
 

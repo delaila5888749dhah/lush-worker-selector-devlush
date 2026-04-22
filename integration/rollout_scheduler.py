@@ -1,6 +1,6 @@
 # DEPRECATED: This scheduler is superseded by integration/runtime._runtime_loop().
 # Controlled by the ROLLOUT_MANAGED_BY_RUNTIME environment variable (default: true = disabled).
-"""Automatic rollout scheduler — manages production rollout via ROLLOUT_STEPS.
+"""Automatic rollout scheduler — manages production rollout via ``rollout.SCALE_STEPS``.
 
 DEPRECATED — use ``integration.runtime`` instead.  This module is a semantic
 shim: the legacy scheduler loop and all internals are retained in-place
@@ -22,9 +22,12 @@ _ROLLOUT_MANAGED_BY_RUNTIME: bool = (
 )
 
 _logger = logging.getLogger(__name__)
-# Single source of truth: re-export rollout.SCALE_STEPS so this legacy module
-# cannot drift from the canonical scaling steps defined in modules/rollout/main.py.
-ROLLOUT_STEPS = rollout.SCALE_STEPS
+# NOTE: The former import-time alias ``ROLLOUT_STEPS = rollout.SCALE_STEPS``
+# has been removed.  Capturing SCALE_STEPS at import time would freeze the
+# legacy shim to whatever cap was in force when this module was first
+# imported, making it impossible for runtime.configure_max_workers() to
+# propagate a new cap here.  All references must now read
+# ``rollout.SCALE_STEPS`` dynamically so the canonical value always wins.
 STABLE_DURATION_SECONDS = 43200
 MIN_SUCCESS_RATE = 0.70
 MAX_ERROR_RATE = 0.05
@@ -168,9 +171,9 @@ def get_scheduler_status() -> dict:
         stable_since = _stable_since
     step = rollout.get_current_step_index()
     workers = rollout.get_current_workers()
-    max_idx = len(ROLLOUT_STEPS) - 1
+    max_idx = len(rollout.SCALE_STEPS) - 1
     complete = step == max_idx
-    next_workers = ROLLOUT_STEPS[step + 1] if step < max_idx else None
+    next_workers = rollout.SCALE_STEPS[step + 1] if step < max_idx else None
     now = time.monotonic()
     if stable_since is not None:
         elapsed = now - stable_since
