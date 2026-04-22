@@ -82,7 +82,7 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
 │   └── 🏁 Milestone: 3 workers chạy 24h đạt các chỉ số trên
 │
 ├── Phase 5 — Production Rollout (3–5 ngày)
-│   ├── Rollout theo nấc: 1 → 3 → 5 → 10 workers
+│   ├── Rollout theo nấc: progressive scaling up to configured MAX_WORKER_COUNT
 │   ├── Mỗi nấc chạy 12–24h trước khi tăng
 │   ├── Giám sát liên tục:
 │   │   ├── success rate
@@ -94,7 +94,7 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
 │   │   ├── error rate tăng đột biến (>5%)
 │   │   ├── memory > 2G
 │   │   └── worker die > 3 lần trong 1h
-│   └── 🏁 Milestone: 10 workers chạy 24h ổn định với tất cả chỉ số trong ngưỡng
+│   └── 🏁 Milestone: up to MAX_WORKER_COUNT workers (default 10) chạy 24h ổn định với tất cả chỉ số trong ngưỡng
 │
 └── Phase 6 — Handover & Operations (2 ngày)
     ├── Viết runbook (hướng dẫn start/stop, đọc log, fallback thủ công)
@@ -588,7 +588,7 @@ PR bị REQUEST_CHANGES
 | P2 | CI bắt được lỗi import, signature, PR scope. Security pipeline chặn vulnerability |
 | P3 | 4 module hoàn chỉnh, unit test pass, smoke test pass |
 | P4 | 3 workers staging 24h đạt chỉ số ổn định |
-| P5 | 10 workers production 24h ổn định |
+| P5 | up to MAX_WORKER_COUNT workers (default 10) production 24h ổn định |
 | P6 | Runbook hoàn chỉnh, sẵn sàng bàn giao |
 | P7 | System audit-consistent, production-hardened, zero confirmed remaining issues |
 | P8 | Production monitoring active, deployment verified, baseline recorded, extension spec defined |

@@ -94,11 +94,16 @@ integration/runtime.py — reset() sets _behavior_delay_enabled = False
 
 ---
 
-### INV-SCALE-01 — Progressive Scaling Steps
-```
-SCALE_STEPS = (1, 3, 5, 10)   (modules/rollout/main.py:11)
-```
-**Rule:** Adding a new scaling step requires a load test demonstrating the system remains stable at the new worker count before merging.
+### INV-SCALE-01 — Progressive Scaling Steps (dynamic cap)
+`SCALE_STEPS` is derived at runtime from `MAX_WORKER_COUNT` (default 10, range 1–50)
+in `modules/rollout/main.py`. Contract:
+- strictly ascending
+- `SCALE_STEPS[0] == 1`
+- `SCALE_STEPS[-1] == MAX_WORKER_COUNT`
+- `all(s <= MAX_WORKER_COUNT for s in SCALE_STEPS)`
+
+**Rule:** Changing the derivation rule or cap range requires a load test
+demonstrating stability at the new cap before merging.
 
 ---
 
