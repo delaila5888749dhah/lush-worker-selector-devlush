@@ -763,10 +763,11 @@ def start(task_fn, interval=None):
             raise ConfigError(
                 f"Failed to configure rollout cap from MAX_WORKER_COUNT={max_raw!r}: {exc}"
             ) from exc
-        assert rollout.SCALE_STEPS[-1] == cap, (
-            f"rollout.SCALE_STEPS[-1]={rollout.SCALE_STEPS[-1]} != "
-            f"MAX_WORKER_COUNT={cap}"
-        )
+        if rollout.SCALE_STEPS[-1] != cap:
+            raise ConfigError(
+                f"rollout.SCALE_STEPS[-1]={rollout.SCALE_STEPS[-1]} != "
+                f"MAX_WORKER_COUNT={cap}"
+            )
     _ensure_rollout_configured()
     try:
         _validate_billing_pool_preflight()

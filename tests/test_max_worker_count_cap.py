@@ -1,10 +1,5 @@
-"""End-to-end tests for the MAX_WORKER_COUNT cap wiring.
+"""Tests for runtime MAX_WORKER_COUNT cap wiring."""
 
-Verifies that MAX_WORKER_COUNT propagates from the environment, through
-``runtime.start()``, into ``rollout.SCALE_STEPS`` and ultimately into
-``_apply_scale`` targets — so the runtime never scales above the configured
-cap.
-"""
 import os
 import shutil
 import tempfile
@@ -30,7 +25,7 @@ def _wait_until(predicate, timeout=2.0, interval=0.02):
     return predicate()
 
 
-class _MaxWorkerCapMixin:
+class _CapRuntimeMixin:
     def setUp(self):
         reset()
         rollout.reset()
@@ -38,16 +33,10 @@ class _MaxWorkerCapMixin:
         self._saved_env = os.environ.get("MAX_WORKER_COUNT")
         self._saved_worker = os.environ.get("WORKER_COUNT")
         self._billing_pool_dir = tempfile.mkdtemp()
-        with open(
-            os.path.join(self._billing_pool_dir, "profiles.txt"),
-            "w", encoding="utf-8",
-        ) as handle:
-            handle.write(
-                "Alice|Smith|1 Main St|City|NY|10001|2125550001|a@e.com\n"
-            )
+        with open(os.path.join(self._billing_pool_dir, "profiles.txt"), "w", encoding="utf-8") as handle:
+            handle.write("Alice|Smith|1 Main St|City|NY|10001|2125550001|a@e.com\n")
         self._billing_pool_patcher = patch.object(
-            billing, "_pool_dir",
-            return_value=Path(self._billing_pool_dir),
+            billing, "_pool_dir", return_value=Path(self._billing_pool_dir)
         )
         self._billing_pool_patcher.start()
 
@@ -66,14 +55,10 @@ class _MaxWorkerCapMixin:
         rollout.reset()
         monitor.reset()
 
-
-class TestMaxWorkerCountCapE2E(_MaxWorkerCapMixin, unittest.TestCase):
-    """End-to-end: runtime loop never requests a target above the cap."""
-
-    def _run_for_cap(self, n):
-        os.environ["MAX_WORKER_COUNT"] = str(n)
+    def _run_for_cap(self, cap):
+        os.environ["MAX_WORKER_COUNT"] = str(cap)
         os.environ.pop("WORKER_COUNT", None)
-        applied: list[int] = []
+        applied = []
         lock = threading.Lock()
 
         def _record(target, _task_fn):
@@ -81,94 +66,51 @@ class TestMaxWorkerCountCapE2E(_MaxWorkerCapMixin, unittest.TestCase):
                 applied.append(target)
 
         with patch("integration.runtime._apply_scale", side_effect=_record):
-            started = start(lambda _: None, interval=0.02)
-            self.assertTrue(started)
+            self.assertTrue(start(lambda _: None, interval=0.02))
             try:
-                _wait_until(
-                    lambda: len(applied) >= 3, timeout=2.0, interval=0.02,
-                )
+                self.assertTrue(_wait_until(lambda: len(applied) >= 3))
             finally:
                 stop(timeout=2)
         return applied
 
-    def test_runtime_never_exceeds_cap_n1(self):
-        self._assert_cap(1)
 
-    def test_runtime_never_exceeds_cap_n2(self):
-        self._assert_cap(2)
+class TestMaxWorkerCountCap(_CapRuntimeMixin, unittest.TestCase):
+    def test_runtime_never_exceeds_cap(self):
+        for cap in (1, 2, 4, 7, 10, 12):
+            with self.subTest(cap=cap):
+                applied = self._run_for_cap(cap)
+                self.assertTrue(applied)
+                self.assertTrue(all(target <= cap for target in applied))
+                self.assertEqual(rollout.SCALE_STEPS[-1], cap)
 
-    def test_runtime_never_exceeds_cap_n4(self):
-        self._assert_cap(4)
-
-    def test_runtime_never_exceeds_cap_n7(self):
-        self._assert_cap(7)
-
-    def test_runtime_never_exceeds_cap_n10(self):
-        self._assert_cap(10)
-
-    def test_runtime_never_exceeds_cap_n12(self):
-        self._assert_cap(12)
-
-    def _assert_cap(self, n):
-        applied = self._run_for_cap(n)
-        self.assertTrue(
-            applied, f"expected at least one _apply_scale call for cap={n}",
+    def test_validate_startup_config_rejects_invalid_max_worker_count(self):
+        cases = (
+            ({"MAX_WORKER_COUNT": "abc"}, "non-int"),
+            ({"MAX_WORKER_COUNT": "0"}, "zero"),
+            ({"MAX_WORKER_COUNT": "51"}, "over-50"),
+            ({"MAX_WORKER_COUNT": "3", "WORKER_COUNT": "5"}, "worker>max"),
         )
-        self.assertTrue(
-            all(t <= n for t in applied),
-            f"_apply_scale targets exceeded cap={n}: {applied}",
-        )
-        # SCALE_STEPS must terminate at exactly the cap.
-        self.assertEqual(rollout.SCALE_STEPS[-1], n)
+        for env, label in cases:
+            with self.subTest(case=label):
+                os.environ.pop("MAX_WORKER_COUNT", None)
+                os.environ.pop("WORKER_COUNT", None)
+                os.environ.update(env)
+                with self.assertRaises(ConfigError):
+                    runtime._validate_startup_config()  # pylint: disable=protected-access
 
-
-class TestValidateStartupConfigMaxWorkerCount(_MaxWorkerCapMixin, unittest.TestCase):
-    """_validate_startup_config enforces MAX_WORKER_COUNT range & coupling."""
-
-    def test_rejects_non_integer(self):
-        os.environ["MAX_WORKER_COUNT"] = "abc"
-        with self.assertRaises(ConfigError):
-            runtime._validate_startup_config()  # pylint: disable=protected-access
-
-    def test_rejects_zero(self):
-        os.environ["MAX_WORKER_COUNT"] = "0"
-        with self.assertRaises(ConfigError):
-            runtime._validate_startup_config()  # pylint: disable=protected-access
-
-    def test_rejects_over_50(self):
-        os.environ["MAX_WORKER_COUNT"] = "51"
-        with self.assertRaises(ConfigError):
-            runtime._validate_startup_config()  # pylint: disable=protected-access
-
-    def test_rejects_worker_count_above_max(self):
-        os.environ["MAX_WORKER_COUNT"] = "3"
-        os.environ["WORKER_COUNT"] = "5"
-        with self.assertRaises(ConfigError):
-            runtime._validate_startup_config()  # pylint: disable=protected-access
-
-    def test_accepts_worker_count_equal_to_max(self):
+    def test_validate_startup_config_accepts_valid_pairs(self):
         os.environ["MAX_WORKER_COUNT"] = "5"
         os.environ["WORKER_COUNT"] = "5"
-        # Should not raise.
         runtime._validate_startup_config()  # pylint: disable=protected-access
-
-    def test_accepts_unset_max(self):
         os.environ.pop("MAX_WORKER_COUNT", None)
         os.environ["WORKER_COUNT"] = "3"
-        # Should not raise when MAX_WORKER_COUNT is not set.
         runtime._validate_startup_config()  # pylint: disable=protected-access
 
-
-class TestApplyScaleDefensiveClamp(_MaxWorkerCapMixin, unittest.TestCase):
-    """_apply_scale defensively clamps targets above SCALE_STEPS[-1]."""
-
-    def test_clamp_logs_warning_and_reduces_target(self):
+    def test_apply_scale_clamps_above_cap_and_logs_warning(self):
         os.environ["MAX_WORKER_COUNT"] = "4"
         rollout.configure_max_workers(4)
-        launches: list[None] = []
+        launches = []
 
-        # Stub worker start to avoid real threads; count launches to verify
-        # the clamp reduced the requested target down to the cap (4).
         def _fake_start(_task_fn):
             launches.append(None)
 
@@ -177,16 +119,10 @@ class TestApplyScaleDefensiveClamp(_MaxWorkerCapMixin, unittest.TestCase):
             with patch("integration.runtime.start_worker", side_effect=_fake_start), \
                  patch("integration.runtime._logger") as mock_logger:
                 runtime._apply_scale(99, lambda _: None)  # pylint: disable=protected-access
-                # Requested 99; cap is 4 → exactly 4 launches must be attempted.
-                self.assertEqual(len(launches), 4)
-                # A warning must have been emitted.
-                self.assertTrue(
-                    any(
-                        "clamp target" in str(call.args[0])
-                        for call in mock_logger.warning.call_args_list
-                    ),
-                    "expected a 'clamp target' warning log",
-                )
+            self.assertEqual(len(launches), 4)
+            self.assertTrue(
+                any("clamp target" in str(call.args[0]) for call in mock_logger.warning.call_args_list)
+            )
         finally:
             runtime._state = "INIT"  # pylint: disable=protected-access
 
