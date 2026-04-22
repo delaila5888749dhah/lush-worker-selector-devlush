@@ -199,12 +199,12 @@ def preflight_geo_check(worker_id: str) -> str:
         worker_id: Unique identifier for the worker whose driver to use.
 
     Returns:
-        ``"US"`` when the primary API confirms a US IP, or ``"UNKNOWN"``
-        when the API is unavailable and the fallback is used.
+        ``"US"`` when the geo-check API confirms a US IP.
 
     Raises:
         RuntimeError: if no driver has been registered for the given worker_id.
-        RuntimeError: if the detected country is not ``"US"``.
+        RuntimeError: if the detected country is not ``"US"`` or the API
+            remains unreachable after two retries.
     """
     return _get_driver(worker_id).preflight_geo_check()
 

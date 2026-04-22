@@ -1495,62 +1495,73 @@ class GivexDriver:
     def preflight_geo_check(self) -> str:
         """Navigate to geo-check URL and assert the IP is US-based.
 
-        When the primary geo-check API fails, falls back to MaxMind GeoLite2
-        for UTC-offset detection.  If the GeoLite2 database is unavailable,
-        malformed, or any other error occurs during the fallback, the offset
-        defaults to 0 (UTC) and the method returns ``"UNKNOWN"`` rather than
-        raising so that the calling flow can continue safely.
+        Per Blueprint §2, the check is retried up to two times (three total
+        attempts) with a 2 s pause and a main-window switch between
+        attempts.  If every attempt fails, the method raises so the caller
+        can rotate proxy or abort the session.  This method never returns
+        ``"UNKNOWN"``: failures are always surfaced so proxy mistakes are
+        not silently propagated.
 
         Returns:
-            ``"US"`` when the primary API confirms a US IP, or ``"UNKNOWN"``
-            when the API is unavailable and the fallback is used.
+            ``"US"`` when the geo-check API confirms a US IP.
 
         Raises:
-            RuntimeError: if the detected country is not ``"US"``.
+            RuntimeError: if the detected country is not ``"US"`` or the
+                API remains unreachable after two retries.
         """
         self._run_tab_janitor()
-        self._driver.get(URL_GEO_CHECK)
-        try:
-            body = self._driver.find_element("tag name", "body").text
-            data = _json.loads(body)
-            country = data.get("country", "")
-            utc_offset = data.get("utc_offset", 0)
-            self.set_proxy_utc_offset(int(utc_offset) if utc_offset is not None else 0)
-        except Exception as exc:
-            _log.warning(
-                "preflight_geo_check: API failed, trying MaxMind fallback: %s",
-                exc,
-            )
-            utc_offset = 0
+        max_attempts = 3  # 1 initial + 2 retries
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            # Always ensure focus on the main window on each attempt so
+            # that a stray popup or closed tab does not starve the check.
+            # If we cannot focus the main window, the attempt itself is
+            # considered failed: running geo-check on the wrong context
+            # would defeat the safeguard this method provides.
             try:
-                detected_ip = _get_current_ip_best_effort()
-                if detected_ip:
-                    detected_offset = _lookup_maxmind_utc_offset(detected_ip)
-                    if detected_offset is None:
-                        _log.warning(
-                            "preflight_geo_check: MaxMind fallback "
-                            "unavailable for IP %s; using UTC offset 0",
-                            detected_ip,
-                        )
-                    utc_offset = detected_offset or 0
-                else:
-                    _log.warning(
-                        "preflight_geo_check: unable to detect "
-                        "public IP; using UTC offset 0",
+                handles = self._driver.window_handles
+                if not handles:
+                    raise RuntimeError(
+                        "preflight_geo_check: no window handles available"
                     )
-            except Exception as fallback_exc:  # pylint: disable=broad-except
+                self._driver.switch_to.window(handles[0])
+            except Exception as switch_exc:  # pylint: disable=broad-except
+                last_exc = switch_exc
                 _log.warning(
-                    "preflight_geo_check: MaxMind fallback raised unexpectedly: %s;"
-                    " using UTC offset 0",
-                    fallback_exc,
+                    "preflight_geo_check: attempt %d/%d main-window "
+                    "switch failed: %s",
+                    attempt, max_attempts, switch_exc,
                 )
-            self.set_proxy_utc_offset(utc_offset)
-            return "UNKNOWN"
-        if country != "US":
-            raise RuntimeError(
-                f"Geo-check failed: expected country 'US', got {country!r}"
-            )
-        return country
+                if attempt < max_attempts:
+                    time.sleep(2)
+                continue
+            try:
+                self._driver.get(URL_GEO_CHECK)
+                body = self._driver.find_element("tag name", "body").text
+                data = _json.loads(body)
+                country = data.get("country", "")
+                utc_offset = data.get("utc_offset", 0)
+                self.set_proxy_utc_offset(
+                    int(utc_offset) if utc_offset is not None else 0
+                )
+                if country != "US":
+                    raise RuntimeError(
+                        f"Geo-check failed: expected country 'US', "
+                        f"got {country!r}"
+                    )
+                return country
+            except Exception as exc:  # pylint: disable=broad-except
+                last_exc = exc
+                _log.warning(
+                    "preflight_geo_check: attempt %d/%d failed: %s",
+                    attempt, max_attempts, exc,
+                )
+                if attempt < max_attempts:
+                    time.sleep(2)
+        raise RuntimeError(
+            f"preflight_geo_check failed after {max_attempts} attempts: "
+            f"{last_exc}"
+        ) from last_exc
 
     def _clear_browser_state(self) -> None:
         """Clear localStorage, sessionStorage, and cookies (Blueprint §3 Hard-Reset)."""
