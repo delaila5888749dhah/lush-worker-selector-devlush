@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Blueprint Contract File",
+  "description": "Schema for spec/contracts/section*.yaml files (Blueprint-as-Code).",
+  "type": "object",
+  "required": ["section", "title", "blueprint_ref", "contracts"],
+  "additionalProperties": false,
+  "properties": {
+    "section": {
+      "type": "integer",
+      "description": "Blueprint section number."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable section title."
+    },
+    "blueprint_ref": {
+      "type": "string",
+      "description": "Reference to the blueprint section, e.g. 'spec/blueprint.md#section-6'."
+    },
+    "spec_version": {
+      "type": "string",
+      "description": "Optional: spec version this contract file targets.",
+      "pattern": "^\\d+\\.\\d+(\\.\\d+)?$"
+    },
+    "last_updated": {
+      "type": "string",
+      "description": "Optional: ISO date of last update (YYYY-MM-DD).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "contracts": {
+      "type": "array",
+      "description": "List of individual contracts in this section.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "priority",
+          "rule",
+          "blueprint_ref",
+          "source_files",
+          "enforced_by",
+          "fail_severity"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique contract ID, e.g. INV-GATEKEEPER-01.",
+            "pattern": "^INV-[A-Z]+(-[A-Z]+)?-\\d{2,3}$"
+          },
+          "priority": {
+            "type": "string",
+            "description": "Contract priority level.",
+            "enum": ["CRITICAL", "MAJOR", "MINOR"]
+          },
+          "rule": {
+            "type": "string",
+            "description": "1-2 sentence prose rule extracted from the blueprint.",
+            "minLength": 10
+          },
+          "blueprint_ref": {
+            "type": "string",
+            "description": "Path reference to the blueprint, must start with 'spec/'.",
+            "pattern": "^spec/"
+          },
+          "audit_lock_ref": {
+            "type": "string",
+            "description": "Optional: reference to spec/audit-lock.md entry."
+          },
+          "source_files": {
+            "type": "array",
+            "description": "Production source file paths relative to repo root.",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "enforced_by": {
+            "type": "array",
+            "description": "Test node paths. Format: path[::Class[::method]].",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "fail_severity": {
+            "type": "string",
+            "description": "Action when the contract fails in CI.",
+            "enum": ["block_merge", "warn", "info"]
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Optional: additional context for the rule."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional: implementation notes or known gaps."
+          },
+          "last_updated": {
+            "type": "string",
+            "description": "Optional: ISO date of last update.",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,224 @@
+section: 6
+title: "Gatekeeper & Xử Lý Ngoại Lệ"
+blueprint_ref: "spec/blueprint.md#section-6"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-FSM-01
+    priority: CRITICAL
+    rule: >
+      ALLOWED_STATES in modules/fsm/main.py must equal set(_FSM_STATES) in
+      integration/orchestrator.py. Adding or removing an FSM state requires
+      updating both files simultaneously and incrementing the spec version.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    audit_lock_ref: "spec/audit-lock.md#INV-FSM-01"
+    source_files:
+      - modules/fsm/main.py
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_fsm.py
+      - tests/test_fsm_wire_transition.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-01
+    priority: CRITICAL
+    rule: >
+      A stuck submit (click "Complete Purchase" with no loading response for 3s)
+      must map to the FSM state 'ui_lock' — the function must return 'ui_lock',
+      not raise an exception.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_stuck_submit_guard.py
+      - tests/test_focus_shift_retry.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-02
+    priority: MAJOR
+    rule: >
+      is_payment_page_reloaded() must use URL match against the payment page URL
+      as its primary detection signal, not DOM/billing-field heuristics.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - integration/orchestrator.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_is_payment_page_reloaded.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-03
+    priority: MAJOR
+    rule: >
+      Confirmation detection (Ngã rẽ 2 — Success) requires a URL match on
+      '/confirmation' fragment before treating the outcome as 'success'. URL
+      match is the primary gating signal.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_p13_thank_you_popup.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-04
+    priority: CRITICAL
+    rule: >
+      handle_vbv_challenge() must return a string that is a valid member of
+      ALLOWED_STATES or a known VBV outcome string ('cancelled'). The return
+      value drives the subsequent FSM transition in the orchestrator.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_vbv_challenge_wired.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-05
+    priority: CRITICAL
+    rule: >
+      'vbv_cancelled' is in ALLOWED_STATES and is a terminal state (no outgoing
+      FSM transitions). Attempting to transition from 'vbv_cancelled' must raise
+      an error, per spec/fsm.md v1.1.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    audit_lock_ref: "spec/audit-lock.md#INV-FSM-01"
+    source_files:
+      - modules/fsm/main.py
+    enforced_by:
+      - tests/test_fsm.py::FSMTransitionGraphTests::test_invalid_vbv_cancelled_to_success
+      - tests/test_fsm.py::FSMTransitionGraphTests::test_invalid_vbv_cancelled_to_declined
+      - tests/test_fsm.py::FSMTransitionGraphTests::test_valid_flow_vbv_3ds_to_vbv_cancelled
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-06
+    priority: MAJOR
+    rule: >
+      VBV iframe CDP click must use absolute coordinates computed as
+      iframe_rect.left + element_rect.left + random_offset (and equivalently for
+      y), dispatched via CDP Input.dispatchMouseEvent.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_vbv_cdp_abs_click.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-07
+    priority: MAJOR
+    rule: >
+      VBV dynamic wait must pause 8–12 seconds (random uniform) before iframe
+      interaction begins (Ngã rẽ 3). This prevents AI fraud detection from
+      flagging sub-human timing.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_vbv_dynamic_wait.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-08
+    priority: MAJOR
+    rule: >
+      cdp_click_iframe_element() must use try/finally to call
+      switch_to.default_content() as cleanup, ensuring the driver context is
+      always restored even when element lookup raises.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_cdp_transient_iframe.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-09
+    priority: CRITICAL
+    rule: >
+      The 'declined' and 'vbv_cancelled' branches must never reload the page
+      (Zero-Backtrack Soft Reset, Ngã rẽ 4). Card fields are cleared via CDP
+      and refilled without a page reload.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_p12_clear_refill.py
+      - tests/test_vbv_full_refill.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-10
+    priority: MAJOR
+    rule: >
+      handle_something_wrong_popup() must retry the popup close 2–3 times before
+      giving up, using WebDriverWait to detect presence and dismissal.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_popup_handler.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-11
+    priority: MINOR
+    rule: >
+      The popup close locator must include an XPath fallback (XPATH_POPUP_CLOSE or
+      XPATH_POPUP_SWW) in addition to the CSS selector, so popup dismissal is
+      robust to DOM variations.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_popup_handler.py
+    fail_severity: warn
+
+  - id: INV-GATEKEEPER-12
+    priority: CRITICAL
+    rule: >
+      The swap counter is bounded by OrderQueue size (len(task.order_queue)); no
+      fixed hardcoded cap is used. When the queue is exhausted, the cycle ends
+      immediately without further swap attempts.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_swap_counter.py
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-13
+    priority: MAJOR
+    rule: >
+      TransientMonitor class exists in modules/monitor/main.py and detects a
+      late-appearing VBV iframe signal by polling a caller-supplied detector
+      function at a configurable interval.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/monitor/main.py
+    enforced_by:
+      - tests/test_transient_monitor.py
+    fail_severity: block_merge
+
+  - id: INV-ORCHESTRATOR-02
+    priority: MAJOR
+    rule: >
+      handle_outcome(state=None, ...) must log a WARNING before returning "retry".
+      Silent return was replaced with explicit logging to make upstream FSM
+      anomalies observable.
+    blueprint_ref: "spec/blueprint.md#section-6"
+    audit_lock_ref: "spec/audit-lock.md#INV-ORCHESTRATOR-02"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_hardening.py::OutcomeObservabilityTests::test_state_none_logs_warning
+      - tests/test_orchestrator_hardening.py::OutcomeObservabilityTests::test_state_none_warning_includes_worker_id
+    fail_severity: block_merge
+
+  - id: INV-GATEKEEPER-14
+    priority: MAJOR
+    rule: >
+      UI-lock retry metric counters (record_ui_lock_retry, record_ui_lock_recovered,
+      record_ui_lock_exhausted) must exist in modules/monitor/main.py and be
+      surfaced via get_metrics().
+    blueprint_ref: "spec/blueprint.md#section-6"
+    source_files:
+      - modules/monitor/main.py
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_monitor_ui_lock_metrics.py
+    fail_severity: block_merge
