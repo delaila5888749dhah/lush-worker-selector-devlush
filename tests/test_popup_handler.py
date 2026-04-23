@@ -4,7 +4,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import (
+    StaleElementReferenceException,
+    TimeoutException,
+)
 
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
@@ -18,6 +21,7 @@ from modules.cdp.driver import (
     check_popup_text_match,
     handle_something_wrong_popup,
 )
+from modules.common.exceptions import SelectorTimeoutError
 
 
 class TestPopupHandler(unittest.TestCase):
@@ -603,6 +607,106 @@ class TestPopupCloseRetry(unittest.TestCase):
         self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
         # All 3 attempts ran even though each raised.
         self.assertEqual(wrapper.bounding_box_click.call_count, 3)
+
+
+class TestPopupXPathCloseFallback(unittest.TestCase):
+    """P1-6 — CSS-miss fallback to XPath text-match for <button>/<a> close."""
+
+    def test_xpath_close_locator_covers_required_texts_and_tags(self):
+        """XPath must cover both <button>/<a> and the Close/OK/X/Đóng tokens."""
+        xpath = drv.XPATH_POPUP_CLOSE
+        # Must cover both <button> and <a> tags.
+        self.assertIn("self::button", xpath)
+        self.assertIn("self::a", xpath)
+        # Must cover the required text tokens (case-insensitive ASCII via
+        # translate() + literal Vietnamese "Đóng").
+        self.assertIn("'close'", xpath)
+        self.assertIn("'ok'", xpath)
+        self.assertIn("'x'", xpath)
+        self.assertIn("Đóng", xpath)
+
+    def test_css_miss_triggers_xpath_fallback_and_returns_needs_refill(self):
+        """CSS-miss (SelectorTimeoutError) must trigger XPath click + clear."""
+        fake_el = MagicMock()
+        base_driver = MagicMock()
+        base_driver.find_elements.return_value = [fake_el]
+        wrapper = SimpleNamespace(
+            _driver=base_driver,
+            bounding_box_click=MagicMock(
+                side_effect=SelectorTimeoutError(SEL_POPUP_CLOSE, 0)
+            ),
+            clear_card_fields_cdp=MagicMock(),
+        )
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        base_driver.find_elements.assert_called_once_with(
+            "xpath", drv.XPATH_POPUP_CLOSE
+        )
+        fake_el.click.assert_called_once_with()
+        wrapper.clear_card_fields_cdp.assert_called_once_with()
+
+    def test_css_miss_with_no_xpath_match_returns_close_failed(self):
+        """CSS-miss with empty XPath result must return CLOSE_FAILED and skip clear."""
+        base_driver = MagicMock()
+        base_driver.find_elements.return_value = []
+        wrapper = SimpleNamespace(
+            _driver=base_driver,
+            bounding_box_click=MagicMock(
+                side_effect=SelectorTimeoutError(SEL_POPUP_CLOSE, 0)
+            ),
+            clear_card_fields_cdp=MagicMock(),
+        )
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
+        wrapper.clear_card_fields_cdp.assert_not_called()
+
+    def test_xpath_fallback_tries_next_element_when_first_click_raises(self):
+        """If the first XPath match's click() raises, fallback must try the next."""
+        bad_el = MagicMock()
+        bad_el.click.side_effect = StaleElementReferenceException("detached")
+        good_el = MagicMock()
+        base_driver = MagicMock()
+        base_driver.find_elements.return_value = [bad_el, good_el]
+        wrapper = SimpleNamespace(
+            _driver=base_driver,
+            bounding_box_click=MagicMock(
+                side_effect=SelectorTimeoutError(SEL_POPUP_CLOSE, 0)
+            ),
+            clear_card_fields_cdp=MagicMock(),
+        )
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        bad_el.click.assert_called_once_with()
+        good_el.click.assert_called_once_with()
+
+    def test_css_success_does_not_invoke_xpath_fallback(self):
+        """When CSS click succeeds, the XPath fallback must not be invoked."""
+        base_driver = MagicMock()
+        wrapper = SimpleNamespace(
+            _driver=base_driver,
+            bounding_box_click=MagicMock(),
+            clear_card_fields_cdp=MagicMock(),
+        )
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            # First .until() = initial presence (popup present);
+            # second .until() = post-click verify (popup gone).
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(),
+                TimeoutException(),
+            ]
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        base_driver.find_elements.assert_not_called()
 
 
 if __name__ == "__main__":
