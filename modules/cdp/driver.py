@@ -688,6 +688,7 @@ def cdp_click_iframe_element(
     by = By.CSS_SELECTOR if By is not None else "css selector"
     iframe = base.find_element(by, iframe_selector)
     base.switch_to.frame(iframe)
+    elem_rect = None
     try:
         elem = base.find_element(by, element_selector)
         elem_rect = base.execute_script(
