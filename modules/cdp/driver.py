@@ -337,11 +337,8 @@ _XPATH_POPUP_CLOSE_LOWER = (
     "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')"
 )
 XPATH_POPUP_CLOSE = (
-    f"//button[{_XPATH_POPUP_CLOSE_LOWER}='close'"
-    f" or {_XPATH_POPUP_CLOSE_LOWER}='ok'"
-    f" or {_XPATH_POPUP_CLOSE_LOWER}='x'"
-    " or normalize-space(.)='Đóng' or normalize-space(.)='đóng']"
-    f" | //a[{_XPATH_POPUP_CLOSE_LOWER}='close'"
+    "//*[self::button or self::a]"
+    f"[{_XPATH_POPUP_CLOSE_LOWER}='close'"
     f" or {_XPATH_POPUP_CLOSE_LOWER}='ok'"
     f" or {_XPATH_POPUP_CLOSE_LOWER}='x'"
     " or normalize-space(.)='Đóng' or normalize-space(.)='đóng']"

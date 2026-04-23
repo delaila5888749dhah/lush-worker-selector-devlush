@@ -489,8 +489,8 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
     def test_xpath_close_locator_covers_required_texts_and_tags(self):
         xpath = drv.XPATH_POPUP_CLOSE
         # Must cover both <button> and <a> tags.
-        self.assertIn("//button", xpath)
-        self.assertIn("//a", xpath)
+        self.assertIn("self::button", xpath)
+        self.assertIn("self::a", xpath)
         # Must cover the required text tokens (case-insensitive ASCII via
         # translate() + literal Vietnamese "Đóng").
         self.assertIn("'close'", xpath)
