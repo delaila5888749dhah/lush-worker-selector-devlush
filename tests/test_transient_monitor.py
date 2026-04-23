@@ -11,10 +11,13 @@ import unittest
 from modules.monitor.main import (
     TransientMonitor,
     get_metrics,
-    get_vbv_detections,
-    record_vbv_detection,
     reset,
 )
+
+
+def _vbv_count() -> int:
+    """Read the monitor-internal VBV detection counter via the public API."""
+    return get_metrics()["vbv_detections"]
 
 
 class _MonitorResetMixin:
@@ -25,21 +28,34 @@ class _MonitorResetMixin:
         reset()
 
 
-class TestRecordVBVDetection(_MonitorResetMixin, unittest.TestCase):
+class TestVBVDetectionMetric(_MonitorResetMixin, unittest.TestCase):
     def test_counter_starts_at_zero(self):
-        self.assertEqual(get_vbv_detections(), 0)
+        self.assertEqual(_vbv_count(), 0)
         self.assertEqual(get_metrics()["vbv_detections"], 0)
 
-    def test_record_increments_counter(self):
-        record_vbv_detection()
-        record_vbv_detection()
-        self.assertEqual(get_vbv_detections(), 2)
+    def test_detection_increments_counter_via_monitor(self):
+        # The monitor is the only production path that increments this
+        # counter; exercise it via the class rather than a private helper.
+        for _ in range(2):
+            mon = TransientMonitor(detector=lambda: True, interval=0.01)
+            mon.start()
+            deadline = time.monotonic() + 1.0
+            while mon.is_running() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            mon.cancel(timeout=0.5)
+        self.assertEqual(_vbv_count(), 2)
         self.assertEqual(get_metrics()["vbv_detections"], 2)
 
     def test_reset_clears_counter(self):
-        record_vbv_detection()
+        mon = TransientMonitor(detector=lambda: True, interval=0.01)
+        mon.start()
+        deadline = time.monotonic() + 1.0
+        while mon.is_running() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        mon.cancel(timeout=0.5)
+        self.assertEqual(_vbv_count(), 1)
         reset()
-        self.assertEqual(get_vbv_detections(), 0)
+        self.assertEqual(_vbv_count(), 0)
 
 
 class TestTransientMonitorConstruction(unittest.TestCase):
@@ -74,7 +90,7 @@ class TestTransientMonitorDetection(_MonitorResetMixin, unittest.TestCase):
         mon.cancel(timeout=1.0)
         self.assertFalse(mon.is_running())
         self.assertEqual(mon.detections, 1)
-        self.assertEqual(get_vbv_detections(), 1)
+        self.assertEqual(_vbv_count(), 1)
         self.assertEqual(get_metrics()["vbv_detections"], 1)
 
     def test_stops_after_first_detection(self):
@@ -131,7 +147,7 @@ class TestTransientMonitorCancel(_MonitorResetMixin, unittest.TestCase):
         # poll interval.
         self.assertLess(time.monotonic() - start, 1.0)
         self.assertFalse(mon.is_running())
-        self.assertEqual(get_vbv_detections(), 0)
+        self.assertEqual(_vbv_count(), 0)
 
     def test_cancel_is_idempotent(self):
         mon = TransientMonitor(detector=lambda: False, interval=0.05)

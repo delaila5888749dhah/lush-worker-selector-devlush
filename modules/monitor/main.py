@@ -28,8 +28,9 @@ _success_counts_by_persona: dict[str, int] = {}
 _restart_timestamps = []
 
 # Count of active-poll VBV / 3DS iframe detections (Blueprint §6 Fork 3).
-# Incremented by :class:`TransientMonitor` and any external active detector
-# via :func:`record_vbv_detection`.
+# Incremented internally by :class:`TransientMonitor`; surfaced to callers as
+# the ``vbv_detections`` key of :func:`get_metrics` (no new public function
+# is added, preserving the spec/interface.md contract — A4).
 _vbv_detections = 0
 
 # Snapshot of metrics from the previous rollout step (used for delta checks)
@@ -71,20 +72,22 @@ def record_error(persona_type: str | None = None) -> None:
             )
 
 
-def record_vbv_detection() -> None:
-    """Record a VBV/3DS iframe detection event.
+def _record_vbv_detection() -> None:
+    """Record a VBV/3DS iframe detection event (module-private).
 
-    Incremented each time :class:`TransientMonitor` (or any other active
-    detector) observes a late-appearing 3D-Secure challenge iframe.  Exposed
-    via :func:`get_metrics` as ``vbv_detections`` for rollout observability.
+    Incremented each time :class:`TransientMonitor` observes a late-appearing
+    3D-Secure challenge iframe.  Exposed to callers via the
+    ``vbv_detections`` key of :func:`get_metrics`; no new public function is
+    added to the module surface, preserving the ``spec/interface.md``
+    contract (A4).
     """
     global _vbv_detections
     with _lock:
         _vbv_detections += 1
 
 
-def get_vbv_detections() -> int:
-    """Return the total number of VBV/3DS iframe detections recorded."""
+def _get_vbv_detections() -> int:
+    """Return the total number of VBV/3DS iframe detections (module-private)."""
     with _lock:
         return _vbv_detections
 
@@ -308,8 +311,8 @@ class TransientMonitor:
     only samples once per state check.  ``TransientMonitor`` closes that gap
     by polling an injected ``detector`` callable at a fixed cadence
     (default ~500 ms) on a background daemon thread.  On the first positive
-    detection it increments the monitor-wide ``vbv_detections`` metric (via
-    :func:`record_vbv_detection`), optionally invokes an ``on_detect``
+    detection it increments the monitor-internal ``vbv_detections`` counter
+    (surfaced via :func:`get_metrics`), optionally invokes an ``on_detect``
     callback, and exits its loop.
 
     Contracts (Blueprint §8.3 — CRITICAL_SECTION / module-isolation):
@@ -392,7 +395,7 @@ class TransientMonitor:
             if hit:
                 with self._lock:
                     self._detections += 1
-                record_vbv_detection()
+                _record_vbv_detection()
                 if self._on_detect is not None:
                     try:
                         self._on_detect()
