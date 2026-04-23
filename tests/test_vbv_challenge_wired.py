@@ -125,7 +125,21 @@ class TestVbvChallengeWiring(unittest.TestCase):
              patch.object(drv, "WebDriverWait") as mock_wait, \
              patch("integration.orchestrator.cdp") as mock_cdp, \
              patch("integration.orchestrator.is_payment_page_reloaded", return_value=False):
-            mock_wait.return_value.until.return_value = MagicMock()
+            # Popup-handler presence checks: first returns truthy (popup
+            # present), subsequent verify checks raise TimeoutException
+            # (popup gone after click). Use a side-effect function so
+            # additional WebDriverWait calls elsewhere (e.g. orchestrator
+            # polling) also get a safe "not present" response instead of
+            # exhausting a fixed list.
+            _calls = {"n": 0}
+
+            def _until_side_effect(*_a, **_kw):
+                _calls["n"] += 1
+                if _calls["n"] == 1:
+                    return MagicMock()
+                raise drv.TimeoutException()
+
+            mock_wait.return_value.until.side_effect = _until_side_effect
             mock_cdp._get_driver.return_value = driver
 
             # Exercise the VBV handler directly; this triggers popup-close.
