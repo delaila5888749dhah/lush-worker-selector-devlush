@@ -698,5 +698,59 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
         mock_zip_lookup.assert_called_once_with("203.0.113.5")
 
 
+class TestMakeTaskFnPersonaInjection(unittest.TestCase):
+    """GivexDriver must receive a PersonaProfile derived from worker_id (Layer 2).
+
+    When ``persona is None`` in GivexDriver, 4x4 card pattern, ghost-cursor,
+    temporal night-factor, and biometric profile are all bypassed.  The
+    production task_fn must therefore always pass a persona so Layer 2
+    anti-detection stays active in production.
+    """
+
+    def _run(self, worker_id="worker-1"):
+        selenium_drv = _make_selenium_driver(pid=None)
+        bb_client = _make_bitbrowser_client()
+        givex_drv = MagicMock()
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch(
+                "modules.cdp.driver.GivexDriver",
+                return_value=givex_drv,
+            ) as mock_givex_cls,
+            patch("integration.worker_task.cdp"),
+            patch("integration.runtime.probe_cdp_listener_support"),
+        ):
+            from integration.worker_task import make_task_fn
+            make_task_fn()(worker_id)
+        return mock_givex_cls, selenium_drv
+
+    def test_givex_driver_called_with_persona(self):
+        """GivexDriver must be constructed with a non-None persona kwarg."""
+        mock_givex_cls, selenium_drv = self._run()
+        mock_givex_cls.assert_called_once()
+        args, kwargs = mock_givex_cls.call_args
+        self.assertEqual(args[0], selenium_drv)
+        persona = kwargs.get("persona", args[1] if len(args) > 1 else None)
+        self.assertIsNotNone(persona, "GivexDriver must receive a persona (Layer 2)")
+        from modules.delay.persona import PersonaProfile
+        self.assertIsInstance(persona, PersonaProfile)
+
+    def test_persona_seed_is_deterministic_from_worker_id(self):
+        """Same worker_id → same persona seed (matches runtime.start_worker)."""
+        import zlib
+        mock_givex_cls, _ = self._run(worker_id="worker-7")
+        _, kwargs = mock_givex_cls.call_args
+        persona = kwargs["persona"]
+        expected_seed = zlib.crc32(b"worker-7") & 0xFFFFFFFF
+        self.assertEqual(persona._seed, expected_seed)
+
+
 if __name__ == "__main__":
     unittest.main()

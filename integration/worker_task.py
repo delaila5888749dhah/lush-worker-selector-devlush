@@ -22,11 +22,13 @@ import importlib
 import logging
 import threading
 import uuid
+import zlib
 from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
 from modules.cdp.driver import _get_current_ip_best_effort, maxmind_lookup_zip
 from modules.cdp.fingerprint import BitBrowserSession, get_bitbrowser_client
+from modules.delay.persona import PersonaProfile
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -102,9 +104,15 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
         with BitBrowserSession(bb_client) as (profile_id, webdriver_url):
             selenium_driver = _build_remote_driver(webdriver_url)
             try:
-                # Wrap in GivexDriver and register with CDP registry (F-03)
+                # Wrap in GivexDriver and register with CDP registry (F-03).
+                # Persona is derived deterministically from worker_id using
+                # the same formula as integration.runtime.start_worker so the
+                # production path keeps Layer 2 anti-detection (4x4 card
+                # pattern, ghost-cursor, temporal night factor) active.
                 from modules.cdp.driver import GivexDriver  # noqa: PLC0415
-                givex_driver = GivexDriver(selenium_driver)
+                persona_seed = zlib.crc32(worker_id.encode()) & 0xFFFFFFFF
+                persona = PersonaProfile(persona_seed)
+                givex_driver = GivexDriver(selenium_driver, persona=persona)
                 cdp.register_driver(worker_id, givex_driver)
 
                 # Register browser process PID when available (F-03)
