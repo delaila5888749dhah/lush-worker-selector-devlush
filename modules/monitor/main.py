@@ -27,6 +27,12 @@ _success_counts_by_persona: dict[str, int] = {}
 # Worker restart tracking: list of timestamps (epoch seconds)
 _restart_timestamps = []
 
+# Count of active-poll VBV / 3DS iframe detections (Blueprint §6 Fork 3).
+# Incremented internally by :class:`TransientMonitor`; surfaced to callers as
+# the ``vbv_detections`` key of :func:`get_metrics` (no new public function
+# is added, preserving the spec/interface.md contract — A4).
+_vbv_detections = 0
+
 # Snapshot of metrics from the previous rollout step (used for delta checks)
 _baseline_success_rate = None
 
@@ -64,6 +70,26 @@ def record_error(persona_type: str | None = None) -> None:
             _error_counts_by_persona[persona_type] = (
                 _error_counts_by_persona.get(persona_type, 0) + 1
             )
+
+
+def _record_vbv_detection() -> None:
+    """Record a VBV/3DS iframe detection event (module-private).
+
+    Incremented each time :class:`TransientMonitor` observes a late-appearing
+    3D-Secure challenge iframe.  Exposed to callers via the
+    ``vbv_detections`` key of :func:`get_metrics`; no new public function is
+    added to the module surface, preserving the ``spec/interface.md``
+    contract (A4).
+    """
+    global _vbv_detections
+    with _lock:
+        _vbv_detections += 1
+
+
+def _get_vbv_detections() -> int:
+    """Return the total number of VBV/3DS iframe detections (module-private)."""
+    with _lock:
+        return _vbv_detections
 
 
 def record_restart():
@@ -214,6 +240,7 @@ def get_metrics():
             "baseline_success_rate": baseline,
             "error_counts_by_persona": dict(_error_counts_by_persona),
             "success_counts_by_persona": dict(_success_counts_by_persona),
+            "vbv_detections": _vbv_detections,
         }
 
 
@@ -265,10 +292,118 @@ def check_rollback_needed():
 def reset():
     """Reset all metrics.  Intended for testing."""
     global _success_count, _error_count, _restart_timestamps, _baseline_success_rate
+    global _vbv_detections
     with _lock:
         _success_count = 0
         _error_count = 0
         _restart_timestamps = []
         _baseline_success_rate = None
+        _vbv_detections = 0
         _error_counts_by_persona.clear()
         _success_counts_by_persona.clear()
+
+
+class TransientMonitor:
+    """Active poller for late-appearing VBV / 3DS iframes (Blueprint §6 Fork 3).
+
+    The passive page-state scan in ``modules.cdp.driver`` can miss a 3D-Secure
+    iframe that renders seconds after the payment submit returns, because it
+    only samples once per state check.  ``TransientMonitor`` closes that gap
+    by polling an injected ``detector`` callable at a fixed cadence
+    (default ~500 ms) on a background daemon thread.  On the first positive
+    detection it increments the monitor-internal ``vbv_detections`` counter
+    (surfaced via :func:`get_metrics`), optionally invokes an ``on_detect``
+    callback, and exits its loop.
+
+    Contracts (Blueprint §8.3 — CRITICAL_SECTION / module-isolation):
+
+    * **Thread-safe cancel** — :meth:`cancel` is idempotent and may be called
+      from any thread; it sets a :class:`threading.Event` that the worker
+      thread checks every tick and waits on between polls, so shutdown is
+      bounded by a single ``interval``.
+    * **No cross-module imports** — the class owns no DOM / CDP knowledge;
+      the caller injects ``detector`` (e.g. a bound method that runs
+      ``driver.find_elements(SEL_VBV_IFRAME)``).  This preserves the §5
+      module-isolation invariant enforced by ``check_import_scope``.
+    * **Non-blocking** — runs on a daemon thread so it can never block
+      process shutdown, and never interferes with watchdog deadlines.
+    """
+
+    def __init__(self, detector, interval: float = 0.5, on_detect=None):
+        if not callable(detector):
+            raise TypeError("detector must be callable")
+        if interval <= 0:
+            raise ValueError("interval must be positive")
+        self._detector = detector
+        self._interval = float(interval)
+        self._on_detect = on_detect
+        self._cancel = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._detections = 0
+
+    def start(self) -> None:
+        """Start polling on a background daemon thread.
+
+        Calling :meth:`start` while a previous poll loop is still running is
+        a no-op — the monitor is single-shot per start.
+        """
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._cancel.clear()
+            t = threading.Thread(
+                target=self._run,
+                name="TransientMonitor",
+                daemon=True,
+            )
+            self._thread = t
+            t.start()
+
+    def cancel(self, timeout: float | None = None) -> None:
+        """Signal the poll loop to stop and optionally join the worker thread.
+
+        Safe to call from any thread and safe to call multiple times.
+        ``timeout`` is forwarded to :meth:`threading.Thread.join`; pass
+        ``None`` to wait indefinitely or a float to bound the wait.
+        """
+        self._cancel.set()
+        with self._lock:
+            t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout)
+
+    def is_running(self) -> bool:
+        """Return True while the background poll loop is active."""
+        with self._lock:
+            t = self._thread
+        return t is not None and t.is_alive()
+
+    @property
+    def detections(self) -> int:
+        """Number of positive detections observed by this instance."""
+        with self._lock:
+            return self._detections
+
+    def _run(self) -> None:
+        while not self._cancel.is_set():
+            try:
+                hit = bool(self._detector())
+            except Exception as e:  # pragma: no cover - defensive
+                _logger.debug("TransientMonitor detector raised: %s", e)
+                hit = False
+            if hit:
+                with self._lock:
+                    self._detections += 1
+                _record_vbv_detection()
+                if self._on_detect is not None:
+                    try:
+                        self._on_detect()
+                    except Exception as e:  # pragma: no cover - defensive
+                        _logger.exception(
+                            "TransientMonitor on_detect callback raised: %s", e
+                        )
+                return
+            # cancel.wait returns True when the event is set — exits promptly.
+            if self._cancel.wait(self._interval):
+                return
