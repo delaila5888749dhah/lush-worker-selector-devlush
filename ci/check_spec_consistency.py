@@ -18,6 +18,18 @@ SEGMENTED_PATHS = [
     ROOT_DIR / "spec" / "core" / "interface.md",
     ROOT_DIR / "spec" / "integration" / "interface.md",
 ]
+BLUEPRINT_PATH = ROOT_DIR / "spec" / "blueprint.md"
+
+# §11 Synchronization Matrix row format:
+#   · Spec §10.1 (Architecture) ↔ Blueprint §8.1 (Tích Hợp Thực Thi):
+# or compact, single-line:
+#   · Spec §12 (Audit) ↔ Blueprint §12: Status: ✓ ĐỒNG BỘ
+_SYNC_ROW_RE = re.compile(
+    r"Spec\s*§\s*(?P<spec>[\d.]+)[^↔]*↔\s*Blueprint\s*§\s*(?P<blue>[\d.]+)",
+)
+# Tolerant of leading bullets / whitespace and trailing punctuation.
+_STATUS_RE = re.compile(r"Status\s*:\s*✓\s*ĐỒNG\s*BỘ", re.IGNORECASE)
+_EXPECTED_STATUS = "✓ ĐỒNG BỘ"
 
 FUNCTION_RE = re.compile(r"^Function\s*:\s*(?P<name>[A-Za-z_]\w*)\s*$", re.I)
 INPUT_RE = re.compile(r"^Input\s*:\s*(?P<input>.*)$", re.I)
@@ -155,16 +167,121 @@ def check_consistency() -> list[str]:
     return errors
 
 
+# ---------------------------------------------------------------------------
+# §11 Synchronization Matrix verification
+# ---------------------------------------------------------------------------
+
+def _blueprint_section_present(content: str, section: str) -> bool:
+    """Check whether a Blueprint §A.B (or §A) heading appears in blueprint.md.
+
+    Tolerates several heading styles seen in the file:
+      - "§8.1. TÍCH HỢP ..." inline subsection markers
+      - "11. ĐỒNG BỘ ..." top-level numbered headings
+      - "12. BILLING ..." appended sections
+    """
+    pattern_dotted = re.compile(rf"(?m)^\s*§\s*{re.escape(section)}\b")
+    if pattern_dotted.search(content):
+        return True
+
+    if "." not in section:
+        pattern_top = re.compile(rf"(?m)^\s*{re.escape(section)}\.\s+\S")
+        if pattern_top.search(content):
+            return True
+    return False
+
+
+def parse_sync_matrix(blueprint_text: str) -> list[dict]:
+    """Extract Synchronization Matrix rows from the blueprint text.
+
+    Returns a list of dicts with keys: spec, blueprint, status, line_no.
+    A row is a line matching ``Spec §X ↔ Blueprint §Y``. Its status is the
+    first ``Status: …`` line that follows, within a small lookahead window
+    (so both compact single-line and multi-line entries are captured).
+    """
+    rows: list[dict] = []
+    lines = blueprint_text.splitlines()
+    for idx, line in enumerate(lines):
+        m = _SYNC_ROW_RE.search(line)
+        if not m:
+            continue
+        status_text: str | None = None
+        for j in range(idx, min(idx + 11, len(lines))):
+            cand = lines[j]
+            if j > idx and _SYNC_ROW_RE.search(cand):
+                break
+            if "Status" in cand and ":" in cand:
+                status_text = cand.strip()
+                break
+        rows.append({
+            "spec": m.group("spec"),
+            "blueprint": m.group("blue"),
+            "status": status_text,
+            "line_no": idx + 1,
+        })
+    return rows
+
+
+def check_sync_matrix(blueprint_path: Path = BLUEPRINT_PATH) -> list[str]:
+    """Verify §11 matrix: each row references a real Blueprint section and
+    carries the expected status string."""
+    if not blueprint_path.exists():
+        return [f"blueprint file not found: {blueprint_path}"]
+
+    content = blueprint_path.read_text(encoding="utf-8")
+    rows = parse_sync_matrix(content)
+    errors: list[str] = []
+
+    if not rows:
+        errors.append(
+            f"no Synchronization Matrix rows found in {blueprint_path.name}; "
+            "expected entries of the form 'Spec §X.Y ↔ Blueprint §A.B'"
+        )
+        return errors
+
+    for row in rows:
+        loc = f"line {row['line_no']}"
+        if not _blueprint_section_present(content, row["blueprint"]):
+            errors.append(
+                f"§11 matrix [{loc}]: Blueprint §{row['blueprint']} referenced "
+                f"(Spec §{row['spec']}) but no matching section heading found "
+                f"in {blueprint_path.name}"
+            )
+        if row["status"] is None:
+            errors.append(
+                f"§11 matrix [{loc}]: row 'Spec §{row['spec']} ↔ Blueprint "
+                f"§{row['blueprint']}' is missing a Status line "
+                f"(expected 'Status: {_EXPECTED_STATUS}')"
+            )
+        elif not _STATUS_RE.search(row["status"]):
+            errors.append(
+                f"§11 matrix [{loc}]: row 'Spec §{row['spec']} ↔ Blueprint "
+                f"§{row['blueprint']}' has unexpected status "
+                f"({row['status']!r}); expected 'Status: {_EXPECTED_STATUS}'"
+            )
+
+    return errors
+
+
 def main() -> int:
-    errors = check_consistency()
-    if errors:
+    consistency_errors = check_consistency()
+    matrix_errors = check_sync_matrix()
+
+    if consistency_errors:
         print("check_spec_consistency: FAIL — aggregated spec diverges "
               "from segmented files", file=sys.stderr)
-        for err in errors:
+        for err in consistency_errors:
             print(f"  {err}", file=sys.stderr)
+
+    if matrix_errors:
+        print("check_spec_consistency: FAIL — §11 Synchronization Matrix "
+              "verification failed", file=sys.stderr)
+        for err in matrix_errors:
+            print(f"  {err}", file=sys.stderr)
+
+    if consistency_errors or matrix_errors:
         return 1
 
-    print("check_spec_consistency: PASS")
+    print("check_spec_consistency: PASS (interface + §11 matrix)")
     return 0
 
 

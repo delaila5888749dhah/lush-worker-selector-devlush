@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
+import re
 import subprocess  # nosec B404 — subprocess used only to invoke local pytest with hard-coded args derived from validated contract YAML paths; no shell, no untrusted input.
 import sys
 from dataclasses import dataclass, field
@@ -47,6 +49,177 @@ except ImportError:
 # ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT_DIR / "ci" / "contracts" / "contract_schema.json"
+AUDIT_LOCK_PATH = ROOT_DIR / "spec" / "audit-lock.md"
+
+
+# ---------------------------------------------------------------------------
+# Change-policy enforcement (INV-META-01)
+# ---------------------------------------------------------------------------
+# PROTECTED_FILES is parsed at import time from spec/audit-lock.md so that the
+# list cannot drift from the policy document. If the audit-lock file is missing
+# or unreadable we fall back to a hard-coded list which MUST match
+# spec/audit-lock.md#change-policy-post-audit (sync manually until INV-META-02
+# is added in a future PR).
+_FALLBACK_PROTECTED_FILES: tuple[str, ...] = (
+    "modules/fsm/main.py",
+    "modules/delay/engine.py",
+    "modules/delay/wrapper.py",
+    "modules/delay/temporal.py",
+    "modules/delay/state.py",
+    "modules/watchdog/main.py",
+    "integration/orchestrator.py",
+    "integration/runtime.py",
+    "modules/rollout/main.py",
+    "modules/cdp/main.py",
+)
+AUDIT_LOCK_RELATIVE = "spec/audit-lock.md"
+
+# Match a bullet-list entry like "- `modules/fsm/main.py` (note)" — capture the
+# path inside backticks. Restricted to repo-relative POSIX-style .py paths.
+_PROTECTED_LINE_RE = re.compile(r"^\s*-\s*`([A-Za-z0-9_./-]+\.py)`")
+
+
+def _parse_protected_files(audit_lock_path: Path) -> tuple[str, ...]:
+    """Extract the CHANGE POLICY file list from spec/audit-lock.md.
+
+    Returns the tuple of repo-relative file paths under the
+    "## CHANGE POLICY (Post-Audit)" heading. Falls back to the hard-coded
+    list if the file or section is missing.
+    """
+    try:
+        text = audit_lock_path.read_text(encoding="utf-8")
+    except OSError:
+        return _FALLBACK_PROTECTED_FILES
+
+    in_section = False
+    found: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if in_section:
+                break
+            if "CHANGE POLICY" in stripped.upper():
+                in_section = True
+            continue
+        if not in_section:
+            continue
+        m = _PROTECTED_LINE_RE.match(line)
+        if m:
+            found.append(m.group(1))
+
+    return tuple(found) if found else _FALLBACK_PROTECTED_FILES
+
+
+PROTECTED_FILES: tuple[str, ...] = _parse_protected_files(AUDIT_LOCK_PATH)
+
+
+def _ref_exists(ref: str) -> bool:
+    try:
+        proc = subprocess.run(  # nosec B603 — fixed args, ref validated by git
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT_DIR),
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def _git_output(args: list[str]) -> str:
+    try:
+        proc = subprocess.run(  # nosec B603 — fixed git args
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT_DIR),
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _resolve_base_ref() -> str:
+    """Resolve the git ref to diff against for change-policy enforcement.
+
+    Order of preference:
+      1. GITHUB_BASE_REF (set in PR context by GitHub Actions) — prefer
+         "origin/<base>" if it resolves, else "<base>".
+      2. ``git merge-base HEAD origin/main`` (local development).
+      3. "HEAD~1" as a final fallback.
+    """
+    base = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if base:
+        candidate = f"origin/{base}"
+        if _ref_exists(candidate):
+            return candidate
+        if _ref_exists(base):
+            return base
+
+    merge_base = _git_output(["merge-base", "HEAD", "origin/main"])
+    if merge_base:
+        return merge_base
+
+    return "HEAD~1"
+
+
+def _changed_files(base_ref: str) -> list[str]:
+    out = _git_output(["diff", "--name-only", f"{base_ref}...HEAD"])
+    if not out:
+        # Triple-dot may not work for every ref; fall back to two-dot.
+        out = _git_output(["diff", "--name-only", f"{base_ref}..HEAD"])
+    if not out:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def check_change_policy(
+    changed_files: list[str] | None = None,
+    protected_files: tuple[str, ...] = PROTECTED_FILES,
+    audit_lock_relative: str = AUDIT_LOCK_RELATIVE,
+) -> tuple[int, str]:
+    """Enforce INV-META-01: protected file edits require audit-lock update.
+
+    Returns ``(exit_code, message)``. ``exit_code`` is 0 on pass, 1 on
+    block_merge violation. ``changed_files`` may be supplied by tests; when
+    None it is derived from ``git diff`` against the resolved base ref.
+    """
+    if changed_files is None:
+        base = _resolve_base_ref()
+        changed_files = _changed_files(base)
+        ctx = f"base={base}"
+    else:
+        ctx = "supplied changed_files"
+
+    changed_set = {p.strip() for p in changed_files if p.strip()}
+    touched = sorted(p for p in protected_files if p in changed_set)
+
+    if not touched:
+        return 0, (
+            f"check_change_policy: PASS (no protected files modified; {ctx})"
+        )
+
+    if audit_lock_relative in changed_set:
+        return 0, (
+            "check_change_policy: PASS — protected files modified and "
+            f"{audit_lock_relative} updated. Touched: {', '.join(touched)}"
+        )
+
+    msg = (
+        "check_change_policy: FAIL — INV-META-01 violation.\n"
+        f"  The following audit-lock-protected file(s) were modified ({ctx}):\n"
+        + "".join(f"    - {p}\n" for p in touched)
+        + f"  but {audit_lock_relative} was NOT updated in this change.\n"
+        "  Per spec/audit-lock.md#change-policy-post-audit, every PR touching\n"
+        f"  these files MUST also update {audit_lock_relative}."
+    )
+    return 1, msg
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -580,7 +753,21 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 — complexity is 
         action="store_true",
         help="Validate YAML structure only; skip pytest invocation",
     )
+    parser.add_argument(
+        "--check-change-policy",
+        action="store_true",
+        help=(
+            "Enforce INV-META-01: fail if any audit-lock-protected file is "
+            "modified without spec/audit-lock.md also being updated. "
+            "Exits 0/1 immediately and skips contract validation."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.check_change_policy:
+        code, msg = check_change_policy()
+        print(msg)
+        return code
 
     report = Report(
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds")

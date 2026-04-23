@@ -1,13 +1,13 @@
 # Blueprint Coverage Report
 
-Generated: 2026-04-23T15:00:23+00:00
+Generated: 2026-04-23T16:33:14+00:00
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Total contracts | 96 |
-| Passed | 96 |
+| Total contracts | 97 |
+| Passed | 97 |
 | Failed | 0 |
 | Errors | 0 |
 | Skipped / Pending | 0 |
@@ -30,6 +30,7 @@ Generated: 2026-04-23T15:00:23+00:00
 | §12 | Billing Selection Audit Event | 6 | 6 | 0 |
 | §13 | Runtime Lifecycle & Control-Plane Safety | 12 | 12 | 0 |
 | §14 | Cross-Module Stabilization — Integration Lock | 5 | 5 | 0 |
+| §99 | Meta — Change Policy Enforcement | 1 | 1 | 0 |
 
 ## Contract Detail
 
@@ -131,3 +132,4 @@ Generated: 2026-04-23T15:00:23+00:00
 | INV-ANTIDETECT-05 | MAJOR | 9 | Tầng 2 biometrics: temporal noise follows log-normal / gaussian distribution for… | PASS | block_merge |
 | INV-ANTIDETECT-06 | MAJOR | 9 | Tầng 2 burst typing + hesitation: the biometric burst pattern combines fast grou… | PASS | block_merge |
 | INV-ANTIDETECT-07 | MAJOR | 9 | Tầng 2 non-interference: biometric/temporal layer NEVER breaks Tầng 1 (environme… | PASS | block_merge |
+| INV-META-01 | CRITICAL | 99 | Pull requests modifying any file listed in spec/audit-lock.md "CHANGE POLICY (Po… | PASS | block_merge |

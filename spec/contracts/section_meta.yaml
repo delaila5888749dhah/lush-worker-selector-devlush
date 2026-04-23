@@ -1,0 +1,39 @@
+section: 99
+title: "Meta — Change Policy Enforcement"
+blueprint_ref: "spec/audit-lock.md#change-policy-post-audit"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-META-01
+    priority: CRITICAL
+    rule: >
+      Pull requests modifying any file listed in spec/audit-lock.md
+      "CHANGE POLICY (Post-Audit)" MUST also update spec/audit-lock.md.
+      Enforced at CI level via
+      `python ci/check_blueprint_contracts.py --check-change-policy`,
+      which inspects `git diff` against the PR base ref and exits 1 if any
+      protected file is modified without a matching update to
+      spec/audit-lock.md.
+    blueprint_ref: "spec/audit-lock.md#change-policy-post-audit"
+    source_files:
+      - spec/audit-lock.md
+      - ci/check_blueprint_contracts.py
+    enforced_by:
+      - tests/blueprint/test_meta_change_policy.py::CheckChangePolicyTests::test_fail_when_protected_file_changed_without_audit_lock
+      - tests/blueprint/test_meta_change_policy.py::CheckChangePolicyTests::test_pass_when_protected_file_and_audit_lock_changed
+      - tests/blueprint/test_meta_change_policy.py::ProtectedFilesParsingTests::test_fallback_matches_audit_lock
+    fail_severity: block_merge
+    rationale: >
+      The audit-lock document is the post-audit invariant ledger for the
+      Core Engine. Every change to a protected source file (FSM,
+      delay engine, watchdog, orchestrator wiring, runtime, rollout,
+      CDP layer) carries audit-relevant risk and must be re-acknowledged
+      in audit-lock.md as part of the same PR. Without this gate,
+      audit-lock.md silently drifts and the audit becomes worthless.
+    notes: >
+      A future INV-META-02 will enforce that the hard-coded protected
+      file list inside ci/check_blueprint_contracts.py exactly mirrors
+      the bullet list under "## CHANGE POLICY (Post-Audit)" — until then
+      the constants are kept in sync manually and a unit test
+      (test_fallback_matches_audit_lock) catches drift.

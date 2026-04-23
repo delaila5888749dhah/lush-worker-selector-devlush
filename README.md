@@ -1,5 +1,7 @@
 # lush-worker-selector
 
+<img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/1minhtaocompany/lush-worker-selector-devlush/main/docs/badge.json" alt="Blueprint Coverage">
+
 Givex e-gift card worker with production-ready session init hardening
 (Blueprint §1–§6).
 

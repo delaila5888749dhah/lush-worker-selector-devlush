@@ -15,6 +15,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Required so that --check-change-policy can compute `git diff`
+          # against the PR base ref.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -26,13 +30,23 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pyyaml jsonschema
 
+      - name: Enforce CHANGE POLICY (INV-META-01)
+        if: github.event_name == 'pull_request'
+        run: python ci/check_blueprint_contracts.py --check-change-policy
+
       - name: Run blueprint contract gate
         run: python ci/check_blueprint_contracts.py --strict
+
+      - name: Generate coverage badge
+        if: always()
+        run: python ci/generate_coverage_badge.py
 
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: blueprint-coverage
-          path: docs/blueprint_coverage.md
+          path: |
+            docs/blueprint_coverage.md
+            docs/badge.json
           if-no-files-found: warn
