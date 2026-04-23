@@ -44,6 +44,14 @@ try:
 except ImportError:
     _HAS_JSONSCHEMA = False
 
+# pytest-xdist enables parallel test distribution across CPUs. It is optional:
+# when unavailable the runner falls back to serial execution.
+try:
+    import xdist  # noqa: F401 — presence check only
+    _HAS_XDIST = True
+except ImportError:
+    _HAS_XDIST = False
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -450,20 +458,166 @@ def _collect_test_nodes(contracts: list[dict]) -> list[tuple[str, str]]:
     return out
 
 
-def run_tests(contracts: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
-    """Run pytest per unique nodeid from `enforced_by`.
+def _junit_classname_to_file(classname: str) -> tuple[str, list[str]]:
+    """Resolve a junit ``classname`` to ``(test_file_relpath, class_segments)``.
 
-    Running each nodeid individually (rather than an entire file) isolates
-    contract verification from pre-existing drift in unrelated tests that
-    happen to live in the same file — the precise reference a contract
-    makes is the *only* thing that should determine its PASS/FAIL status.
+    pytest's junitxml ``classname`` is a dotted path. For a test inside a class
+    it looks like ``tests.test_foo.TestBar``; for a file-level test it looks
+    like ``tests.test_foo``. The "file" portion is the longest prefix that
+    resolves to an existing ``.py`` on disk; anything to the right is treated
+    as nested class segments (usually one — pytest disallows method nesting).
+    """
+    parts = [p for p in classname.split(".") if p]
+    for i in range(len(parts), 0, -1):
+        candidate = ROOT_DIR / ("/".join(parts[:i]) + ".py")
+        if candidate.exists():
+            return "/".join(parts[:i]) + ".py", parts[i:]
+    # Fallback: last PascalCase segment is likely a class
+    if len(parts) > 1 and parts[-1][:1].isupper() and parts[-1] != parts[-1].upper():
+        return "/".join(parts[:-1]) + ".py", [parts[-1]]
+    return "/".join(parts) + ".py", []
+
+
+def _run_tests_batched(
+    nodes: list[tuple[str, str]],
+) -> tuple[dict[str, str], dict[str, str]] | None:
+    """Run all nodeids in a single pytest invocation, parallelized via xdist.
+
+    Returns ``(results, details)`` on success, or ``None`` on any failure that
+    warrants falling back to the per-nodeid serial runner. The batched path is
+    dramatically faster on CI because it amortizes Python startup, pytest
+    collection, and conftest execution across all contracts.
+
+    Correctness note: this path requires pytest-xdist with ``--dist=loadfile``
+    so that tests from different files run in separate worker processes. Without
+    that isolation, module-level state (env vars, monkeypatches, singletons)
+    can leak between files and cause spurious failures. When xdist is not
+    installed we return ``None`` and the caller falls back to the per-nodeid
+    subprocess loop, which gives strict isolation at the cost of speed.
+    """
+    if not _HAS_XDIST:
+        return None
+    if not nodes:
+        return {}, {}
+
+    nodeids = [nid for nid, _ in nodes]
+
+    import tempfile
+    import xml.etree.ElementTree as ET  # nosec B405 — junit output parsed from our own pytest run
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        junit_path = Path(tmpdir) / "contracts.xml"
+        cmd = [
+            sys.executable, "-m", "pytest",
+            *nodeids,
+            "-q", "--no-header",
+            "-m", "not real_browser",
+            "--tb=line",
+            "-p", "no:cacheprovider",
+            f"--junitxml={junit_path}",
+        ]
+        if _HAS_XDIST:
+            cmd += ["-n", "auto", "--dist=loadfile"]
+
+        try:
+            subprocess.run(  # nosec B603 — fixed args; nodeids derive from validated YAML
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT_DIR),
+                timeout=900,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+
+        if not junit_path.exists():
+            return None
+
+        try:
+            tree = ET.parse(str(junit_path))  # nosec B314 — pytest-generated junit
+        except ET.ParseError:
+            return None
+
+        # Build list of concrete-test outcomes from junit.
+        outcomes: list[tuple[str, str, str]] = []  # (concrete_nodeid, status, msg)
+        for tc in tree.iter("testcase"):
+            classname = tc.get("classname", "")
+            name = tc.get("name", "")
+            file_rel, class_segs = _junit_classname_to_file(classname)
+            if class_segs:
+                concrete = f"{file_rel}::{'::'.join(class_segs)}::{name}"
+            else:
+                concrete = f"{file_rel}::{name}"
+
+            status = "PASS"
+            msg = ""
+            fail_el = tc.find("failure")
+            err_el = tc.find("error")
+            if fail_el is not None:
+                status = "FAIL"
+                msg = (fail_el.get("message") or (fail_el.text or "")).strip()[:200]
+            elif err_el is not None:
+                status = "ERROR"
+                msg = (err_el.get("message") or (err_el.text or "")).strip()[:200]
+            # <skipped/> is treated as PASS: a contract whose only test is
+            # skipped by marker (e.g. real_browser) should not fail the gate.
+            outcomes.append((concrete, status, msg))
+
+        # Map each contract nodeid to the union of its concrete outcomes.
+        results: dict[str, str] = {}
+        details: dict[str, str] = {}
+        for cid in nodeids:
+            matched = [
+                (c, s, m) for (c, s, m) in outcomes
+                if c == cid or c.startswith(cid + "::")
+            ]
+            if not matched:
+                # The batched run failed to collect this nodeid. Signal
+                # fallback so the per-nodeid runner can produce a precise
+                # diagnosis (e.g. "no tests collected" vs import error).
+                return None
+            statuses = [s for _, s, _ in matched]
+            if any(s == "ERROR" for s in statuses):
+                results[cid] = "ERROR"
+                err = next((f"{c} [ERROR]: {m or 'error'}"
+                            for c, s, m in matched if s == "ERROR"), "error")
+                details[cid] = err
+            elif any(s == "FAIL" for s in statuses):
+                results[cid] = "FAIL"
+                fail = next((f"{c} [FAIL]: {m or 'test failed'}"
+                             for c, s, m in matched if s == "FAIL"), "test failed")
+                details[cid] = fail
+            else:
+                results[cid] = "PASS"
+
+        return results, details
+
+
+def run_tests(contracts: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+    """Run pytest for every unique nodeid in ``enforced_by``.
+
+    Fast path: one batched pytest invocation (with pytest-xdist ``-n auto`` if
+    available), with per-nodeid PASS/FAIL reconstructed from the junitxml.
+
+    Fallback path: one pytest subprocess per unique nodeid. This is what the
+    gate used before Phase 4 and is kept as a safety net for edge cases the
+    batched path cannot diagnose (missing nodeid, junit parse error, etc.).
+    Either way, each precise nodeid from a contract's ``enforced_by`` list is
+    the only thing that determines its PASS/FAIL — unrelated drift in the same
+    file does not leak into contract status.
 
     Returns:
         (results, failure_details) where:
           results[nodeid]          ∈ {"PASS", "FAIL", "ERROR"}
-          failure_details[nodeid]  — short message (pytest tail) when not PASS
+          failure_details[nodeid]  — short message when not PASS
     """
     nodes = _collect_test_nodes(contracts)
+
+    batched = _run_tests_batched(nodes)
+    if batched is not None:
+        return batched
+
     results: dict[str, str] = {}
     details: dict[str, str] = {}
 
@@ -848,14 +1002,18 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 — complexity is 
     # Step 6: Run tests (unless --skip-tests)
     test_results: dict[str, str] = {}
     test_details: dict[str, str] = {}
+    import time as _time
+    tests_started = _time.monotonic()
     if not args.skip_tests:
-        print("Running pytest for enforced_by test nodes (per-nodeid isolation)...")
+        mode = "batched+xdist" if _HAS_XDIST else "per-nodeid (xdist unavailable)"
+        print(f"Running pytest for enforced_by test nodes ({mode})...")
         test_results, test_details = run_tests(all_raw_contracts)
     else:
         print("--skip-tests: skipping pytest invocation")
         for c in all_raw_contracts:
             for entry in c.get("enforced_by", []):
                 test_results[entry] = "SKIP"
+    tests_elapsed = _time.monotonic() - tests_started
 
     # Step 7: Classify
     for c in all_raw_contracts:
@@ -881,6 +1039,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 — complexity is 
         f"Contracts: {total} total | {passed} passed | {failed} failed | "
         f"{errored} errored | {pct} coverage"
     )
+    if not args.skip_tests:
+        print(f"Contract-test runtime: {tests_elapsed:.1f}s")
 
     if args.strict:
         blocking = [
