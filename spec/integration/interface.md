@@ -1,7 +1,10 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 7.0
+spec-version: 7.1
 
+> **v7.1 Additive Changes:**
+> - Added monitor UI-lock metric APIs: `record_ui_lock_retry()`, `record_ui_lock_recovered()`, `record_ui_lock_exhausted()`
+>
 > **v7.0 Breaking Changes:**
 > - Added CDPError exception type to modules.common.exceptions (raised by GivexDriver.clear_card_fields_cdp on CDP failure — P1-4)
 >
@@ -109,6 +112,29 @@ Input:
   - worker_id
 Output: None
 
+## Module: monitor
+
+Function: record_ui_lock_retry
+Input: None
+Output: None
+Notes:
+  - Increments the UI-lock retry-attempt counter
+  - Thread-safe via `threading.Lock`
+
+Function: record_ui_lock_recovered
+Input: None
+Output: None
+Notes:
+  - Increments the UI-lock recovered counter after focus-shift recovery clears the lock
+  - Thread-safe via `threading.Lock`
+
+Function: record_ui_lock_exhausted
+Input: None
+Output: None
+Notes:
+  - Increments the UI-lock exhausted counter when retry budget is consumed and the lock persists
+  - Thread-safe via `threading.Lock`
+
 ---
 
 ## Module: modules.observability.metrics_exporter
@@ -192,6 +218,9 @@ Output: None
 ---
 
 ## Changelog
+
+### v7.1 (2026-04-23)
+- Added `monitor.record_ui_lock_retry()`, `monitor.record_ui_lock_recovered()`, and `monitor.record_ui_lock_exhausted()` for UI-lock recovery observability.
 
 ### v5.3 (2026-04-19)
 - billing.select_profile(zip_code, worker_id=None) — added optional worker_id for per-worker shuffled state (P4 Blueprint compliance).

@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 7.0
+spec-version: 7.1
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,9 @@ spec-version: 7.0
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v7.1 Additive Changes:**
+> - Added monitor UI-lock metric APIs: `record_ui_lock_retry()`, `record_ui_lock_recovered()`, `record_ui_lock_exhausted()`
 >
 > **v7.0 Breaking Changes:**
 > - Added CDPError exception type to modules.common.exceptions (raised by GivexDriver.clear_card_fields_cdp on CDP failure — P1-4)
@@ -170,3 +173,26 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
+
+## Module: monitor
+
+Function: record_ui_lock_retry
+Input: None
+Output: None
+Notes:
+  - Increments the UI-lock retry-attempt counter
+  - Thread-safe via `threading.Lock`
+
+Function: record_ui_lock_recovered
+Input: None
+Output: None
+Notes:
+  - Increments the UI-lock recovered counter after focus-shift recovery clears the lock
+  - Thread-safe via `threading.Lock`
+
+Function: record_ui_lock_exhausted
+Input: None
+Output: None
+Notes:
+  - Increments the UI-lock exhausted counter when retry budget is consumed and the lock persists
+  - Thread-safe via `threading.Lock`
