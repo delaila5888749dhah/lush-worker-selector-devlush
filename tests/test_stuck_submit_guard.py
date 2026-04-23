@@ -36,7 +36,7 @@ class TestStuckSubmitGuard(unittest.TestCase):
             result = gd.detect_page_state()
 
         self.assertEqual(result, "ui_lock")
-        # sleep was NOT called because the loop body never executed
+        # sleep was not called because the loop body never executed
         mock_sleep.assert_not_called()
 
     def test_success_detected_during_poll(self):
