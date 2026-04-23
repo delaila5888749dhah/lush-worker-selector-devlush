@@ -1,0 +1,149 @@
+section: 9
+title: "Anti-Detect Layer 2 Tầng"
+blueprint_ref: "spec/blueprint.md#section-9"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-ANTIDETECT-01
+    priority: CRITICAL
+    rule: >
+      Tầng 1 proxy: static SOCKS5/HTTP proxy is mapped 1-to-1 with each
+      BitBrowser profile (§1, §2). The system must NEVER auto-call a 9Proxy
+      API to fetch proxies at runtime — proxies are static, provisioned
+      out-of-band. Each worker gets a unique profile_id and its associated
+      proxy, acquired via `ProxyPool.acquire()`.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/cdp/fingerprint.py
+      - modules/cdp/proxy.py
+    enforced_by:
+      - tests/test_fingerprint.py::BitBrowserClientTests::test_round_trip_create_launch_close_delete
+      - tests/test_fingerprint.py::BitBrowserClientTests::test_two_workers_get_two_different_profile_ids
+      - tests/test_cdp.py::ProxyPoolTests::test_acquire_unique_proxies_for_three_workers
+      - tests/test_cdp.py::ProxyPoolTests::test_acquire_returns_none_when_pool_empty
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_session_create_register_release_sequence
+    fail_severity: warn
+    notes: >
+      The "NEVER auto-call 9Proxy API" clause is a negative invariant; no
+      existing test asserts absence of 9Proxy calls directly. The repository
+      contains no 9Proxy references (verified via grep on modules/ and
+      integration/). Positive-path coverage (static proxy mapping,
+      per-worker uniqueness, pool-based acquisition) is provided by the
+      tests above. Downgraded to `warn` to acknowledge the gap.
+
+  - id: INV-ANTIDETECT-02
+    priority: CRITICAL
+    rule: >
+      Tầng 1 CDP input: all keyboard and mouse input is dispatched via
+      `Input.dispatchKeyEvent` and `Input.dispatchMouseEvent` (isTrusted=True).
+      `selenium.send_keys()` is only allowed as a last-resort fallback after
+      a CDP failure and must emit a warning in strict mode.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/cdp/keyboard.py
+      - modules/cdp/mouse.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_keyboard.py::TestTypeValueBasic::test_chars_dispatched_per_character
+      - tests/test_keyboard.py::TestTypeValueBasic::test_returns_mode_cdp_key
+      - tests/test_keyboard.py::TestTypeValueBasic::test_falls_back_to_send_keys_when_cdp_fails
+      - tests/test_keyboard.py::TestTypeValueStrictMode::test_strict_warns_on_cdp_and_fallback_failure
+      - tests/test_keyboard.py::TestCDPKeyEventCodeField::test_code_not_empty_for_lowercase_letters
+      - tests/test_keyboard.py::TestCDPKeyEventCodeField::test_code_not_empty_for_digits
+      - tests/test_mouse.py::TestGhostCursorDispatch::test_dispatches_mousemoved_per_waypoint
+      - tests/test_cdp.py::FillCardTests::test_delegates_to_driver
+    fail_severity: block_merge
+
+  - id: INV-ANTIDETECT-03
+    priority: MAJOR
+    rule: >
+      Tầng 1 ghost cursor: mouse movement follows a Bézier curve path with
+      randomised intermediate waypoints (not a straight line). The last
+      waypoint must be exactly the target coordinates.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/cdp/mouse.py
+    enforced_by:
+      - tests/test_mouse.py::TestBuildPath::test_returns_n_plus_one_points
+      - tests/test_mouse.py::TestBuildPath::test_last_point_is_exact_target
+      - tests/test_mouse.py::TestBuildPath::test_intermediate_points_not_on_straight_line
+      - tests/test_mouse.py::TestBuildPath::test_deterministic_under_fixed_seed
+      - tests/test_mouse.py::TestBuildPath::test_different_seeds_produce_different_paths
+      - tests/test_mouse.py::TestGhostCursorDispatch::test_last_waypoint_is_exact_target
+      - tests/test_mouse.py::TestGhostCursorDispatch::test_deterministic_waypoints_under_fixed_seed
+    fail_severity: block_merge
+
+  - id: INV-ANTIDETECT-04
+    priority: MAJOR
+    rule: >
+      Tầng 1 bounding box click offset: click coordinates are randomised
+      within (x±15, y±5) pixels of the element rectangle centre, with an
+      independent offset per worker.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_bounding_box_offset.py::TestBoundingBoxOffset::test_offset_x_within_minus15_plus15
+      - tests/test_bounding_box_offset.py::TestBoundingBoxOffset::test_offset_y_within_minus5_plus5
+    fail_severity: block_merge
+
+  - id: INV-ANTIDETECT-05
+    priority: MAJOR
+    rule: >
+      Tầng 2 biometrics: temporal noise follows log-normal / gaussian
+      distribution for inter-keystroke delay; each worker has its own
+      distribution derived from the PersonaProfile seed. Noise is always
+      positive and clamped within the typing band.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/delay/biometrics.py
+      - modules/delay/persona.py
+    enforced_by:
+      - tests/test_biometrics.py::TestKeystrokeDelay::test_within_bounds
+      - tests/test_biometrics.py::TestNoise::test_noise_positive
+      - tests/test_biometrics.py::TestNoise::test_noise_around_base
+      - tests/test_biometrics.py::TestDeterminism::test_same_seed_same_pattern
+      - tests/test_biometrics.py::BiometricProductionPathTests::test_biometric_profile_accessible_via_delay_main
+      - tests/test_biometrics.py::BiometricProductionPathTests::test_biometric_profile_rng_independent_from_persona
+      - tests/test_persona_profile.py::WorkerSeedUniquenessTests::test_rng_streams_independent_across_temporal_and_biometrics
+    fail_severity: block_merge
+
+  - id: INV-ANTIDETECT-06
+    priority: MAJOR
+    rule: >
+      Tầng 2 burst typing + hesitation: the biometric burst pattern combines
+      fast groups with pauses matching the 4x4 card-number rule (§4/§5) —
+      type 4 digits, pause, type 4 digits, etc. Per-group pauses are
+      clamped within the typing band.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/delay/biometrics.py
+    enforced_by:
+      - tests/test_biometrics.py::TestBurstPattern::test_length_matches
+      - tests/test_biometrics.py::TestBurstPattern::test_pause_at_group_boundaries
+      - tests/test_biometrics.py::TestBurstPattern::test_all_positive
+      - tests/test_biometrics.py::TestFourByFourPattern::test_length
+      - tests/test_biometrics.py::TestFourByFourPattern::test_pause_clamped
+      - tests/test_biometrics.py::TestFourByFourPattern::test_fast_keys_small
+      - tests/test_keyboard.py::TestTypeValueBurstDelays::test_burst_delays_grouped
+    fail_severity: block_merge
+
+  - id: INV-ANTIDETECT-07
+    priority: MAJOR
+    rule: >
+      Tầng 2 non-interference: biometric/temporal layer NEVER breaks Tầng 1
+      (environment + CDP input) and NEVER changes execution outcome. Same
+      input logic must produce the same success/failure result whether
+      biometric noise is applied or not.
+    blueprint_ref: "spec/blueprint.md#section-9"
+    source_files:
+      - modules/delay/biometrics.py
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_phase10_safety.py::TestOutcomeInvariant::test_return_value_unchanged
+      - tests/test_phase10_safety.py::TestOutcomeInvariant::test_exception_preserved
+      - tests/test_phase10_safety.py::TestExecutionOrderInvariant::test_step_sequence_unchanged
+      - tests/test_phase10_safety.py::TestDeterministicReproducibility::test_biometric_pattern_deterministic
+      - tests/test_phase10_integration.py::TestTemporalBiometricCombined::test_temporal_then_biometric_noise
+    fail_severity: block_merge

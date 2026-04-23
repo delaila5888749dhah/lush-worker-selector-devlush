@@ -1,0 +1,263 @@
+section: 8
+title: "Phase 10 Behavior Layer"
+blueprint_ref: "spec/blueprint.md#section-8"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-BEHAVIOR-01
+    priority: CRITICAL
+    rule: >
+      Behavior layer is injected via the wrapper pattern
+      `task_fn = wrap(task_fn, persona)` ONLY at the worker execution layer.
+      It must NOT interfere with the runtime loop, rollout/scaling, monitor,
+      or FSM — the cycle flow (§6) is preserved 100%.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/wrapper.py
+      - integration/worker_task.py
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_behavior_wrapper.py::TestWrapPreservesReturnValue::test_return_value_unchanged
+      - tests/test_behavior_wrapper.py::TestWrapPreservesReturnValue::test_preserves_function_name
+      - tests/test_runtime_behavior_integration.py::TestWrapperApplied::test_worker_executes_wrapped_task
+      - tests/test_runtime_behavior_integration.py::TestNoScalingInterference::test_multiple_workers_scale
+      - tests/test_phase10_integration.py::TestWrapperEndToEnd::test_wrapped_task_returns_correctly
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-02
+    priority: CRITICAL
+    rule: >
+      BehaviorState enum is exactly {IDLE, FILLING_FORM, PAYMENT, VBV,
+      POST_ACTION} and drives delay decisions. Transitions follow the table
+      defined in modules/delay/state.py and must not be bypassed.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/state.py
+    enforced_by:
+      - tests/test_behavior_state.py::TestBehaviorStates::test_has_five_states
+      - tests/test_behavior_state.py::TestBehaviorStates::test_contains_idle
+      - tests/test_behavior_state.py::TestBehaviorStates::test_contains_filling_form
+      - tests/test_behavior_state.py::TestBehaviorStates::test_contains_payment
+      - tests/test_behavior_state.py::TestBehaviorStates::test_contains_vbv
+      - tests/test_behavior_state.py::TestBehaviorStates::test_contains_post_action
+      - tests/test_behavior_state.py::TestValidBehaviorTransitions::test_transition_targets_are_subsets
+      - tests/test_behavior_state.py::TestTransition::test_full_happy_path
+    fail_severity: block_merge
+
+  - id: INV-DELAY-02
+    priority: CRITICAL
+    rule: >
+      CRITICAL_SECTION zero delay: `DelayEngine.is_delay_permitted()` returns
+      False whenever BehaviorState ∈ {VBV, POST_ACTION} OR
+      `_in_critical_section=True`. `BehaviorStateMachine.is_critical_context()`
+      follows the same truth table. No behavioral delay may ever be injected
+      while in payment submit, VBV/3DS, API wait, or page reload.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    audit_lock_ref: "spec/audit-lock.md#INV-DELAY-02"
+    source_files:
+      - modules/delay/engine.py
+      - modules/delay/state.py
+    enforced_by:
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_vbv_zero_typing
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_vbv_zero_thinking
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_post_action_zero
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_payment_submit_no_delay
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_critical_section_flag_blocks_delay
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_api_wait_critical_section
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_page_reload_critical_section
+      - tests/test_delay_engine.py::TestCriticalSectionBypass::test_vbv_zero_delay
+      - tests/test_delay_engine.py::TestCriticalSectionBypass::test_post_action_zero_delay
+      - tests/test_delay_engine.py::TestCriticalSectionBypass::test_phase9_critical_section_flag
+      - tests/test_behavior_state.py::TestIsCriticalContext::test_vbv_is_critical
+      - tests/test_behavior_state.py::TestIsCriticalContext::test_post_action_is_critical
+      - tests/test_behavior_state.py::TestIsCriticalContext::test_critical_section_flag_is_critical
+      - tests/test_safe_point.py::TestIsSafeToControl::test_false_when_worker_critical_section
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-03
+    priority: CRITICAL
+    rule: >
+      SAFE ZONE rule (§8.4): delay is only permitted at UI-interaction points
+      (typing, click, hover) and non-critical steps. Stagger start
+      (12–25s uniform between worker launches) is an independent mechanism
+      from behavior delay — the two must not interfere.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - integration/runtime.py
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_safe_point.py::TestAllowedWorkerStates::test_contains_safe_point
+      - tests/test_safe_point.py::TestIsSafeToControl::test_true_when_worker_safe_point
+      - tests/test_safe_point.py::TestIsSafeToControl::test_all_safe_point_is_safe
+      - tests/test_stagger_start.py::TestStaggerStart::test_inter_launch_delay_within_12_25
+      - tests/test_stagger_start.py::TestStaggerStart::test_first_launch_no_stagger
+      - tests/test_phase10_safety.py::TestStaggerIsolation::test_stagger_independent_of_behaviour
+      - tests/test_phase10_safety.py::TestStaggerIsolation::test_behaviour_delay_range_within_action_bounds
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-04
+    priority: CRITICAL
+    rule: >
+      NO-DELAY zone (§8.5): behavior layer must NOT inject delay into
+      Payment submit (Complete Purchase click), Watchdog timeout checks,
+      CDP Network.responseReceived wait, VBV iframe load/interaction, or
+      Page reload operations. VBV 8–12s wait is operational (not behavioral)
+      and cannot be replaced or supplemented by the behavior layer.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/engine.py
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_payment_submit_no_delay
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_api_wait_critical_section
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_page_reload_critical_section
+      - tests/test_phase10_safety.py::TestVBVOperationalWaitIsolation::test_vbv_state_blocks_behaviour_delay
+      - tests/test_phase10_safety.py::TestVBVOperationalWaitIsolation::test_vbv_wait_distinct_from_behaviour
+    fail_severity: block_merge
+
+  - id: INV-DELAY-01
+    priority: CRITICAL
+    rule: >
+      Hard timing constraints (§8.6): MAX_TYPING_DELAY=1.8s, MAX_HESITATION_DELAY=5.0s,
+      MAX_STEP_DELAY=7.0s, WATCHDOG_HEADROOM≥3.0s. `DelayEngine._accumulate()`
+      enforces the step ceiling at runtime; values are clamped before apply and
+      can never exceed these constants.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    audit_lock_ref: "spec/audit-lock.md#INV-DELAY-01"
+    source_files:
+      - modules/delay/persona.py
+      - modules/delay/engine.py
+      - modules/delay/config.py
+    enforced_by:
+      - tests/test_delay_engine.py::TestTypingDelay::test_within_bounds
+      - tests/test_delay_engine.py::TestThinkingDelay::test_within_bounds
+      - tests/test_delay_engine.py::TestAccumulator::test_accumulator_respects_ceiling
+      - tests/test_delay_engine.py::TestWatchdogHeadroom::test_headroom_constant
+      - tests/test_delay_engine.py::TestWatchdogHeadroom::test_max_step_plus_headroom
+      - tests/test_delay_engine.py::TestBoundaryConditions::test_accumulator_exact_ceiling
+      - tests/test_delay_config.py::TestDelayConfigValidation::test_validate_config_raises_delay_config_error_for_step_budget_violation
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_accumulated_within_ceiling
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_headroom_at_least_3s
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_thinking_delays_within_ceiling
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_explicit_headroom_values
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_mixed_delays_within_ceiling
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-05
+    priority: MAJOR
+    rule: >
+      Delay is clamped before apply, uses non-blocking sleep (does not block
+      the worker loop), and typing vs thinking are mutually exclusive per step
+      — a single cycle step applies at most one of the two injection points.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/engine.py
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_delay_engine.py::TestTypingDelay::test_within_bounds
+      - tests/test_delay_engine.py::TestThinkingDelay::test_within_bounds
+      - tests/test_delay_engine.py::TestAccumulator::test_accumulator_respects_ceiling
+      - tests/test_behavior_wrapper.py::StopEventEarlyExitTests::test_stop_event_set_before_call_exits_early
+      - tests/test_behavior_wrapper.py::StopEventEarlyExitTests::test_stop_event_not_set_uses_wait_with_positive_timeout
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-06
+    priority: MAJOR
+    rule: >
+      Seeded reproducibility (§8.6): `rnd = random.Random(seed)` — each
+      worker has its own `random.Random` instance seeded from PersonaProfile,
+      no shared state between workers. Same seed → same delay sequence,
+      typo trigger, hesitation duration, and click offset.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/persona.py
+      - modules/delay/engine.py
+    enforced_by:
+      - tests/test_behavior_wrapper.py::TestDeterminism::test_same_seed_same_return
+      - tests/test_behavior_wrapper.py::TestDeterminism::test_same_seed_same_delay_sequence
+      - tests/test_delay_engine.py::TestDeterminism::test_same_seed_same_delays
+      - tests/test_persona_profile.py::TestDeterminism::test_same_seed_produces_same_profile
+      - tests/test_persona_profile.py::TestDeterminism::test_deterministic_typing_delay
+      - tests/test_persona_profile.py::TestDeterminism::test_deterministic_hesitation_delay
+      - tests/test_persona_profile.py::WorkerSeedUniquenessTests::test_worker_seeds_produce_unique_personas
+      - tests/test_persona_profile.py::WorkerSeedUniquenessTests::test_same_worker_id_always_produces_same_persona
+      - tests/test_persona_profile.py::WorkerSeedUniquenessTests::test_rng_streams_independent_across_temporal_and_biometrics
+      - tests/test_phase10_safety.py::TestDeterministicReproducibility::test_same_seed_same_delays
+      - tests/test_phase10_safety.py::TestDeterministicReproducibility::test_three_runs_identical
+    fail_severity: block_merge
+
+  - id: INV-DELAY-03
+    priority: CRITICAL
+    rule: >
+      Wrapper try/finally cleanup (§8.1/8.7): `modules/delay/wrapper.py::_wrapped()`
+      always calls `engine.reset_step_accumulator()` and `sm.reset()` in a
+      finally block, even when `task_fn()` raises. Both injection points are
+      protected — typing delay is inside the outer try; thinking delay is
+      wrapped in its own try/finally — so the BehaviorStateMachine always
+      returns to IDLE after each cycle invocation.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    audit_lock_ref: "spec/audit-lock.md#INV-DELAY-03"
+    source_files:
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_behavior_wrapper.py::TestWrapPropagatesExceptions::test_exception_propagated
+      - tests/test_behavior_wrapper.py::TestWrapPropagatesExceptions::test_cleanup_runs_on_exception
+      - tests/test_behavior_wrapper.py::TestWrapPropagatesExceptions::test_cleanup_runs_when_typing_delay_raises
+      - tests/test_behavior_wrapper.py::TestWrapPropagatesExceptions::test_cleanup_runs_when_thinking_delay_raises
+      - tests/test_behavior_wrapper.py::TestWrapInjectsBothDelayTypes::test_no_thinking_delay_on_exception
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-07
+    priority: CRITICAL
+    rule: >
+      Non-interference (§8.7): behavior layer does not change outcome —
+      FSM flow is unchanged, step order is unchanged, success/failure outcome
+      is unchanged, and state transitions are untouched by delay injection.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_phase10_safety.py::TestFSMFlowInvariant::test_same_sequence
+      - tests/test_phase10_safety.py::TestFSMFlowInvariant::test_transition_sequence_deterministic
+      - tests/test_phase10_safety.py::TestOutcomeInvariant::test_return_value_unchanged
+      - tests/test_phase10_safety.py::TestOutcomeInvariant::test_exception_preserved
+      - tests/test_phase10_safety.py::TestOutcomeInvariant::test_none_return_preserved
+      - tests/test_phase10_safety.py::TestExecutionOrderInvariant::test_step_sequence_unchanged
+      - tests/test_phase10_safety.py::TestExecutionOrderInvariant::test_mixed_ops_order_preserved
+      - tests/test_runtime_behavior_integration.py::TestLifecycleStatesUnchanged::test_states_remain_valid
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-08
+    priority: MAJOR
+    rule: >
+      Phase 9 alignment (§8.8): behavior layer respects SAFE_POINT (§8.4) and
+      CRITICAL_SECTION (§8.3) boundaries and does not operate outside the
+      permitted scope.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/engine.py
+      - modules/delay/state.py
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_safe_point.py::TestIsSafeToControl::test_false_when_worker_critical_section
+      - tests/test_safe_point.py::TestIsSafeToControl::test_true_when_worker_safe_point
+      - tests/test_safe_point.py::TestIsSafeToControl::test_mixed_states_one_unsafe
+      - tests/test_runtime_behavior_integration.py::TestCriticalSectionRespected::test_critical_section_no_delay
+      - tests/test_runtime_behavior_integration.py::TestSafePointHonored::test_safe_point_transition
+      - tests/test_runtime_behavior_integration.py::TestSafePointHonored::test_stop_during_safe_point
+    fail_severity: block_merge
+
+  - id: INV-BEHAVIOR-09
+    priority: MAJOR
+    rule: >
+      Performance constraint (§8.6): behavior layer overhead ≤ 15% versus a
+      baseline cycle without behavior injection. Measured with a wrapped vs
+      unwrapped task run under the same workload.
+    blueprint_ref: "spec/blueprint.md#section-8"
+    source_files:
+      - modules/delay/wrapper.py
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime_behavior_integration.py::TestOverheadWithin15Percent::test_overhead_acceptable
+    fail_severity: block_merge

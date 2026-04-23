@@ -1,0 +1,161 @@
+section: 10
+title: "Day/Night Behavior Simulation"
+blueprint_ref: "spec/blueprint.md#section-10"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-DAYNIGHT-01
+    priority: MAJOR
+    rule: >
+      Biological time state: DAY (06:00–21:59) vs NIGHT (22:00–05:59),
+      derived from the proxy IP → timezone lookup via MaxMind GeoLite2
+      (already present in §5). The MaxMind reader is used as a singleton
+      and supports hot-reload without crashing concurrent reads.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    source_files:
+      - modules/delay/temporal.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_temporal_model.py::TestTimeState::test_day_range
+      - tests/test_temporal_model.py::TestTimeState::test_known_day
+      - tests/test_temporal_model.py::TestTimeState::test_known_night
+      - tests/test_temporal_model.py::TestTimeStateBoundary::test_start_hour_is_day
+      - tests/test_temporal_model.py::TestTimeStateBoundary::test_end_hour_is_day
+      - tests/test_temporal_model.py::TestTimeStateBoundary::test_hour_before_start_is_night
+      - tests/test_temporal_model.py::TestTimeStateBoundary::test_hour_after_end_is_night
+      - tests/test_temporal_model.py::TestTimeStateBoundary::test_midnight_is_night
+      - tests/test_temporal_model.py::TestTimeStateBoundary::test_noon_is_day
+      - tests/test_maxmind_utc_offset_singleton.py::TestMaxMindUtcOffsetSingleton::test_utc_offset_uses_singleton_reader
+      - tests/test_maxmind_utc_offset_singleton.py::TestMaxMindUtcOffsetSingleton::test_os_path_exists_not_consulted_when_singleton_present
+      - tests/test_maxmind_hot_reload.py::TestMaxMindHotReload::test_reload_thread_starts_and_stops
+      - tests/test_maxmind_hot_reload.py::TestMaxMindHotReload::test_mtime_change_triggers_swap
+      - tests/test_maxmind_hot_reload.py::TestMaxMindHotReload::test_swap_is_atomic
+      - tests/test_maxmind_hot_reload.py::TestMaxMindHotReload::test_concurrent_reads_during_swap_no_crash
+    fail_severity: block_merge
+
+  - id: INV-DAYNIGHT-02
+    priority: MAJOR
+    rule: >
+      NIGHT typing penalty: typing speed is 15–30% slower than DAY, with
+      the scale factor drawn from the worker-specific `rnd` (§8.6). DAY
+      typing has no night penalty applied.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    source_files:
+      - modules/delay/temporal.py
+    enforced_by:
+      - tests/test_temporal_model.py::TestTemporalModifier::test_day_no_penalty
+      - tests/test_temporal_model.py::TestTemporalModifier::test_night_penalty_applied
+      - tests/test_temporal_model.py::TestNightPenaltyRange::test_night_typing_penalty_within_range
+      - tests/test_temporal_model.py::TestNightPenaltyRange::test_day_typing_no_penalty_multiple_seeds
+      - tests/test_temporal_model.py::TestNightPenaltyRange::test_night_penalty_varies_across_seeds
+    fail_severity: block_merge
+
+  - id: INV-DAYNIGHT-03
+    priority: MAJOR
+    rule: >
+      NIGHT hesitation + typo: hesitation (thinking) delay increases
+      20–40% and typo rate increases by 1–2% (absolute) versus DAY
+      baseline, with higher inter-action variance. All drawn from `rnd`.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    source_files:
+      - modules/delay/temporal.py
+    enforced_by:
+      - tests/test_temporal_model.py::TestNightHesitationIncrease::test_night_thinking_uses_hesitation_range
+      - tests/test_temporal_model.py::TestNightHesitationPenaltyRange::test_night_hesitation_penalty_within_range
+      - tests/test_temporal_model.py::TestNightHesitationPenaltyRange::test_day_hesitation_no_penalty_multiple_seeds
+      - tests/test_temporal_model.py::TestNightTypoIncrease::test_night_typo_increase
+      - tests/test_temporal_model.py::TestNightTypoIncrease::test_night_typo_increase_is_random_in_range
+      - tests/test_temporal_model.py::TestNightTypoIncrease::test_day_typo_no_increase
+      - tests/test_temporal_model.py::TestGetCurrentModifiers::test_night_typo_value
+    fail_severity: block_merge
+
+  - id: INV-DELAY-04
+    priority: CRITICAL
+    rule: >
+      Temporal modifier bounded output: `apply_temporal_modifier()` returns
+      0.0 immediately for non-positive input and clamps all outputs to
+      [0.0, MAX_*] for typing / hesitation / step constants.
+      `apply_micro_variation()` returns `max(0.0, base * uniform(0.90, 1.10))`
+      — never negative. All Day/Night-modified delays remain clamped by
+      §8.6 hard constants.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    audit_lock_ref: "spec/audit-lock.md#INV-DELAY-04"
+    source_files:
+      - modules/delay/temporal.py
+    enforced_by:
+      - tests/test_temporal_model.py::TestTemporalModifier::test_non_positive_base_returns_zero
+      - tests/test_temporal_model.py::TestTemporalModifier::test_typing_clamped
+      - tests/test_temporal_model.py::TestTemporalModifier::test_thinking_clamped
+      - tests/test_temporal_model.py::TestMicroVariation::test_variation_bounds
+      - tests/test_temporal_model.py::TestMicroVariation::test_deterministic
+      - tests/test_temporal_model.py::TestMicroVariation::test_negative_base_is_clamped_to_zero
+      - tests/test_temporal_model.py::TestMicroVariationMultiSeed::test_reproducible_across_5_seeds
+      - tests/test_temporal_model.py::TestFatigue::test_fatigue_clamped_to_hard_limit
+    fail_severity: block_merge
+
+  - id: INV-DAYNIGHT-04
+    priority: MAJOR
+    rule: >
+      PersonaProfile expanded for Day/Night: `active_hours` (tuple),
+      `fatigue_threshold` (cycles) and `night_penalty_factor` ∈ [0.15, 0.30]
+      are fixed for the worker lifetime and derived deterministically from
+      the seed.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    source_files:
+      - modules/delay/persona.py
+    enforced_by:
+      - tests/test_persona_profile.py::TestBoundaryValues::test_night_penalty_bounds
+      - tests/test_persona_profile.py::TestBoundaryValues::test_fatigue_threshold_bounds
+      - tests/test_persona_profile.py::TestActiveHours::test_active_hours_tuple
+      - tests/test_persona_profile.py::TestToDict::test_keys_present
+      - tests/test_persona_profile.py::TestPersonaTypes::test_persona_type_valid
+    fail_severity: block_merge
+
+  - id: INV-DAYNIGHT-05
+    priority: MAJOR
+    rule: >
+      Session fatigue: after `fatigue_threshold`+1 consecutive cycles,
+      hesitation (thinking) delay increases to simulate accumulated
+      fatigue. Below the threshold, no fatigue bonus is applied. The
+      fatigue-adjusted value is always clamped to MAX_STEP_DELAY.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    source_files:
+      - modules/delay/temporal.py
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_temporal_model.py::TestFatigue::test_no_fatigue_below_threshold
+      - tests/test_temporal_model.py::TestFatigue::test_fatigue_above_threshold
+      - tests/test_temporal_model.py::TestFatigue::test_fatigue_capped
+      - tests/test_temporal_model.py::TestFatigueMultiPersona::test_fatigue_not_triggered_at_threshold_for_all_seeds
+      - tests/test_temporal_model.py::TestFatigueMultiPersona::test_fatigue_triggers_one_above_threshold_for_all_seeds
+      - tests/test_temporal_model.py::TestFatigueMultiPersona::test_fatigue_clamped_to_max_step_delay_for_all_seeds
+      - tests/test_behavior_wrapper.py::TestWrapThreadsFatigueCycleCount::test_cycle_count_increments_and_reaches_fatigue
+      - tests/test_behavior_wrapper.py::TestWrapThreadsFatigueCycleCount::test_fatigue_increases_thinking_delay
+    fail_severity: block_merge
+
+  - id: INV-DAYNIGHT-06
+    priority: CRITICAL
+    rule: >
+      Day/Night safety rules: the Day/Night model respects CRITICAL_SECTION
+      (§8.3) with zero delay at payment submit, VBV, and API wait; never
+      breaks the watchdog (all delays clamped by §8.6); never affects FSM
+      flow; and never changes outcome — success/failure cannot depend on
+      the time of day.
+    blueprint_ref: "spec/blueprint.md#section-10"
+    source_files:
+      - modules/delay/temporal.py
+      - modules/delay/engine.py
+      - modules/delay/wrapper.py
+    enforced_by:
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_vbv_zero_typing
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_vbv_zero_thinking
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_post_action_zero
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_payment_submit_no_delay
+      - tests/test_phase10_safety.py::TestCriticalSectionZeroDelay::test_api_wait_critical_section
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_accumulated_within_ceiling
+      - tests/test_phase10_safety.py::TestWatchdogHeadroom::test_mixed_delays_within_ceiling
+      - tests/test_phase10_safety.py::TestOutcomeInvariant::test_return_value_unchanged
+      - tests/test_phase10_safety.py::TestFSMFlowInvariant::test_same_sequence
+      - tests/test_phase10_safety.py::TestDeterministicReproducibility::test_temporal_micro_variation_deterministic
+    fail_severity: block_merge
