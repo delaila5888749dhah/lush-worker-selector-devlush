@@ -27,6 +27,11 @@ _success_counts_by_persona: dict[str, int] = {}
 # Worker restart tracking: list of timestamps (epoch seconds)
 _restart_timestamps = []
 
+# UI-lock retry metrics — counters for UI-lock auto-recovery (#... [MINOR]).
+# Incremented by the orchestrator's UI-lock retry loop (integration/orchestrator.py).
+_ui_lock_retry_count = 0
+_ui_lock_recovered_count = 0
+_ui_lock_exhausted_count = 0
 # Count of active-poll VBV / 3DS iframe detections (Blueprint §6 Fork 3).
 # Incremented internally by :class:`TransientMonitor`; surfaced to callers as
 # the ``vbv_detections`` key of :func:`get_metrics` (no new public function
@@ -99,6 +104,27 @@ def record_restart():
         _restart_timestamps.append(now)
         cutoff = now - 3600
         _restart_timestamps[:] = [ts for ts in _restart_timestamps if ts >= cutoff]
+
+
+def record_ui_lock_retry() -> None:
+    """Record a UI-lock focus-shift retry attempt."""
+    global _ui_lock_retry_count
+    with _lock:
+        _ui_lock_retry_count += 1
+
+
+def record_ui_lock_recovered() -> None:
+    """Record a successful UI-lock recovery (page state cleared after retry)."""
+    global _ui_lock_recovered_count
+    with _lock:
+        _ui_lock_recovered_count += 1
+
+
+def record_ui_lock_exhausted() -> None:
+    """Record a UI-lock retry budget exhaustion (lock persists past the cap)."""
+    global _ui_lock_exhausted_count
+    with _lock:
+        _ui_lock_exhausted_count += 1
 
 
 def get_success_rate():
@@ -240,6 +266,9 @@ def get_metrics():
             "baseline_success_rate": baseline,
             "error_counts_by_persona": dict(_error_counts_by_persona),
             "success_counts_by_persona": dict(_success_counts_by_persona),
+            "ui_lock_retry_count": _ui_lock_retry_count,
+            "ui_lock_recovered_count": _ui_lock_recovered_count,
+            "ui_lock_exhausted_count": _ui_lock_exhausted_count,
             "vbv_detections": _vbv_detections,
         }
 
@@ -292,6 +321,7 @@ def check_rollback_needed():
 def reset():
     """Reset all metrics.  Intended for testing."""
     global _success_count, _error_count, _restart_timestamps, _baseline_success_rate
+    global _ui_lock_retry_count, _ui_lock_recovered_count, _ui_lock_exhausted_count
     global _vbv_detections
     with _lock:
         _success_count = 0
@@ -301,6 +331,9 @@ def reset():
         _vbv_detections = 0
         _error_counts_by_persona.clear()
         _success_counts_by_persona.clear()
+        _ui_lock_retry_count = 0
+        _ui_lock_recovered_count = 0
+        _ui_lock_exhausted_count = 0
 
 
 class TransientMonitor:

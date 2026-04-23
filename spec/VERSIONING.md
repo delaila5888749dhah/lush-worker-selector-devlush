@@ -45,8 +45,8 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | File | Version | Cập nhật |
 |------|---------|----------|
 | `spec/core/interface.md` | 7.0 | 2026-04-21 |
-| `spec/integration/interface.md` | 7.0 | 2026-04-21 |
-| `spec/interface.md` (aggregated) | 7.0 | 2026-04-21 |
+| `spec/integration/interface.md` | 7.1 | 2026-04-23 |
+| `spec/interface.md` (aggregated) | 7.1 | 2026-04-23 |
 | `spec/fsm.md` | 1.1 | 2026-04-23 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -55,8 +55,9 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 ## Changelog
 
-### v1.1 (2026-04-23) — ADDITIVE (spec/fsm.md)
-- `spec/fsm.md`: Added `vbv_cancelled` to `ALLOWED_STATES` and `TERMINAL_STATES`; added transition `vbv_3ds → vbv_cancelled`. Aligns FSM whitelist with existing orchestrator usage in `handle_outcome` (no runtime error before, pure tech-debt fix).
+### v7.1 (2026-04-23) — ADDITIVE
+- `spec/integration/interface.md`: Added `monitor.record_ui_lock_retry()`, `monitor.record_ui_lock_recovered()`, and `monitor.record_ui_lock_exhausted()` for UI-lock recovery observability.
+- `spec/interface.md`: Aggregated the same monitor UI-lock metric APIs to keep segmented and aggregated interface specs aligned.
 
 ### v7.0 (2026-04-21) — BREAKING
 - Added `CDPError` exception type to `modules.common.exceptions` (plain `Exception` subclass)
