@@ -738,14 +738,14 @@ def _popup_close_max_retries() -> int:
     if not raw:
         return _POPUP_CLOSE_MAX_RETRIES_DEFAULT
     try:
-        n = int(raw)
+        value = int(raw)
     except ValueError:
         return _POPUP_CLOSE_MAX_RETRIES_DEFAULT
-    if n < 1:
+    if value < 1:
         return 1
-    if n > 10:
+    if value > 10:
         return 10
-    return n
+    return value
 
 
 def _popup_still_present(base_driver, locator, timeout: float) -> bool:
@@ -760,10 +760,9 @@ def _popup_still_present(base_driver, locator, timeout: float) -> bool:
         WebDriverWait(base_driver, timeout).until(
             EC.presence_of_element_located(locator)
         )
-    except TimeoutException:
-        return False
     except Exception:  # pylint: disable=broad-except
-        # Any other selenium error → assume gone rather than loop forever.
+        # TimeoutException → popup gone; any other selenium error →
+        # assume gone rather than loop forever.
         return False
     return True
 
@@ -846,8 +845,7 @@ def handle_something_wrong_popup(
         # Re-check whether the popup is still present. If it has gone,
         # we are done; otherwise loop and click again.
         if not _popup_still_present(
-            base, locator, _POPUP_CLOSE_VERIFY_TIMEOUT
-        ):
+                base, locator, _POPUP_CLOSE_VERIFY_TIMEOUT):
             closed = True
             break
         _log.warning(

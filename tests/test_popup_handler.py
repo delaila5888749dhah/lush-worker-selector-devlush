@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from selenium.common.exceptions import TimeoutException
+
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     SEL_POPUP_CLOSE,
@@ -20,8 +22,6 @@ from modules.cdp.driver import (
 
 class TestPopupHandler(unittest.TestCase):
     def test_clicks_close_when_popup_present(self):
-        from selenium.common.exceptions import TimeoutException
-
         base_driver = MagicMock()
         wrapper = MagicMock()
         wrapper._driver = base_driver
@@ -40,8 +40,6 @@ class TestPopupHandler(unittest.TestCase):
         wrapper.bounding_box_click.assert_called_once_with(SEL_POPUP_CLOSE)
 
     def test_returns_false_when_no_popup(self):
-        from selenium.common.exceptions import TimeoutException
-
         base_driver = MagicMock()
         wrapper = MagicMock()
         wrapper._driver = base_driver
@@ -434,7 +432,6 @@ class TestPopupClearAfterClose(unittest.TestCase):
     @staticmethod
     def _close_then_gone():
         """Mock side-effect: popup present on first check, gone afterwards."""
-        from selenium.common.exceptions import TimeoutException
         return [MagicMock(), TimeoutException()]
 
     def test_close_success_calls_clear_and_returns_needs_refill(self):
@@ -449,8 +446,6 @@ class TestPopupClearAfterClose(unittest.TestCase):
         wrapper.clear_card_fields_cdp.assert_called_once_with()
 
     def test_no_popup_returns_not_present_and_skips_clear(self):
-        from selenium.common.exceptions import TimeoutException
-
         wrapper = self._make_wrapper()
         with patch.object(drv, "WebDriverWait") as mock_wait:
             mock_wait.return_value.until.side_effect = TimeoutException()
@@ -518,7 +513,8 @@ class TestPopupCloseRetry(unittest.TestCase):
         else:
             os.environ["POPUP_CLOSE_MAX_RETRIES"] = self._saved
 
-    def _make_wrapper(self):
+    @staticmethod
+    def _make_wrapper():
         return SimpleNamespace(
             _driver=MagicMock(),
             bounding_box_click=MagicMock(),
@@ -527,8 +523,6 @@ class TestPopupCloseRetry(unittest.TestCase):
 
     def test_retries_until_popup_gone(self):
         """Popup re-renders after first click, goes away after second."""
-        from selenium.common.exceptions import TimeoutException
-
         wrapper = self._make_wrapper()
         with patch.object(drv, "WebDriverWait") as mock_wait:
             # 1: initial presence check → present.
@@ -576,21 +570,25 @@ class TestPopupCloseRetry(unittest.TestCase):
         self.assertEqual(wrapper.bounding_box_click.call_count, 1)
 
     def test_env_override_clamped_to_max_10(self):
+        """Values above 10 are clamped to the upper bound."""
         os.environ["POPUP_CLOSE_MAX_RETRIES"] = "999"
-        self.assertEqual(drv._popup_close_max_retries(), 10)
+        self.assertEqual(drv._popup_close_max_retries(), 10)  # noqa: SLF001  # pylint: disable=protected-access
 
     def test_env_override_clamped_to_min_1(self):
+        """Values < 1 (including negatives) are clamped to 1."""
         os.environ["POPUP_CLOSE_MAX_RETRIES"] = "0"
-        self.assertEqual(drv._popup_close_max_retries(), 1)
+        self.assertEqual(drv._popup_close_max_retries(), 1)  # noqa: SLF001  # pylint: disable=protected-access
         os.environ["POPUP_CLOSE_MAX_RETRIES"] = "-5"
-        self.assertEqual(drv._popup_close_max_retries(), 1)
+        self.assertEqual(drv._popup_close_max_retries(), 1)  # noqa: SLF001  # pylint: disable=protected-access
 
     def test_env_invalid_falls_back_to_default(self):
+        """Non-numeric env value falls back to the default (3)."""
         os.environ["POPUP_CLOSE_MAX_RETRIES"] = "not-a-number"
-        self.assertEqual(drv._popup_close_max_retries(), 3)
+        self.assertEqual(drv._popup_close_max_retries(), 3)  # noqa: SLF001  # pylint: disable=protected-access
 
     def test_default_is_three(self):
-        self.assertEqual(drv._popup_close_max_retries(), 3)
+        """With the env var unset the helper returns the default (3)."""
+        self.assertEqual(drv._popup_close_max_retries(), 3)  # noqa: SLF001  # pylint: disable=protected-access
 
     def test_click_exception_still_retries(self):
         """A click raising is retried; after all raise, CLOSE_FAILED returned."""
