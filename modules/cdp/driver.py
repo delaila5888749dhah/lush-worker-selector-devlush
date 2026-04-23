@@ -56,14 +56,6 @@ from modules.common.exceptions import (
 )
 
 
-class GeoCheckFailedError(RuntimeError):
-    """Raised by :func:`preflight_geo_check` when the detected country does
-    not match the expected country (default ``"US"``).
-
-    Blueprint §2: pre-flight geo assertion — caller may choose to abort the
-    cycle and rotate proxy/session on this error.
-    """
-
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo  # type: ignore[import]
     from zoneinfo import ZoneInfoNotFoundError as _ZoneInfoNotFoundError
@@ -643,93 +635,6 @@ def close_extra_tabs(driver) -> int:
     except Exception as exc:  # pylint: disable=broad-except
         _log.warning("close_extra_tabs: failed to switch back to main: %s", exc)
     return closed
-
-
-def preflight_geo_check(driver, expected_country: str = "US") -> dict:
-    """Navigate to ``URL_GEO_CHECK`` and assert the public IP is in ``expected_country``.
-
-    Blueprint §2: strict pre-flight geo assertion executed once per cycle.
-    Unlike the :meth:`GivexDriver.preflight_geo_check` method (which also
-    drives the UTC-offset adjustment for typing cadence), this standalone
-    helper focuses on the single concern of asserting the proxy geo and
-    raising a typed exception that the caller can route.
-
-    Args:
-        driver: A Selenium-compatible driver exposing ``get`` and
-            ``find_element``.
-        expected_country: Two-letter country code to assert against the
-            ``country`` field in the JSON response.  Defaults to ``"US"``.
-
-    Returns:
-        The parsed JSON response dict on success.
-
-    Raises:
-        GeoCheckFailedError: When the JSON response's ``country`` field does
-            not equal ``expected_country`` or the response body is malformed.
-        SessionFlaggedError: When the browser window is lost mid-navigation
-            (``NoSuchWindowException``) — caller should rotate session.
-    """
-    # Import selenium exception lazily so the module remains importable in
-    # environments where selenium is stubbed/absent.
-    try:
-        from selenium.common.exceptions import NoSuchWindowException  # noqa: PLC0415
-    except ImportError:  # pragma: no cover - selenium always present in prod
-        class NoSuchWindowException(Exception):  # type: ignore[no-redef]
-            """Fallback stub when selenium is unavailable."""
-
-    try:
-        driver.get(URL_GEO_CHECK)
-        body = driver.find_element("tag name", "body").text
-    except NoSuchWindowException as exc:
-        raise SessionFlaggedError("Window lost during geo check") from exc
-
-    try:
-        data = _json.loads(body)
-    except (ValueError, TypeError) as exc:
-        raise GeoCheckFailedError(
-            f"Malformed geo-check response: {exc}"
-        ) from exc
-    if not isinstance(data, dict):
-        raise GeoCheckFailedError(
-            f"Geo-check response was not a JSON object: {type(data).__name__}"
-        )
-    actual = data.get("country")
-    if actual != expected_country:
-        raise GeoCheckFailedError(
-            f"Expected country {expected_country!r}, got {actual!r}"
-        )
-    return data
-
-
-_HARD_RESET_JS = """
-try { window.localStorage.clear(); } catch(e) {}
-try { window.sessionStorage.clear(); } catch(e) {}
-try {
-  document.cookie.split(';').forEach(function(c) {
-    document.cookie = c.replace(/^ +/, '').replace(/=.*/, '=;expires=' + new Date().toUTCString() + ';path=/');
-  });
-} catch(e) {}
-"""
-
-
-def hard_reset_browser_state(driver) -> None:
-    """Clear cookies, localStorage, and sessionStorage (Blueprint §3 Hard-Reset).
-
-    Must be called AFTER navigating to the target same-origin URL (e.g.
-    ``/e-gifts/``) but BEFORE any form interaction.  The JS block wraps each
-    storage clear in its own ``try/catch`` so a page with disabled storage
-    APIs does not abort the reset.  ``driver.delete_all_cookies`` is invoked
-    as a Selenium-level safety net; exceptions from either step are logged
-    and swallowed so the caller may continue.
-    """
-    try:
-        driver.execute_script(_HARD_RESET_JS)
-    except Exception as exc:  # pylint: disable=broad-except
-        _log.debug("hard_reset_browser_state: execute_script skipped: %s", exc)
-    try:
-        driver.delete_all_cookies()
-    except Exception as exc:  # pylint: disable=broad-except
-        _log.debug("hard_reset_browser_state: delete_all_cookies skipped: %s", exc)
 
 
 def handle_ui_lock_focus_shift(driver) -> bool:
@@ -1717,6 +1622,17 @@ class GivexDriver:
         """Fill card fields only (no billing); used after VBV reload."""
         self.fill_payment_and_billing(card_info, billing_profile=None)
 
+    def fill_card(self, card_info) -> None:
+        """Backward-compatibility alias for :meth:`fill_card_fields`.
+
+        Preserves the ``modules.cdp.main.fill_card(card_info, worker_id)``
+        contract published in ``spec/interface.md`` and
+        ``spec/integration/interface.md``.  Delegates to
+        :meth:`fill_card_fields` so the public wrapper remains functional
+        against a real :class:`GivexDriver` instance.
+        """
+        self.fill_card_fields(card_info)
+
     def fill_billing(self, billing_profile) -> None:
         """Backward-compatibility method that fills only billing fields.
 
@@ -1734,21 +1650,6 @@ class GivexDriver:
     def fill_billing_form(self, billing_profile) -> None:
         """Backward-compatibility alias for ``fill_billing``."""
         self.fill_billing(billing_profile)
-
-    def fill_card(self, card_info) -> None:
-        """Backward-compatibility stub.
-
-        .. deprecated::
-            Card and billing are now on the same page.
-            Use ``fill_payment_and_billing(card_info, billing_profile)`` instead.
-
-        Raises:
-            NotImplementedError: always — use ``fill_payment_and_billing``.
-        """
-        raise NotImplementedError(
-            "fill_card() is deprecated. "
-            "Use fill_payment_and_billing(card_info, billing_profile) instead."
-        )
 
     def submit_purchase(self) -> None:
         """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5)."""

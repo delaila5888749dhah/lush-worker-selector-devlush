@@ -525,17 +525,6 @@ class TestFillBilling(unittest.TestCase):
         mock_fill.assert_called_once_with(billing)
 
 
-class TestFillCard(unittest.TestCase):
-    """fill_card raises NotImplementedError."""
-
-    def test_fill_card_raises_not_implemented(self):
-        selenium = _make_driver()
-        gd = GivexDriver(selenium)
-        task = _make_task()
-        with self.assertRaises(NotImplementedError):
-            gd.fill_card(task.primary_card)
-
-
 class TestRunFullCycle(unittest.TestCase):
     """run_full_cycle calls each step in order and returns detect_page_state result."""
 
