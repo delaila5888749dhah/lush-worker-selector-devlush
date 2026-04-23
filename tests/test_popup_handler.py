@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from modules.common.exceptions import SelectorTimeoutError
+
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     SEL_POPUP_CLOSE,
@@ -487,6 +489,7 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
     """P1-6 — CSS-miss fallback to XPath text-match for <button>/<a> close."""
 
     def test_xpath_close_locator_covers_required_texts_and_tags(self):
+        """XPath must cover both <button>/<a> and the Close/OK/X/Đóng tokens."""
         xpath = drv.XPATH_POPUP_CLOSE
         # Must cover both <button> and <a> tags.
         self.assertIn("self::button", xpath)
@@ -499,8 +502,7 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         self.assertIn("Đóng", xpath)
 
     def test_css_miss_triggers_xpath_fallback_and_returns_needs_refill(self):
-        from modules.common.exceptions import SelectorTimeoutError
-
+        """CSS-miss (SelectorTimeoutError) must trigger XPath click + clear."""
         fake_el = MagicMock()
         base_driver = MagicMock()
         base_driver.find_elements.return_value = [fake_el]
@@ -523,8 +525,7 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         wrapper.clear_card_fields_cdp.assert_called_once_with()
 
     def test_css_miss_with_no_xpath_match_returns_close_failed(self):
-        from modules.common.exceptions import SelectorTimeoutError
-
+        """CSS-miss with empty XPath result must return CLOSE_FAILED and skip clear."""
         base_driver = MagicMock()
         base_driver.find_elements.return_value = []
         wrapper = SimpleNamespace(
@@ -542,8 +543,7 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         wrapper.clear_card_fields_cdp.assert_not_called()
 
     def test_xpath_fallback_tries_next_element_when_first_click_raises(self):
-        from modules.common.exceptions import SelectorTimeoutError
-
+        """If the first XPath match's click() raises, fallback must try the next."""
         bad_el = MagicMock()
         bad_el.click.side_effect = RuntimeError("detached")
         good_el = MagicMock()
@@ -565,6 +565,7 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         good_el.click.assert_called_once_with()
 
     def test_css_success_does_not_invoke_xpath_fallback(self):
+        """When CSS click succeeds, the XPath fallback must not be invoked."""
         base_driver = MagicMock()
         wrapper = SimpleNamespace(
             _driver=base_driver,
