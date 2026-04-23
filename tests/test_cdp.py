@@ -262,6 +262,22 @@ class FillCardTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             fill_card(MagicMock(), "unregistered")
 
+    def test_delegates_to_real_givex_driver(self):
+        """Regression: cdp.fill_card must work against a real GivexDriver.
+
+        Previously regressed when ``GivexDriver.fill_card`` was removed —
+        the public wrapper then raised ``AttributeError`` at runtime even
+        though the ``spec/interface.md`` contract for ``fill_card`` was
+        still published.
+        """
+        from modules.cdp.driver import GivexDriver  # noqa: PLC0415
+        real_driver = GivexDriver(MagicMock())
+        register_driver("w-real", real_driver)
+        card_info = MagicMock()
+        with patch.object(real_driver, "fill_card_fields") as mock_fill:
+            fill_card(card_info, "w-real")
+        mock_fill.assert_called_once_with(card_info)
+
 
 # ---------------------------------------------------------------------------
 # fill_billing() delegation tests

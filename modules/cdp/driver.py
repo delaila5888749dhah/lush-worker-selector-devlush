@@ -1622,6 +1622,17 @@ class GivexDriver:
         """Fill card fields only (no billing); used after VBV reload."""
         self.fill_payment_and_billing(card_info, billing_profile=None)
 
+    def fill_card(self, card_info) -> None:
+        """Backward-compatibility alias for :meth:`fill_card_fields`.
+
+        Preserves the ``modules.cdp.main.fill_card(card_info, worker_id)``
+        contract published in ``spec/interface.md`` and
+        ``spec/integration/interface.md``.  Delegates to
+        :meth:`fill_card_fields` so the public wrapper remains functional
+        against a real :class:`GivexDriver` instance.
+        """
+        self.fill_card_fields(card_info)
+
     def fill_billing(self, billing_profile) -> None:
         """Backward-compatibility method that fills only billing fields.
 
