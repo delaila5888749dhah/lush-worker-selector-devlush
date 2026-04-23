@@ -1,0 +1,204 @@
+section: 13
+title: "Runtime Lifecycle & Control-Plane Safety"
+blueprint_ref: "spec/blueprint.md#section-13"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-RUNTIME-01
+    priority: CRITICAL
+    rule: >
+      Worker state transitions follow the table IDLE → IN_CYCLE →
+      {CRITICAL_SECTION | SAFE_POINT} → IN_CYCLE → IDLE. All transitions must
+      go through _transition_worker_state_locked() while holding the runtime
+      state lock so concurrent stop_worker()/loop observers always see a
+      consistent state.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    audit_lock_ref: "spec/audit-lock.md#INV-RUNTIME-01"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime.py::TestLifecycleStateModel
+      - tests/test_runtime.py::TestLifecycleStateMachine
+      - tests/test_runtime_safety.py::TestStartWorkerProxyLeak
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-02
+    priority: CRITICAL
+    rule: >
+      runtime.reset() is test-only: it sets _behavior_delay_enabled=False and
+      clears in-memory state. It must raise RuntimeError when invoked while
+      _state == "RUNNING" and _behavior_delay_enabled == True (i.e. production
+      mode), preventing accidental data loss in production.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    audit_lock_ref: "spec/audit-lock.md#INV-RUNTIME-02"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_reset_production_guard.py::TestResetProductionGuard::test_reset_raises_when_running_with_behavior
+      - tests/test_reset_production_guard.py::TestResetProductionGuard::test_reset_allowed_when_stopped
+      - tests/test_reset_production_guard.py::TestResetProductionGuard::test_reset_allowed_when_behavior_disabled
+      - tests/test_runtime_safety.py::TestResetProductionGuard::test_reset_raises_when_running_in_production_mode
+      - tests/test_runtime_safety.py::TestResetProductionGuard::test_reset_allowed_when_running_in_test_mode
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-03
+    priority: CRITICAL
+    rule: >
+      stop_worker() must read the worker state and add to _stop_requests in
+      the same locked section so there is no TOCTOU race between the read and
+      the write. A worker currently in CRITICAL_SECTION must NOT be
+      force-stopped — the request is queued and honoured when the worker
+      naturally exits the critical section via join().
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime.py::TestStopWorker
+      - tests/test_runtime.py::TestStartStopRace
+      - tests/test_graceful_shutdown.py::TestStopWorkerCriticalSection::test_waits_for_critical_section_to_clear
+      - tests/test_graceful_shutdown.py::TestStopWorkerCriticalSection::test_cs_timeout_worker_remains_registered_until_natural_exit
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-04
+    priority: MAJOR
+    rule: >
+      Graceful shutdown budget allocation: stop() gives 30% of the shutdown
+      budget to the loop thread and 70% to worker joins. Workers that remain
+      after the per-worker budget expires are logged with action "hard_timeout"
+      rather than silently dropped. State STOPPED is set only after all joins
+      complete or time out, and _flush_idempotency_store() runs afterwards.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_graceful_shutdown.py::TestStopHardTimeout::test_hard_timeout_cleans_stuck_workers
+      - tests/test_graceful_shutdown.py::TestStopSetsStoppingState
+      - tests/test_sigterm_drain.py::SigtermDrainTests::test_sigterm_handler_invokes_stop_with_timeout
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-05
+    priority: MAJOR
+    rule: >
+      When worker failures occur before _apply_scale() executes, _pending_restarts
+      is capped at max(1, len(_workers)). This prevents unbounded accumulation
+      of restart requests. _apply_scale() decrements _pending_restarts by the
+      correct amount when scaling up.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime_safety.py::TestPendingRestartsCap::test_concurrent_failures_do_not_overshoot
+      - tests/test_runtime_safety.py::TestPendingRestartsCap::test_pending_restarts_decrement_on_scale_apply
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-06
+    priority: MAJOR
+    rule: >
+      When monitor.get_metrics() raises, the scaling loop logs a structured
+      event with action "metrics_unavailable_scaling_deferred" (distinct from
+      "hold_deferred" and "hold") and emits a WARNING. The loop does not
+      crash; scaling is deferred until the next tick.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime_safety.py::TestMetricsUnavailableLogging::test_metrics_unavailable_logs_deferred
+      - tests/test_cross_module_stabilization.py::TestMetricsUnavailableObservability
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-07
+    priority: MAJOR
+    rule: >
+      _log_event() wraps log_sink.emit() in try/except. Each emit() failure
+      increments _log_sink_error_count and produces a WARNING with the
+      cumulative failure count. Runtime never crashes because a log sink
+      misbehaves.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime_safety.py::TestLogSinkErrorCounter::test_error_counter_increments_on_sink_failure
+      - tests/test_runtime_safety.py::TestLogSinkErrorCounter::test_runtime_continues_after_sink_failure
+      - tests/test_log_sink.py::TestEmit::test_emit_custom_sink_exception_does_not_propagate
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-08
+    priority: MAJOR
+    rule: >
+      start_worker() proxy cleanup on thread failure: if Thread.start() raises
+      RuntimeError/OSError, the allocated proxy is released via
+      get_default_pool().release(wid) immediately and the worker entry is
+      removed from the registry so no proxy leak occurs.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime_safety.py::TestStartWorkerProxyLeak::test_proxy_released_on_thread_start_failure
+      - tests/test_runtime_safety.py::TestStartWorkerProxyLeak::test_proxy_released_on_thread_start_oserror
+      - tests/test_runtime_safety.py::TestStartWorkerProxyLeak::test_worker_registry_cleaned_on_thread_start_failure
+    fail_severity: block_merge
+
+  - id: INV-RUNTIME-09
+    priority: MINOR
+    rule: >
+      register_signal_handlers() called from a non-main thread must NOT crash.
+      SIGTERM/SIGINT signal.signal() calls are skipped (Python restricts them
+      to the main thread) with a debug log, while the atexit hook is still
+      registered so shutdown drain works.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_runtime_safety.py::TestRegisterSignalHandlersNonMainThread::test_non_main_thread_does_not_crash
+    fail_severity: warn
+
+  - id: INV-CDP-EXEC-01
+    priority: MAJOR
+    rule: >
+      _cdp_orphaned_threads counter is incremented on every caller-side CDP
+      timeout and is surfaced through get_cdp_metrics()['orphaned_cdp_threads']
+      so operators can observe executor saturation.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    audit_lock_ref: "spec/audit-lock.md#INV-CDP-EXEC-01"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_hardening.py::OrphanedThreadCounterTests::test_orphaned_threads_increments_on_timeout
+      - tests/test_orchestrator_hardening.py::OrphanedThreadCounterTests::test_successful_call_does_not_increment_orphaned
+      - tests/test_orchestrator_hardening.py::OrphanedThreadCounterTests::test_executor_unavailable_does_not_increment_orphaned
+    fail_severity: block_merge
+
+  - id: INV-CDP-SHUTDOWN-01
+    priority: MAJOR
+    rule: >
+      CDP executor shutdown uses shutdown(wait=False) and logs both the active
+      request count and orphaned-thread count before tearing the executor
+      down so stuck requests leave an auditable trail.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    audit_lock_ref: "spec/audit-lock.md#INV-CDP-SHUTDOWN-01"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_hardening.py::CDPShutdownSafetyTests::test_shutdown_logs_active_and_orphaned
+      - tests/test_orchestrator_hardening.py::CDPShutdownSafetyTests::test_shutdown_calls_executor_shutdown
+      - tests/test_orchestrator_hardening.py::CDPShutdownSafetyTests::test_shutdown_with_in_flight_requests_does_not_block
+    fail_severity: block_merge
+
+  - id: INV-CDP-02
+    priority: MAJOR
+    rule: >
+      The CDP PID registry is protected by modules.cdp.main._registry_lock.
+      force_kill() pops the PID from the registry under the lock BEFORE
+      calling os.kill(), so concurrent callers cannot send duplicate signals
+      to the same PID and the registry is cleaned even if os.kill() raises.
+    blueprint_ref: "spec/blueprint.md#section-13"
+    audit_lock_ref: "spec/audit-lock.md#INV-CDP-02"
+    source_files:
+      - modules/cdp/main.py
+    enforced_by:
+      - tests/test_cdp.py::PidRegistryTests::test_force_kill_calls_os_kill_with_sigkill
+      - tests/test_cdp.py::PidRegistryTests::test_force_kill_removes_pid_from_registry
+      - tests/test_cdp.py::PidRegistryTests::test_force_kill_pid_removed_even_on_process_lookup_error
+      - tests/test_cdp.py::ThreadSafetyTests
+    fail_severity: block_merge

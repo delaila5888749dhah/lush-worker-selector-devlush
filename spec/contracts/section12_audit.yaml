@@ -1,0 +1,108 @@
+section: 12
+title: "Billing Selection Audit Event"
+blueprint_ref: "spec/blueprint.md#section-12"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-AUDIT-01
+    priority: CRITICAL
+    rule: >
+      Exactly one structured audit event is emitted per successful
+      billing.select_profile() call inside run_payment_step(). The event is
+      logged at INFO level through the dedicated logger
+      "integration.orchestrator.audit" in the form
+      'billing_selection %s' % json.dumps(event).
+    blueprint_ref: "spec/blueprint.md#section-12"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_audit_event_emitted_on_successful_selection
+      - tests/test_orchestrator_p21_fork_log.py::ForkLogSuccessTest
+    fail_severity: block_merge
+
+  - id: INV-AUDIT-02
+    priority: CRITICAL
+    rule: >
+      Audit event schema is strict. Required fields: event_type (literal
+      "billing_selection"), worker_id (str), task_id (str | None),
+      selection_method (enum "zip_match" | "round_robin"), requested_zip
+      (str | None), profile_id (str), trace_id (str), timestamp_utc (ISO 8601
+      UTC).
+    blueprint_ref: "spec/blueprint.md#section-12"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_audit_event_schema
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_selection_method_zip_match_when_zip_provided
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_selection_method_round_robin_when_no_zip
+    fail_severity: block_merge
+
+  - id: INV-AUDIT-03
+    priority: CRITICAL
+    rule: >
+      profile_id is a SHA-256 hash of the string
+      "{first_name}|{last_name}|{profile.zip_code}". Raw PII (first_name,
+      last_name, address, phone, email) is NEVER serialized into the audit
+      event body and must not appear in any log line.
+    blueprint_ref: "spec/blueprint.md#section-12"
+    audit_lock_ref: "spec/audit-lock.md#INV-CDP-01"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_profile_id_is_anonymized
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_no_raw_pii_in_audit_event
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_make_profile_id_is_deterministic
+      - tests/test_no_pan_in_logs.py::NoPanInLogsTests::test_audit_event_no_pan
+    fail_severity: block_merge
+
+  - id: INV-AUDIT-04
+    priority: CRITICAL
+    rule: >
+      Audit event emission is non-interfering: an exception thrown by the
+      emission path (e.g. logger failure, profile_id hashing failure) must
+      NOT affect the selection result returned by run_payment_step(). The
+      orchestrator catches and logs a WARNING and continues normally.
+    blueprint_ref: "spec/blueprint.md#section-12"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_audit_event_failure_does_not_crash_payment
+    fail_severity: block_merge
+
+  - id: INV-CDP-01
+    priority: CRITICAL
+    rule: >
+      _sanitize_error(msg) redacts sensitive data from any error message
+      before it is logged or re-raised. Regex coverage: 16-digit PANs
+      (\b\d{16}\b), CVV tokens (cvv\s*=\s*\d{3,4}), and email addresses
+      (RFC-5321 subset). All redactions happen before the message reaches
+      any sink.
+    blueprint_ref: "spec/blueprint.md#section-12"
+    audit_lock_ref: "spec/audit-lock.md#INV-CDP-01"
+    source_files:
+      - modules/cdp/main.py
+    enforced_by:
+      - tests/test_cdp.py::SanitizeErrorTests
+      - tests/test_no_pan_in_logs.py::NoPanInLogsTests::test_full_cycle_emits_no_pan_in_logs
+      - tests/test_no_pan_in_logs.py::NoPanInLogsTests::test_telegram_caption_no_pan_only_masked
+    fail_severity: block_merge
+
+  - id: INV-AUDIT-05
+    priority: MAJOR
+    rule: >
+      selection_method is "zip_match" when the caller provides a non-empty
+      zip_code and billing.select_profile() returns successfully (a zip match
+      was attempted — regardless of whether a matching profile was actually
+      found, the caller signalled intent). It is "round_robin" when
+      zip_code is None or blank/whitespace.
+    blueprint_ref: "spec/blueprint.md#section-12"
+    source_files:
+      - integration/orchestrator.py
+      - modules/billing/main.py
+    enforced_by:
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_selection_method_zip_match_when_zip_provided
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_selection_method_round_robin_when_no_zip
+      - tests/test_integration.py::TestBillingSelectionAuditEvent::test_selection_method_round_robin_when_zip_is_empty
+      - tests/test_billing.py::ZipAffinityTests
+    fail_severity: block_merge

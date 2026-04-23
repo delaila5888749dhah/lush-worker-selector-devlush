@@ -1,0 +1,93 @@
+section: 14
+title: "Cross-Module Stabilization — Integration Lock"
+blueprint_ref: "spec/blueprint.md#section-14"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-INTEGRATION-01
+    priority: CRITICAL
+    rule: >
+      Concurrent rollback coordination: rollout._rollback_applied is set by
+      force_rollback() and cleared only when try_scale_up() advances the step.
+      Within a single scale-up window, at most one rollback decrement is
+      applied — subsequent callers (behavior path or autoscaler path) see the
+      flag set and return the current count idempotently.
+    blueprint_ref: "spec/blueprint.md#section-14"
+    source_files:
+      - modules/rollout/main.py
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_rollback_idempotent.py::TestRollbackIdempotent
+      - tests/test_cross_module_stabilization.py::TestConcurrentRollbackPreventsDoubleDecrement
+    fail_severity: block_merge
+
+  - id: INV-INTEGRATION-02
+    priority: MAJOR
+    rule: >
+      Rollback circuit breaker (behavior-triggered, 3 consecutive rollbacks →
+      pause 300s, log action "circuit_breaker_triggered") and billing circuit
+      breaker (_consecutive_billing_failures → pause 120s, log action
+      "billing_cb_triggered") are independent: both can fire simultaneously
+      without interacting, and operators distinguish them by the log action
+      name.
+    blueprint_ref: "spec/blueprint.md#section-14"
+    source_files:
+      - modules/rollout/main.py
+      - modules/rollout/autoscaler.py
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_circuit_breakers_independent.py::TestCircuitBreakersIndependent
+      - tests/test_cross_module_stabilization.py::TestCircuitBreakerObservability
+    fail_severity: block_merge
+
+  - id: INV-INTEGRATION-03
+    priority: MAJOR
+    rule: >
+      Metrics-unavailable degraded path (cross-reference of INV-RUNTIME-06):
+      when monitor.get_metrics() raises, the scaling tick logs action
+      "metrics_unavailable_scaling_deferred" — distinct from "hold" (normal
+      HOLD) and "hold_deferred" (unsafe worker state). Loop continues; scaling
+      is deferred to the next tick.
+    blueprint_ref: "spec/blueprint.md#section-14"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_cross_module_stabilization.py::TestMetricsUnavailableObservability
+      - tests/test_runtime_safety.py::TestMetricsUnavailableLogging::test_metrics_unavailable_logs_deferred
+    fail_severity: block_merge
+
+  - id: INV-INTEGRATION-04
+    priority: MAJOR
+    rule: >
+      Integration chain observability: for every decision window the chain
+      monitor.get_metrics() → behavior.evaluate() → rollout.try_scale_up() /
+      force_rollback() → runtime._apply_scale() emits a distinct log action,
+      and rollout step index + runtime worker count stay in sync via
+      _apply_scale().
+    blueprint_ref: "spec/blueprint.md#section-14"
+    source_files:
+      - integration/runtime.py
+      - modules/rollout/main.py
+    enforced_by:
+      - tests/test_cross_module_stabilization.py::TestFullIntegrationChainConsistency
+      - tests/test_scaling_execution.py::TestDecisionRouting
+      - tests/test_scaling_execution.py::TestLifecycleIntegrity
+    fail_severity: block_merge
+
+  - id: INV-INTEGRATION-05
+    priority: CRITICAL
+    rule: >
+      Repository rule A1: no cross-module imports between `modules/*`
+      subpackages are allowed except through `modules.common`. CI enforces
+      this via ci/check_import_scope.py and the PR-scope gate in
+      ci/check_pr_scope.py; any new module-to-module dependency must be
+      refactored through modules.common.
+    blueprint_ref: "spec/blueprint.md#section-14"
+    source_files:
+      - ci/check_import_scope.py
+      - ci/check_pr_scope.py
+    enforced_by:
+      - tests/test_check_pr_scope.py::ModuleFromPathTests
+      - tests/test_check_pr_scope.py::CheckTests
+    fail_severity: block_merge

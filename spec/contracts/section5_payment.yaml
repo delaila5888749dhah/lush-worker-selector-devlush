@@ -1,0 +1,214 @@
+section: 5
+title: "Bơm Dữ Liệu Thanh Toán"
+blueprint_ref: "spec/blueprint.md#section-5"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-PAYMENT-01
+    priority: CRITICAL
+    rule: >
+      Total Watchdog must enable CDP Network (Network.enable) and listen to
+      Network.responseReceived BEFORE filling any payment field. A 10-second
+      timeout without a valid total response must raise SessionFlaggedError so
+      the session is closed and a fresh one is started.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - modules/watchdog/main.py
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_total_watchdog_payment_10s.py::TestPaymentWatchdogTimeout::test_payment_step_uses_10s_timeout
+      - tests/test_total_watchdog_payment_10s.py::TestPaymentWatchdogTimeout::test_timeout_raises_SessionFlaggedError
+      - tests/test_watchdog.py::WatchdogTests::test_wait_for_total_timeout_raises_session_flagged_error
+    fail_severity: block_merge
+
+  - id: INV-PAYMENT-02
+    priority: CRITICAL
+    rule: >
+      Billing pool profile selection: when a matching zip is found in
+      billing_list, return that profile WITHOUT advancing the worker pointer
+      (zip match does not consume pointer). When no zip match exists, fall back
+      to sequential round-robin which advances the pointer.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - modules/billing/main.py
+    enforced_by:
+      - tests/test_billing.py::ZipAffinityTests::test_same_zip_rotates_across_matching_profiles
+      - tests/test_billing.py::ZipAffinityTests::test_non_zip_round_robin_unaffected
+      - tests/test_billing.py::ZipAffinityTests::test_zip_match_mixed_with_non_match
+    fail_severity: block_merge
+
+  - id: INV-PAYMENT-03
+    priority: CRITICAL
+    rule: >
+      Billing profile (name, address, phone, email) is frozen for the full
+      cycle lifetime. Only payment card fields (PAN, CVV, expiry) change when
+      the orchestrator swaps cards at Ngã rẽ 3/4.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - integration/orchestrator.py
+      - integration/worker_task.py
+    enforced_by:
+      - tests/test_integration.py::WorkerTaskFrozenTests
+      - tests/test_integration.py::RunCycleTests
+    fail_severity: block_merge
+
+  - id: INV-PAYMENT-04
+    priority: CRITICAL
+    rule: >
+      Billing selection is per-worker: each worker_id maintains its own
+      shuffled list + index pointer (no cross-worker contamination). When
+      worker_id is None, a global shared deque is used for legacy callers.
+      All state mutation is guarded by a module-level lock.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - modules/billing/main.py
+    enforced_by:
+      - tests/test_billing_concurrent.py::ColdStartConcurrentTests::test_cold_start_concurrent_load
+      - tests/test_billing_concurrent.py::ColdStartConcurrentTests::test_concurrent_rotation_no_corruption
+      - tests/test_billing_concurrent.py::ColdStartConcurrentTests::test_concurrent_zip_match_no_corruption
+      - tests/test_billing.py::ZipAffinityTests::test_concurrent_same_zip_gets_different_profiles
+    fail_severity: block_merge
+
+  - id: INV-PAYMENT-05
+    priority: CRITICAL
+    rule: >
+      4x4 card typing rule: the card number field (#cws_txt_ccNum, 16 digits)
+      is typed in 4-digit groups with a random pause of 0.6s–1.8s between
+      groups, simulating the "look-think-type" human rhythm.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - modules/cdp/keyboard.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_4x4_pattern_wired.py::Test4x4PatternWired::test_card_number_fill_invokes_4x4_delays
+      - tests/test_keyboard.py::TestTypeValueBurstDelays
+    fail_severity: block_merge
+
+  - id: INV-PAYMENT-06
+    priority: MAJOR
+    rule: >
+      After filling CVV (#cws_txt_ccCvv), the cursor must linger around the
+      COMPLETE PURCHASE button (#cws_btn_checkoutPay) for a random 3–5 seconds
+      (hesitation) before the click is dispatched.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - modules/cdp/driver.py
+      - modules/delay/engine.py
+    enforced_by:
+      - tests/test_hesitation_range.py::TestHesitationRange::test_hesitation_duration_within_3_to_5s
+    fail_severity: block_merge
+
+  - id: INV-WATCHDOG-01
+    priority: CRITICAL
+    rule: >
+      Total Watchdog state is keyed by worker_id in a per-worker registry
+      (dict[worker_id → _WatchdogSession]). There must be no cross-worker
+      contamination when 10+ workers run concurrently, and registry access is
+      serialized by an internal lock so notify_total/enable/reset are safe to
+      call from any thread (including CDP network callback threads).
+    blueprint_ref: "spec/blueprint.md#section-5"
+    audit_lock_ref: "spec/audit-lock.md#INV-WATCHDOG-01"
+    source_files:
+      - modules/watchdog/main.py
+    enforced_by:
+      - tests/test_watchdog.py::WatchdogTests::test_different_workers_are_isolated
+      - tests/test_watchdog.py::WatchdogTests::test_worker_isolation_notify_does_not_cross_workers
+      - tests/test_watchdog.py::WatchdogTests::test_concurrent_enable_does_not_delete_new_session
+      - tests/test_watchdog.py::WatchdogTests::test_event_wait_is_outside_registry_lock
+    fail_severity: block_merge
+
+  - id: INV-WATCHDOG-02
+    priority: CRITICAL
+    rule: >
+      notify_total(worker_id, value) is the single public API through which CDP
+      network callbacks deliver the total-value signal to the watchdog. It is
+      a no-op when no session is active for the given worker_id (no KeyError,
+      no exception propagation) so late callbacks after reset are harmless.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    audit_lock_ref: "spec/audit-lock.md#INV-WATCHDOG-02"
+    source_files:
+      - modules/watchdog/main.py
+    enforced_by:
+      - tests/test_watchdog.py::WatchdogTests::test_notify_total_before_wait
+      - tests/test_watchdog.py::WatchdogTests::test_notify_total_from_another_thread
+      - tests/test_watchdog.py::WatchdogTests::test_notify_total_noop_for_unknown_worker
+      - tests/test_watchdog.py::WatchdogTests::test_stale_notify_from_thread_after_reset_is_harmless
+    fail_severity: block_merge
+
+  - id: INV-ORCHESTRATOR-03
+    priority: CRITICAL
+    rule: >
+      First-notify-wins: when both the CDP network listener and the DOM
+      fallback race to notify the same (worker_id, cycle), only the first call
+      is applied to session.total_value. The second call is skipped silently
+      under _network_listener_lock protection so total_value cannot be
+      overwritten mid-cycle.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    audit_lock_ref: "spec/audit-lock.md#INV-ORCHESTRATOR-03"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_hardening.py::DualNotifyGuardTests::test_first_notify_wins_second_skipped
+      - tests/test_orchestrator_hardening.py::DualNotifyGuardTests::test_first_notify_wins_different_workers_independent
+      - tests/test_orchestrator_hardening.py::DualNotifyGuardTests::test_guard_cleared_on_new_cycle
+      - tests/test_orchestrator_hardening.py::DualNotifyGuardTests::test_concurrent_callbacks_only_notify_once
+    fail_severity: block_merge
+
+  - id: INV-ORCHESTRATOR-04
+    priority: CRITICAL
+    rule: >
+      Submitted-state crash safety: the task_id must be added to the submitted
+      set (persisted to disk via mark_submitted) BEFORE the orchestrator calls
+      wait_for_total on the post-submit watchdog. On reload, if the submitted
+      set is non-empty, a WARNING is emitted to signal possible crash recovery,
+      and a post-submission timeout logs a distinct "AFTER payment submission"
+      message.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    audit_lock_ref: "spec/audit-lock.md#INV-ORCHESTRATOR-04"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_hardening.py::SubmittedStateCrashRecoveryTests::test_submitted_state_persists_to_disk
+      - tests/test_orchestrator_hardening.py::SubmittedStateCrashRecoveryTests::test_submitted_state_survives_restart
+      - tests/test_orchestrator_hardening.py::SubmittedStateCrashRecoveryTests::test_submitted_state_blocks_reexecution_after_reload
+      - tests/test_orchestrator_hardening.py::SubmittedStateCrashRecoveryTests::test_crash_recovery_log_emitted_when_submitted_found
+      - tests/test_orchestrator_hardening.py::PostSubmissionTimeoutObservabilityTests::test_post_submission_timeout_logs_distinct_message
+      - tests/test_unconfirmed_idempotency.py::WatchdogTimeoutAfterSubmitWiringTests
+    fail_severity: block_merge
+
+  - id: INV-REDIS-01
+    priority: CRITICAL
+    rule: >
+      Redis idempotency store failure semantics: is_duplicate() returns True
+      on Redis failure (fail-safe to avoid double-charge); mark_submitted()
+      re-raises on failure (caller must not proceed); mark_completed() logs a
+      WARNING but never re-raises (completion is informational only).
+    blueprint_ref: "spec/blueprint.md#section-5"
+    audit_lock_ref: "spec/audit-lock.md#INV-REDIS-01"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_orchestrator_hardening.py::RedisIdempotencyStoreSemanticTests::test_is_duplicate_redis_failure_is_fail_safe
+      - tests/test_orchestrator_hardening.py::RedisIdempotencyStoreSemanticTests::test_is_duplicate_redis_failure_logs_error
+      - tests/test_orchestrator_hardening.py::RedisIdempotencyStoreSemanticTests::test_mark_submitted_redis_failure_reraises
+      - tests/test_orchestrator_hardening.py::RedisIdempotencyStoreSemanticTests::test_mark_completed_redis_failure_does_not_reraise
+      - tests/test_orchestrator_hardening.py::RedisIdempotencyStoreSemanticTests::test_mark_completed_redis_failure_logs_warning
+    fail_severity: block_merge
+
+  - id: INV-PAYMENT-07
+    priority: MAJOR
+    rule: >
+      Guest Checkout flow: from the shopping-cart page the bot clicks BEGIN
+      CHECKOUT (#cws_btn_cartCheckout), fills Guest Email (#cws_txt_guestEmail),
+      and clicks CONTINUE (#cws_btn_guestChkout), which transitions to the
+      guest payment URL (…/guest/payment.html). The sequence and selector list
+      must follow the blueprint verbatim.
+    blueprint_ref: "spec/blueprint.md#section-5"
+    source_files:
+      - integration/orchestrator.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_integration.py::RunPaymentStepTests
+      - tests/test_e2e_integration.py
+    fail_severity: block_merge
