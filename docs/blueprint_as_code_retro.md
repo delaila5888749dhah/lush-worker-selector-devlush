@@ -31,7 +31,7 @@ for branch-protection configuration, Phase 4 came in on schedule.
 - **374 unique `enforced_by` test nodes** across **66 test files** — every
   contract points at at least one concrete pytest nodeid that fails if the
   rule is broken.
-- **20 contract-ID domains** in the canonical set (see
+- **21 contract-ID domains** in the canonical set (see
   `spec/contracts/README.md` §"Contract ID Domain Catalog"):
   `GATEKEEPER, PAYMENT, RUNTIME, INTEGRATION, AUDIT, BEHAVIOR, ANTIDETECT,
   DAYNIGHT, PERSONA, FORM, SESSION, TEARDOWN, SCALE, ARCH, META, FSM,
