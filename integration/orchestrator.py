@@ -1299,13 +1299,90 @@ def clear_refill_after_thank_you_popup(driver, new_card) -> None:
         )
 
 
-def is_payment_page_reloaded(driver) -> bool:
-    """True if billing field is missing/empty after VBV cancel."""
+def _payment_url_matches(current: str, canonical: str) -> bool:
+    """Compare a current URL against :data:`URL_PAYMENT`.
+
+    Matches on scheme, host (case-insensitive) and path only — query string
+    and fragment are intentionally ignored so benign cache-busters or
+    post-VBV markers (e.g. ``?t=123``) still count as the canonical
+    payment page. A trailing slash on either path is normalised away.
+    """
+    if not current or not canonical:
+        return False
     try:
+        from urllib.parse import urlsplit  # noqa: PLC0415
+
+        cur = urlsplit(current)
+        can = urlsplit(canonical)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        return False
+
+    def _norm_path(p: str) -> str:
+        return p.rstrip("/") if p not in ("", "/") else p
+
+    return (
+        cur.scheme.lower() == can.scheme.lower()
+        and cur.netloc.lower() == can.netloc.lower()
+        and _norm_path(cur.path) == _norm_path(can.path)
+    )
+
+
+def is_payment_page_reloaded(driver, *, check_billing_empty: bool = False) -> bool:
+    """Return True when the browser is back on the canonical payment page.
+
+    Primary signal is a direct match of ``driver.current_url`` against the
+    canonical :data:`~modules.cdp.driver.URL_PAYMENT` (scheme + host + path,
+    ignoring query / fragment). This replaces the prior billing-field-empty
+    heuristic, which suffered from
+
+    - *false negatives* — stale billing value left in the DOM after a VBV
+      cancel reload caused the function to return False and skip the refill,
+      creating a double-charge risk on the next retry; and
+    - *false positives* — a missing billing selector (e.g. during a page
+      transition to an unrelated route) caused the function to return True
+      and trigger a refill on the wrong page.
+
+    The billing-empty heuristic is preserved as an opt-in belt-and-suspenders
+    check via ``check_billing_empty=True``: when enabled, *both* the URL
+    match *and* an empty billing field are required before returning True.
+
+    Args:
+        driver: Selenium-compatible driver exposing ``current_url`` and
+            (when ``check_billing_empty`` is True) ``find_elements``.
+        check_billing_empty: If True, additionally require the billing
+            address field to be missing or empty. Defaults to False —
+            URL match alone is authoritative.
+
+    Returns:
+        bool: True when the driver is on the canonical payment page (and,
+        when requested, also has an empty billing field). On unexpected
+        errors reading the URL, returns True to stay on the conservative
+        side (skipping a refill is the worse failure mode — double-charge).
+    """
+    try:
+        from modules.cdp.driver import URL_PAYMENT  # noqa: PLC0415
+
+        try:
+            current = driver.current_url
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            # current_url briefly unavailable during page transition —
+            # conservative: assume reloaded so we refill rather than skip.
+            return True
+
+        if not _payment_url_matches(current or "", URL_PAYMENT):
+            return False
+
+        if not check_billing_empty:
+            return True
+
+        # Opt-in legacy heuristic: URL matches AND billing field empty.
         from modules.cdp.driver import SEL_BILLING_ADDRESS  # noqa: PLC0415
-        elements = driver.find_elements(SEL_BILLING_ADDRESS)
+        try:
+            elements = driver.find_elements(SEL_BILLING_ADDRESS)
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            return True
         return not elements or not elements[0].get_attribute("value")
-    except Exception:
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
         return True
 
 
