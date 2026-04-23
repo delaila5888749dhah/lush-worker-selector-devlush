@@ -10,8 +10,8 @@
 
 ### INV-FSM-01 — ALLOWED_STATES Synchronization
 ```
-ALLOWED_STATES (modules/fsm/main.py:6) == set(_FSM_STATES) (integration/orchestrator.py:17)
-Value: {"ui_lock", "success", "vbv_3ds", "declined"}
+ALLOWED_STATES (modules/fsm/main.py:18) == set(_FSM_STATES) (integration/orchestrator.py:38)
+Value: {"ui_lock", "success", "vbv_3ds", "declined", "vbv_cancelled"}
 ```
 **Rule:** Adding or removing an FSM state requires updating BOTH files simultaneously AND incrementing the spec version. A regression test (`test_fsm_allowed_states_sync`) enforces this at CI level.
 

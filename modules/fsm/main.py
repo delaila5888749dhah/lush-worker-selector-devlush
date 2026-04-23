@@ -15,18 +15,22 @@ from modules.common.types import State
 
 _logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined"}
+ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined", "vbv_cancelled"}
 
 _VALID_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
     "ui_lock": {"success", "declined", "vbv_3ds"},
-    "vbv_3ds": {"success", "declined"},
+    "vbv_3ds": {"success", "declined", "vbv_cancelled"},
     "success": set(),
     "declined": set(),
+    "vbv_cancelled": set(),
 }
 
 # States from which no further transitions are permitted.  Workers that have
 # reached a terminal state must not be advanced by late callbacks or retries.
-TERMINAL_STATES: frozenset = frozenset({"success", "declined"})
+# `vbv_cancelled` is terminal at the FSM layer — card-swap/refill is handled
+# by the orchestrator (`handle_outcome`) at a higher level, not via an FSM
+# transition.
+TERMINAL_STATES: frozenset = frozenset({"success", "declined", "vbv_cancelled"})
 
 # Per-worker registry: worker_id → {"states": {}, "current": None}
 _registry: dict[str, dict] = {}

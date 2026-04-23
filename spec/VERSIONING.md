@@ -47,13 +47,16 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/core/interface.md` | 7.0 | 2026-04-21 |
 | `spec/integration/interface.md` | 7.0 | 2026-04-21 |
 | `spec/interface.md` (aggregated) | 7.0 | 2026-04-21 |
-| `spec/fsm.md` | 1.0 | 2026-04-01 |
+| `spec/fsm.md` | 1.1 | 2026-04-23 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
 | `spec/deployment.md` | 1.0 | 2026-04-04 |
 | `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v1.1 (2026-04-23) — ADDITIVE (spec/fsm.md)
+- `spec/fsm.md`: Added `vbv_cancelled` to `ALLOWED_STATES` and `TERMINAL_STATES`; added transition `vbv_3ds → vbv_cancelled`. Aligns FSM whitelist with existing orchestrator usage in `handle_outcome` (no runtime error before, pure tech-debt fix).
 
 ### v7.0 (2026-04-21) — BREAKING
 - Added `CDPError` exception type to `modules.common.exceptions` (plain `Exception` subclass)

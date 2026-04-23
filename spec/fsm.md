@@ -1,26 +1,29 @@
 # FSM Specification
 
-spec-version: 1.0
+spec-version: 1.1
 
 ## ALLOWED_STATES (Tập đóng)
 - ui_lock
 - success
 - vbv_3ds
 - declined
+- vbv_cancelled
 
 ## State Semantics
-| State     | Mô tả                                                          | Terminal? |
-|-----------|----------------------------------------------------------------|-----------|
-| ui_lock   | Form đơ, cần focus-shift retry                                 | No        |
-| success   | Đơn hàng thành công, URL → /confirmation                       | Yes       |
-| vbv_3ds   | Iframe 3D-Secure xuất hiện                                     | No        |
-| declined  | Giao dịch bị từ chối — terminal cho worker này                 | Yes       |
+| State         | Mô tả                                                          | Terminal? |
+|---------------|----------------------------------------------------------------|-----------|
+| ui_lock       | Form đơ, cần focus-shift retry                                 | No        |
+| success       | Đơn hàng thành công, URL → /confirmation                       | Yes       |
+| vbv_3ds       | Iframe 3D-Secure xuất hiện                                     | No        |
+| declined      | Giao dịch bị từ chối — terminal cho worker này                 | Yes       |
+| vbv_cancelled | Người dùng/bank hủy challenge 3DS — terminal cho worker này    | Yes       |
 
 ## Transitions (Runtime — Phase 3+)
-- ui_lock  → success | vbv_3ds | declined
-- vbv_3ds  → declined | success
-- success  → terminal — no outgoing transitions
-- declined → terminal — no outgoing transitions; card swap handled at orchestration level
+- ui_lock       → success | vbv_3ds | declined
+- vbv_3ds       → declined | success | vbv_cancelled
+- success       → terminal — no outgoing transitions
+- declined      → terminal — no outgoing transitions; card swap handled at orchestration level
+- vbv_cancelled → terminal — no outgoing transitions; card swap + page-reload refill handled at orchestration level (`handle_outcome`)
 
 ## Worker Initialization Rule
 - `transition_for_worker()` requires the worker to be initialized via `initialize_for_worker()` first.
@@ -28,7 +31,7 @@ spec-version: 1.0
 - This rule applies regardless of the target state.
 
 ## Terminal-State Integrity
-- Workers in terminal states (`success`, `declined`) cannot be transitioned further.
+- Workers in terminal states (`success`, `declined`, `vbv_cancelled`) cannot be transitioned further.
 - Any attempt to transition a worker already in a terminal state raises `ValueError` with message
   `"Invalid transition from <terminal> to <target>: '<terminal>' is a terminal state"`.
 - Terminal-state protection is enforced inside the registry lock to prevent race conditions
@@ -57,4 +60,12 @@ spec-version: 1.0
 - After reset, transition_to will raise InvalidTransitionError
 - Thread-safe via Lock
 - Legacy global API: deprecated; use per-worker API for production multi-worker usage
+
+## Changelog
+
+### v1.1 (2026-04-23) — ADDITIVE
+- Added `vbv_cancelled` to `ALLOWED_STATES` (terminal state).
+- Added legal transition `vbv_3ds → vbv_cancelled`.
+- Added `vbv_cancelled` to `TERMINAL_STATES`; no outgoing transitions permitted.
+- Card-swap + page-reload refill semantics are handled at orchestration level (`handle_outcome`), not inside the FSM.
 

@@ -110,11 +110,11 @@ class FSMTransitionGraphTests(unittest.TestCase):
 
     def test_none_to_any_allowed_state(self):
         """First transition from None accepts any ALLOWED_STATE."""
-        for state_name in ("ui_lock", "success", "vbv_3ds", "declined"):
+        for state_name in ALLOWED_STATES:
             cleanup_worker(_WID)
             initialize_for_worker(_WID)
-            s = transition_for_worker(_WID, state_name)
-            self.assertEqual(s.name, state_name)
+            state = transition_for_worker(_WID, state_name)
+            self.assertEqual(state.name, state_name)
 
     def test_uninitialized_worker_raises_explicit_invalid_transition_error(self):
         """Uninitialized workers must fail with the dedicated guard message."""
@@ -171,6 +171,48 @@ class FSMTransitionGraphTests(unittest.TestCase):
         self.assertEqual(
             str(ctx.exception),
             "Invalid transition from declined to ui_lock: 'declined' is a terminal state",
+        )
+
+    # ── vbv_cancelled (terminal state) ──────────────────────────
+
+    def test_valid_flow_vbv_3ds_to_vbv_cancelled(self):
+        """None -> vbv_3ds -> vbv_cancelled must succeed (user/bank aborts 3DS)."""
+        transition_for_worker(_WID, "vbv_3ds")
+        state = transition_for_worker(_WID, "vbv_cancelled")
+        self.assertEqual(state.name, "vbv_cancelled")
+
+    def test_invalid_ui_lock_to_vbv_cancelled(self):
+        """vbv_cancelled is only reachable from vbv_3ds."""
+        transition_for_worker(_WID, "ui_lock")
+        with self.assertRaises(ValueError) as ctx:
+            transition_for_worker(_WID, "vbv_cancelled")
+        self.assertIn(
+            "Invalid transition from ui_lock to vbv_cancelled",
+            str(ctx.exception),
+        )
+
+    def test_invalid_vbv_cancelled_to_success(self):
+        """vbv_cancelled is terminal; no outgoing transitions."""
+        transition_for_worker(_WID, "vbv_3ds")
+        transition_for_worker(_WID, "vbv_cancelled")
+        with self.assertRaises(ValueError) as ctx:
+            transition_for_worker(_WID, "success")
+        self.assertEqual(
+            str(ctx.exception),
+            "Invalid transition from vbv_cancelled to success: "
+            "'vbv_cancelled' is a terminal state",
+        )
+
+    def test_invalid_vbv_cancelled_to_declined(self):
+        """vbv_cancelled is terminal; cannot move to declined either."""
+        transition_for_worker(_WID, "vbv_3ds")
+        transition_for_worker(_WID, "vbv_cancelled")
+        with self.assertRaises(ValueError) as ctx:
+            transition_for_worker(_WID, "declined")
+        self.assertEqual(
+            str(ctx.exception),
+            "Invalid transition from vbv_cancelled to declined: "
+            "'vbv_cancelled' is a terminal state",
         )
 
 
