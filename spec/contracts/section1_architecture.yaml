@@ -1,0 +1,135 @@
+section: 1
+title: "Kiến trúc lõi & Cấu hình hệ thống"
+blueprint_ref: "spec/blueprint.md#section-1"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-SCALE-01
+    priority: CRITICAL
+    rule: >
+      SCALE_STEPS is derived at runtime from MAX_WORKER_COUNT (default 10,
+      range 1–50) in modules/rollout/main.py. The derived tuple must be
+      strictly ascending, start with `SCALE_STEPS[0] == 1`, end with
+      `SCALE_STEPS[-1] == MAX_WORKER_COUNT`, and every element must satisfy
+      `s <= MAX_WORKER_COUNT`. The canonical prefix (1, 3, 5, 10) is filtered
+      to values strictly below the cap, decade steps (20, 50, 100, 200, 500, …)
+      are inserted for caps above 10, and the cap itself is always the last
+      step. Rollout never exceeds the configured cap.
+    blueprint_ref: "spec/blueprint.md#section-1"
+    audit_lock_ref: "spec/audit-lock.md#INV-SCALE-01"
+    source_files:
+      - modules/rollout/main.py
+    enforced_by:
+      - tests/test_rollout.py::TestScaleSteps::test_scale_steps_are_ascending
+      - tests/test_rollout.py::TestScaleSteps::test_scale_steps_start_at_one
+      - tests/test_rollout.py::TestScaleSteps::test_scale_steps_end_at_max_worker_count
+      - tests/test_rollout.py::TestScaleSteps::test_scale_steps_bounded_by_cap
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_one_caps_at_one
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_two_caps_at_two
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_four_caps_at_four
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_seven_caps_at_seven
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_twelve_extends_past_default
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_50_extends_steps_to_50
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_100_extends_steps_to_100
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_500_extends_steps_across_decades
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_steps_strictly_ascending_for_large_cap
+      - tests/test_rollout.py::TestMaxWorkerCountEnvRollout::test_rollout_never_exceeds_configured_cap
+      - tests/test_max_worker_count_cap.py::TestMaxWorkerCountCap::test_runtime_never_exceeds_cap
+      - tests/test_max_worker_count_cap.py::TestMaxWorkerCountCap::test_apply_scale_clamps_above_cap_and_logs_warning
+    fail_severity: block_merge
+
+  - id: INV-ARCH-01
+    priority: MAJOR
+    rule: >
+      Stagger Start: WorkerPool inserts a randomised inter-launch delay
+      drawn from `random.uniform(12, 25)` seconds between successive worker
+      launches (no stagger applied before the very first launch). The delay
+      must be interruptible by the pool stop event so shutdown is prompt.
+    blueprint_ref: "spec/blueprint.md#section-1"
+    source_files:
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_stagger_start.py::TestStaggerStart::test_first_launch_no_stagger
+      - tests/test_stagger_start.py::TestStaggerStart::test_inter_launch_delay_within_12_25
+      - tests/test_stagger_start.py::TestStaggerStart::test_stagger_interruptible_by_stop_event
+      - tests/test_stagger_start.py::TestStaggerStart::test_stagger_thread_safe
+    fail_severity: block_merge
+
+  - id: INV-ARCH-02
+    priority: MAJOR
+    rule: >
+      Proxy management: static SOCKS5/HTTP proxies are mapped 1-to-1 with
+      BitBrowser profiles. Each worker acquires its proxy+profile pair
+      out-of-band (provisioned list); the system MUST NEVER auto-call a
+      9Proxy (or similar) API to fetch proxies at runtime. Unique profile_id
+      per worker and unique proxy per worker are guaranteed by
+      `ProxyPool.acquire()` and the BitBrowser client round-trip.
+    blueprint_ref: "spec/blueprint.md#section-1"
+    source_files:
+      - modules/cdp/fingerprint.py
+      - modules/cdp/proxy.py
+    enforced_by:
+      - tests/test_fingerprint.py::BitBrowserClientTests::test_round_trip_create_launch_close_delete
+      - tests/test_fingerprint.py::BitBrowserClientTests::test_two_workers_get_two_different_profile_ids
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_session_create_register_release_sequence
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_register_driver_called_after_create_browser
+    fail_severity: warn
+    notes: >
+      The "NEVER auto-call 9Proxy API" clause is a negative invariant —
+      no existing unit test asserts the absence of 9Proxy calls directly.
+      A repository-wide grep on 2026-04-23 confirmed zero 9Proxy references
+      under `modules/` and `integration/`. Positive-path coverage
+      (1-to-1 profile↔proxy mapping, pool-based acquisition, per-worker
+      uniqueness) is supplied by the tests above. This duplicates the
+      §9 INV-ANTIDETECT-01 precedent where the same clause was tracked
+      as warn. Upgrading to block_merge would require either
+      (a) a static import-graph test that proves no 9Proxy module is
+      imported, or (b) an E2E harness assertion that ProxyPool is the
+      sole supplier of proxies across a full cycle.
+
+  - id: INV-ARCH-03
+    priority: CRITICAL
+    rule: >
+      Repository rule A1 (architectural locality): `modules/*` subpackages
+      must NOT import across each other; the only permitted cross-cutting
+      package is `modules.common`. CI enforces the rule via
+      `ci/check_import_scope.py` (AST walk of changed files) and the
+      PR-scope gate in `ci/check_pr_scope.py` (module-count limit). Any new
+      module-to-module dependency must be refactored through
+      `modules.common`.
+    blueprint_ref: "spec/blueprint.md#section-1"
+    source_files:
+      - ci/check_import_scope.py
+      - ci/check_pr_scope.py
+    enforced_by:
+      - tests/test_check_pr_scope.py::ModuleFromPathTests::test_module_path
+      - tests/test_check_pr_scope.py::ModuleFromPathTests::test_non_module_path
+      - tests/test_check_pr_scope.py::ModuleFromPathTests::test_bare_modules
+      - tests/test_check_pr_scope.py::CheckTests::test_fail_multiple_modules
+      - tests/test_check_pr_scope.py::CheckTests::test_single_module_pass
+    fail_severity: block_merge
+
+  - id: INV-ARCH-04
+    priority: MAJOR
+    rule: >
+      MAX_WORKER_COUNT configuration: default is 10; invalid values
+      (non-integer, missing, `<= 0`, or out of the accepted 1–50 range at
+      configure time) fall back to the default with a warning log — the
+      runtime NEVER crashes on malformed MAX_WORKER_COUNT and NEVER runs
+      above the documented cap range.
+    blueprint_ref: "spec/blueprint.md#section-1"
+    source_files:
+      - modules/rollout/main.py
+      - integration/runtime.py
+    enforced_by:
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_default_behavior_unchanged_when_env_unset
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_default_behavior_unchanged_when_env_empty
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_invalid_falls_back_to_default
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_zero_falls_back_to_default
+      - tests/test_rollout.py::TestMaxWorkerCountEnvParsing::test_env_negative_falls_back_to_default
+      - tests/test_rollout.py::TestConfigureMaxWorkers::test_configure_rejects_out_of_range
+      - tests/test_rollout.py::TestConfigureMaxWorkers::test_configure_rejects_non_int
+      - tests/test_max_worker_count_cap.py::TestMaxWorkerCountCap::test_validate_startup_config_rejects_invalid_max_worker_count
+      - tests/test_max_worker_count_cap.py::TestMaxWorkerCountCap::test_validate_startup_config_accepts_valid_pairs
+    fail_severity: block_merge

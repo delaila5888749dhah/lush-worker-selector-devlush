@@ -1,0 +1,72 @@
+section: 7
+title: "Rút Lui & Xoay Vòng"
+blueprint_ref: "spec/blueprint.md#section-7"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-TEARDOWN-01
+    priority: MAJOR
+    rule: >
+      End-of-cycle teardown: when a cycle ends (Success or exhausted queue)
+      the BitBrowser session's `__exit__` path must close the browser, clear
+      cookies/cache at the browser level, and reset the BitBrowser profile
+      to a clean state — all best-effort so cleanup errors during the exit
+      path never propagate to the caller and never prevent the worker from
+      starting the next cycle. The browser-state clear executed twice per
+      cycle (pre-URL_BASE and post-URL_EGIFT in `navigate_to_egift`) already
+      guarantees cookies/localStorage/sessionStorage are wiped.
+    blueprint_ref: "spec/blueprint.md#section-7"
+    source_files:
+      - modules/cdp/fingerprint.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_fingerprint.py::BitBrowserSessionTests::test_exit_cleanup_errors_do_not_propagate
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_release_called_on_success
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_release_called_on_exception
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_release_profile_idempotent
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_release_before_enter_marks_released
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_clears_browser_state_twice
+    fail_severity: block_merge
+
+  - id: INV-TEARDOWN-02
+    priority: MAJOR
+    rule: >
+      Worker return to OrderQueue head: after teardown the worker
+      unregisters its driver and profile id and is ready to accept a new
+      task from the head of the OrderQueue and start a fresh cycle from
+      §0 (Input & Worker init). Unregister must run on success, on
+      RuntimeError, on SessionFlaggedError, and on ValueError — the
+      BitBrowser close() path runs on every exit branch — so the next
+      cycle never inherits stale driver or profile registrations.
+    blueprint_ref: "spec/blueprint.md#section-7"
+    source_files:
+      - integration/worker_task.py
+    enforced_by:
+      - tests/test_worker_task.py::TestMakeTaskFnSuccess::test_unregister_driver_called_on_success
+      - tests/test_worker_task.py::TestMakeTaskFnSuccess::test_register_before_unregister
+      - tests/test_worker_task.py::TestMakeTaskFnExceptionPath::test_unregister_called_on_runtime_error
+      - tests/test_worker_task.py::TestMakeTaskFnExceptionPath::test_unregister_called_on_session_flagged_error
+      - tests/test_worker_task.py::TestMakeTaskFnExceptionPath::test_unregister_called_on_value_error
+      - tests/test_worker_task.py::TestMakeTaskFnBitBrowserLifecycle::test_bitbrowser_client_called_in_lifecycle_order
+      - tests/test_worker_task.py::TestMakeTaskFnBitBrowserLifecycle::test_bitbrowser_close_called_even_on_exception
+      - tests/test_worker_task_abort.py::TestAbortCycleReturn::test_abort_cycle_return_releases_profile_and_no_retry
+    fail_severity: block_merge
+
+  - id: INV-TEARDOWN-03
+    priority: MINOR
+    rule: >
+      Swap counter reset on new cycle: the per-worker swap counter — which
+      enforces the maximum number of card swaps within a single cycle —
+      is reset to zero at the start of every new cycle so that stale swap
+      counts from the previous cycle never cause an early-abort in the
+      new one.
+    blueprint_ref: "spec/blueprint.md#section-7"
+    source_files:
+      - integration/orchestrator.py
+    enforced_by:
+      - tests/test_swap_counter.py::TestSwapCounter::test_swap_counter_resets_on_new_cycle
+      - tests/test_swap_counter.py::TestSwapCounter::test_can_swap_returns_true_when_under_limit
+      - tests/test_swap_counter.py::TestSwapCounter::test_record_swap_increments
+      - tests/test_swap_counter.py::TestSwapCounter::test_swap_counter_shared_across_vbv_and_decline
+    fail_severity: warn

@@ -1,0 +1,92 @@
+section: 2
+title: "Khởi động & Tiêm Nhân Cách"
+blueprint_ref: "spec/blueprint.md#section-2"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-PERSONA-01
+    priority: MAJOR
+    rule: >
+      Seed Hành Vi: every worker is assigned a PersonaProfile deterministically
+      derived from its worker seed at cycle start. The profile (typing_speed,
+      typo_rate ∈ 2–5%, hesitation_pattern, persona_type) is fixed for the
+      entire cycle lifetime — it does NOT change on card swap or on
+      intra-cycle retry. Different workers get distinct personas; the same
+      worker id always yields the same persona.
+    blueprint_ref: "spec/blueprint.md#section-2"
+    source_files:
+      - modules/delay/persona.py
+    enforced_by:
+      - tests/test_persona_profile.py::TestDeterminism::test_same_seed_produces_same_profile
+      - tests/test_persona_profile.py::TestDeterminism::test_different_seed_produces_different_profile
+      - tests/test_persona_profile.py::TestBoundaryValues::test_typo_rate_bounds
+      - tests/test_persona_profile.py::TestPersonaTypes::test_persona_type_valid
+      - tests/test_persona_profile.py::WorkerSeedUniquenessTests::test_worker_seeds_produce_unique_personas
+      - tests/test_persona_profile.py::WorkerSeedUniquenessTests::test_same_worker_id_always_produces_same_persona
+    fail_severity: block_merge
+
+  - id: INV-PERSONA-02
+    priority: MAJOR
+    rule: >
+      Tab Janitor: when BitBrowser launches the browser with extra tabs
+      (ads, home page), `close_extra_tabs` scans `window_handles`, closes
+      every tab except the first (main), and always switches focus back to
+      the main tab at the end — even if one of the close() calls raises.
+      An empty or single-handle list is a no-op.
+    blueprint_ref: "spec/blueprint.md#section-2"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_tab_janitor.py::TestCloseExtraTabs::test_close_extra_tabs_keeps_main
+      - tests/test_tab_janitor.py::TestCloseExtraTabs::test_close_extra_tabs_handles_close_exception
+      - tests/test_tab_janitor.py::TestCloseExtraTabs::test_close_extra_tabs_zero_extras_noop
+      - tests/test_tab_janitor.py::TestCloseExtraTabs::test_close_extra_tabs_empty_handles_noop
+      - tests/test_tab_janitor.py::TestTabJanitorWiredBeforeGeoCheck::test_janitor_runs_before_geo_check
+      - tests/test_tab_janitor.py::TestTabJanitorWiredBeforeGeoCheck::test_janitor_sleep_called_before_geo_check
+    fail_severity: block_merge
+
+  - id: INV-PERSONA-03
+    priority: MAJOR
+    rule: >
+      Pre-flight Geo Check: after the Tab Janitor, the single remaining tab
+      navigates to `https://lumtest.com/myip.json` (URL_GEO_CHECK) and the
+      JSON body is parsed to assert `country == "US"`. A non-US country
+      raises a RuntimeError. If a "no such window" or equivalent transient
+      error occurs, the system retries up to 2 additional times with a
+      2-second backoff, re-executing `switch_to.window(handles[0])` each
+      attempt to re-bind to the main tab.
+    blueprint_ref: "spec/blueprint.md#section-2"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_uses_url_constant
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_sets_proxy_utc_offset_from_response
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_api_failure_retries_then_raises
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_non_us_country_raises
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_success_on_second_attempt
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_switches_to_main_window_each_attempt
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_switch_failure_counts_as_failed_attempt
+      - tests/test_givex_driver.py::TestPreflightGeoCheck::test_preflight_empty_handles_counts_as_failed_attempt
+      - tests/test_tab_janitor.py::TestTabJanitorWiredBeforeGeoCheck::test_janitor_runs_before_geo_check
+    fail_severity: block_merge
+
+  - id: INV-PERSONA-04
+    priority: MAJOR
+    rule: >
+      BitBrowser fingerprint lifecycle: each cycle calls the BitBrowser API
+      fresh via `BitBrowserClient` to create → launch → close → delete a
+      profile. Two workers in the same run acquire two DIFFERENT profile
+      ids. Close/delete during cleanup must never propagate cleanup errors
+      to the caller — the session exit is best-effort so a transient
+      BitBrowser failure does not abort the next cycle.
+    blueprint_ref: "spec/blueprint.md#section-2"
+    source_files:
+      - modules/cdp/fingerprint.py
+    enforced_by:
+      - tests/test_fingerprint.py::BitBrowserClientTests::test_round_trip_create_launch_close_delete
+      - tests/test_fingerprint.py::BitBrowserClientTests::test_two_workers_get_two_different_profile_ids
+      - tests/test_fingerprint.py::BitBrowserSessionTests::test_exit_cleanup_errors_do_not_propagate
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_register_driver_called_after_create_browser
+      - tests/test_bitbrowser_lifecycle.py::TestBitBrowserLifecycle::test_release_profile_idempotent
+    fail_severity: block_merge

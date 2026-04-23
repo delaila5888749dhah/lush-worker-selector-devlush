@@ -1,13 +1,13 @@
 # Blueprint Coverage Report
 
-Generated: 2026-04-23T14:13:02+00:00
+Generated: 2026-04-23T15:00:23+00:00
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Total contracts | 77 |
-| Passed | 77 |
+| Total contracts | 96 |
+| Passed | 96 |
 | Failed | 0 |
 | Errors | 0 |
 | Skipped / Pending | 0 |
@@ -17,8 +17,13 @@ Generated: 2026-04-23T14:13:02+00:00
 
 | Section | Title | Contracts | Passed | Failed |
 |---------|-------|-----------|--------|--------|
+| §1 | Kiến trúc lõi & Cấu hình hệ thống | 5 | 5 | 0 |
+| §2 | Khởi động & Tiêm Nhân Cách | 4 | 4 | 0 |
+| §3 | Xâm nhập & Cách ly Phiên | 3 | 3 | 0 |
+| §4 | Mô Phỏng Sinh Học Trên Form | 4 | 4 | 0 |
 | §5 | Bơm Dữ Liệu Thanh Toán | 12 | 12 | 0 |
 | §6 | Gatekeeper & Xử Lý Ngoại Lệ | 16 | 16 | 0 |
+| §7 | Rút Lui & Xoay Vòng | 3 | 3 | 0 |
 | §8 | Phase 10 Behavior Layer | 12 | 12 | 0 |
 | §9 | Anti-Detect Layer 2 Tầng | 7 | 7 | 0 |
 | §10 | Day/Night Behavior Simulation | 7 | 7 | 0 |
@@ -60,6 +65,22 @@ Generated: 2026-04-23T14:13:02+00:00
 | INV-INTEGRATION-03 | MAJOR | 14 | Metrics-unavailable degraded path (cross-reference of INV-RUNTIME-06): when moni… | PASS | block_merge |
 | INV-INTEGRATION-04 | MAJOR | 14 | Integration chain observability: for every decision window the chain monitor.get… | PASS | block_merge |
 | INV-INTEGRATION-05 | CRITICAL | 14 | Repository rule A1: no cross-module imports between `modules/*` subpackages are … | PASS | block_merge |
+| INV-SCALE-01 | CRITICAL | 1 | SCALE_STEPS is derived at runtime from MAX_WORKER_COUNT (default 10, range 1–50)… | PASS | block_merge |
+| INV-ARCH-01 | MAJOR | 1 | Stagger Start: WorkerPool inserts a randomised inter-launch delay drawn from `ra… | PASS | block_merge |
+| INV-ARCH-02 | MAJOR | 1 | Proxy management: static SOCKS5/HTTP proxies are mapped 1-to-1 with BitBrowser p… | PASS | warn |
+| INV-ARCH-03 | CRITICAL | 1 | Repository rule A1 (architectural locality): `modules/*` subpackages must NOT im… | PASS | block_merge |
+| INV-ARCH-04 | MAJOR | 1 | MAX_WORKER_COUNT configuration: default is 10; invalid values (non-integer, miss… | PASS | block_merge |
+| INV-PERSONA-01 | MAJOR | 2 | Seed Hành Vi: every worker is assigned a PersonaProfile deterministically derive… | PASS | block_merge |
+| INV-PERSONA-02 | MAJOR | 2 | Tab Janitor: when BitBrowser launches the browser with extra tabs (ads, home pag… | PASS | block_merge |
+| INV-PERSONA-03 | MAJOR | 2 | Pre-flight Geo Check: after the Tab Janitor, the single remaining tab navigates … | PASS | block_merge |
+| INV-PERSONA-04 | MAJOR | 2 | BitBrowser fingerprint lifecycle: each cycle calls the BitBrowser API fresh via … | PASS | block_merge |
+| INV-SESSION-01 | CRITICAL | 3 | Hard-Reset State: inside `GivexDriver.navigate_to_egift()` the `_clear_browser_s… | PASS | block_merge |
+| INV-SESSION-02 | MAJOR | 3 | Cookie banner accept: the selector is exactly `#button--accept-cookies` (SEL_COO… | PASS | warn |
+| INV-SESSION-03 | MAJOR | 3 | URL navigation sequence: `navigate_to_egift` must hit exactly the Blueprint-spec… | PASS | block_merge |
+| INV-FORM-01 | MAJOR | 4 | Greeting Message: `_random_greeting()` picks from a non-empty list of short blue… | PASS | block_merge |
+| INV-FORM-02 | MAJOR | 4 | Recipient email + confirm must match exactly: `fill_egift_form` types `task.reci… | PASS | block_merge |
+| INV-FORM-03 | MAJOR | 4 | Bounding Box Click offset: click coordinates on "Add to Cart" (`SEL_ADD_TO_CART`… | PASS | block_merge |
+| INV-FORM-04 | MAJOR | 4 | CDP typing with per-seed typo rate: form fields are filled through `_type_value`… | PASS | block_merge |
 | INV-PAYMENT-01 | CRITICAL | 5 | Total Watchdog must enable CDP Network (Network.enable) and listen to Network.re… | PASS | block_merge |
 | INV-PAYMENT-02 | CRITICAL | 5 | Billing pool profile selection: when a matching zip is found in billing_list, re… | PASS | block_merge |
 | INV-PAYMENT-03 | CRITICAL | 5 | Billing profile (name, address, phone, email) is frozen for the full cycle lifet… | PASS | block_merge |
@@ -88,6 +109,9 @@ Generated: 2026-04-23T14:13:02+00:00
 | INV-GATEKEEPER-13 | MAJOR | 6 | TransientMonitor class exists in modules/monitor/main.py and detects a late-appe… | PASS | block_merge |
 | INV-ORCHESTRATOR-02 | MAJOR | 6 | handle_outcome(state=None, ...) must log a WARNING before returning "retry". Sil… | PASS | block_merge |
 | INV-GATEKEEPER-14 | MAJOR | 6 | UI-lock retry metric counters (record_ui_lock_retry, record_ui_lock_recovered, r… | PASS | block_merge |
+| INV-TEARDOWN-01 | MAJOR | 7 | End-of-cycle teardown: when a cycle ends (Success or exhausted queue) the BitBro… | PASS | block_merge |
+| INV-TEARDOWN-02 | MAJOR | 7 | Worker return to OrderQueue head: after teardown the worker unregisters its driv… | PASS | block_merge |
+| INV-TEARDOWN-03 | MINOR | 7 | Swap counter reset on new cycle: the per-worker swap counter — which enforces th… | PASS | warn |
 | INV-BEHAVIOR-01 | CRITICAL | 8 | Behavior layer is injected via the wrapper pattern `task_fn = wrap(task_fn, pers… | PASS | block_merge |
 | INV-BEHAVIOR-02 | CRITICAL | 8 | BehaviorState enum is exactly {IDLE, FILLING_FORM, PAYMENT, VBV, POST_ACTION} an… | PASS | block_merge |
 | INV-DELAY-02 | CRITICAL | 8 | CRITICAL_SECTION zero delay: `DelayEngine.is_delay_permitted()` returns False wh… | PASS | block_merge |

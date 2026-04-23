@@ -1,0 +1,89 @@
+section: 4
+title: "Mô Phỏng Sinh Học Trên Form"
+blueprint_ref: "spec/blueprint.md#section-4"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-FORM-01
+    priority: MAJOR
+    rule: >
+      Greeting Message: `_random_greeting()` picks from a non-empty list of
+      short blueprint-approved messages ("Happy Birthday!",
+      "Best wishes", "Enjoy your gift!", "Thank you for being you", …).
+      The picked string is typed into field `#cws_txt_gcMsg`
+      (SEL_GREETING_MSG) via `_realistic_type_field(..., field_kind="text")`
+      during `fill_egift_form` — never via Selenium `send_keys`.
+    blueprint_ref: "spec/blueprint.md#section-4"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_givex_driver.py::TestRandomGreeting::test_blueprint_greetings_present
+      - tests/test_givex_driver.py::TestRandomGreeting::test_random_greeting_returns_member
+      - tests/test_givex_driver.py::TestFillEgiftForm::test_fill_egift_form_types_all_fields
+      - tests/test_givex_driver.py::TestFillEgiftForm::test_fill_egift_form_uses_type_value_not_send_keys
+    fail_severity: block_merge
+
+  - id: INV-FORM-02
+    priority: MAJOR
+    rule: >
+      Recipient email + confirm must match exactly: `fill_egift_form` types
+      `task.recipient_email` first into `#cws_txt_recipEmail`
+      (SEL_RECIPIENT_EMAIL) and then the SAME value into
+      `#cws_txt_confRecipEmail` (SEL_CONFIRM_RECIPIENT_EMAIL). The
+      confirm-email field must never be auto-generated or mutated relative
+      to the recipient-email field.
+    blueprint_ref: "spec/blueprint.md#section-4"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_givex_driver.py::TestFillEgiftForm::test_fill_egift_form_types_all_fields
+      - tests/test_givex_driver.py::TestFillEgiftForm::test_fill_egift_form_sends_confirm_email
+      - tests/test_givex_driver.py::TestFillEgiftForm::test_fill_egift_form_uses_billing_profile_name_as_sender
+    fail_severity: block_merge
+
+  - id: INV-FORM-03
+    priority: MAJOR
+    rule: >
+      Bounding Box Click offset: click coordinates on "Add to Cart"
+      (`SEL_ADD_TO_CART`) and every other button are computed by
+      `bounding_box_click` as `(centre_x ± uniform(0,15), centre_y ±
+      uniform(0,5))`, producing an independent offset per worker. The
+      offset envelope must be exactly `(x ± 15, y ± 5)` pixels — wider or
+      narrower envelopes would break the Tầng-1 anti-detect invariant.
+    blueprint_ref: "spec/blueprint.md#section-4"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_bounding_box_offset.py::TestBoundingBoxOffset::test_offset_x_within_minus15_plus15
+      - tests/test_bounding_box_offset.py::TestBoundingBoxOffset::test_offset_y_within_minus5_plus5
+    fail_severity: block_merge
+
+  - id: INV-FORM-04
+    priority: MAJOR
+    rule: >
+      CDP typing with per-seed typo rate: form fields are filled through
+      `_type_value` which dispatches `Input.dispatchKeyEvent` per character
+      and injects intentional typos at the persona's typo rate (2–5%),
+      followed by a Backspace correction with a 0.4–0.6 s hesitation.
+      CVV and amount fields are capped to zero typos (field_kind policy);
+      text fields respect the per-seed rate. Fallback to
+      `selenium.send_keys()` is only allowed after a CDP failure and must
+      emit a warning in strict mode.
+    blueprint_ref: "spec/blueprint.md#section-4"
+    source_files:
+      - modules/cdp/keyboard.py
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_keyboard.py::TestTypeValueTypo::test_typo_injected_at_rate_one
+      - tests/test_keyboard.py::TestTypeValueTypo::test_correction_follows_typo
+      - tests/test_keyboard.py::TestTypeValueTypo::test_deterministic_typo_under_fixed_seed
+      - tests/test_keyboard.py::TestTypoHesitationDelay::test_typo_sleep_duration_between_04_and_06
+      - tests/test_keyboard.py::TestFieldAwareTypoPolicy::test_cvv_has_zero_typo
+      - tests/test_keyboard.py::TestFieldAwareTypoPolicy::test_card_number_caps_typo_rate
+      - tests/test_keyboard.py::TestFieldAwareTypoPolicy::test_text_respects_max_typo_rate
+      - tests/test_keyboard.py::TestFieldTypoCapAmount::test_amount_has_zero_typo_cap
+      - tests/test_keyboard.py::TestFieldTypoCapAmount::test_amount_field_no_typos_at_high_rate
+      - tests/test_keyboard.py::TestTypeValueBasic::test_falls_back_to_send_keys_when_cdp_fails
+      - tests/test_keyboard.py::TestTypeValueStrictMode::test_strict_warns_on_cdp_and_fallback_failure
+    fail_severity: block_merge

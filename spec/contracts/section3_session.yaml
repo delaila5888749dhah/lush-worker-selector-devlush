@@ -1,0 +1,76 @@
+section: 3
+title: "Xâm nhập & Cách ly Phiên"
+blueprint_ref: "spec/blueprint.md#section-3"
+spec_version: "1.0"
+last_updated: "2026-04-23"
+contracts:
+
+  - id: INV-SESSION-01
+    priority: CRITICAL
+    rule: >
+      Hard-Reset State: inside `GivexDriver.navigate_to_egift()` the
+      `_clear_browser_state()` helper runs twice per cycle — once before
+      loading URL_BASE and once immediately after reaching URL_EGIFT —
+      executing `window.localStorage.clear(); window.sessionStorage.clear();`
+      via `execute_script` and `driver.delete_all_cookies()`. The clear is
+      best-effort: a failure in either execute_script or delete_all_cookies
+      must NOT abort navigation (Blueprint §3 Hard-Reset explicitly demands
+      a 100% clean cart baseline for every new cycle).
+    blueprint_ref: "spec/blueprint.md#section-3"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_clears_browser_state_twice
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_does_not_crash_when_script_clear_fails
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_does_not_crash_when_cookie_clear_fails
+      - tests/test_e2e_integration.py
+    fail_severity: block_merge
+
+  - id: INV-SESSION-02
+    priority: MAJOR
+    rule: >
+      Cookie banner accept: the selector is exactly `#button--accept-cookies`
+      (SEL_COOKIE_ACCEPT). When the element is present in `find_elements`
+      on URL_BASE the driver dispatches a `bounding_box_click` (ghost-cursor
+      Bézier path + CDP `Input.dispatchMouseEvent`); when the popup is
+      absent navigation proceeds without error.
+    blueprint_ref: "spec/blueprint.md#section-3"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_waits_for_url
+      - tests/test_mouse.py::TestBuildPath::test_last_point_is_exact_target
+      - tests/test_mouse.py::TestBuildPath::test_intermediate_points_not_on_straight_line
+      - tests/test_bounding_box_offset.py::TestBoundingBoxOffset::test_offset_x_within_minus15_plus15
+      - tests/test_bounding_box_offset.py::TestBoundingBoxOffset::test_offset_y_within_minus5_plus5
+    fail_severity: warn
+    notes: >
+      No existing unit test asserts the full chain
+      "popup present → bounding_box_click(#button--accept-cookies) →
+      ghost-cursor Bézier dispatch" end-to-end. Positive-path coverage is
+      split across (a) `test_navigate_to_egift_waits_for_url`, which
+      exercises the branch where the banner is absent (find_elements
+      returns []) and navigation proceeds, (b) `TestBuildPath` /
+      `TestGhostCursorDispatch` in tests/test_mouse.py which cover the
+      Bézier path + CDP dispatch primitive, and (c) `TestBoundingBoxOffset`
+      which covers the randomised click coordinates. An E2E harness that
+      renders the cookie banner and asserts the dispatch chain would
+      permit a block_merge upgrade; tracked as a Phase-3 candidate.
+
+  - id: INV-SESSION-03
+    priority: MAJOR
+    rule: >
+      URL navigation sequence: `navigate_to_egift` must hit exactly the
+      Blueprint-specified sequence — `URL_BASE` (lushusa/) → Buy E-Gift
+      link (`SEL_BUY_EGIFT_BTN`) → wait until the browser reaches
+      `URL_EGIFT` (e-gifts/). The driver MUST NOT perform a direct `get`
+      on `URL_EGIFT`; it must arrive via the click path so referrer /
+      session cookies are set naturally.
+    blueprint_ref: "spec/blueprint.md#section-3"
+    source_files:
+      - modules/cdp/driver.py
+    enforced_by:
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_waits_for_url
+      - tests/test_givex_driver.py::TestNavigateToEgift::test_navigate_to_egift_clears_browser_state_twice
+      - tests/test_e2e_integration.py
+    fail_severity: block_merge
