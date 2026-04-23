@@ -738,13 +738,6 @@ def cdp_click_iframe_element(
     by_css = By.CSS_SELECTOR if By is not None else "css selector"
     iframe = base.find_element(by_css, iframe_selector)
     base.switch_to.frame(iframe)
-    elem = base.find_element(by, element_selector)
-    er = base.execute_script("const r=arguments[0].getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height};", elem)
-    base.switch_to.default_content()
-    ir = base.execute_script("const r=arguments[0].getBoundingClientRect();return {left:r.left,top:r.top};", iframe)
-    abs_x = ir["left"] + er["left"] + er["width"] / 2 + rng.uniform(-15, 15)
-    abs_y = ir["top"] + er["top"] + er["height"] / 2 + rng.uniform(-5, 5)
-    _dispatch_cdp_click_sequence(base, abs_x, abs_y, rng=rng, jitter=True)
     elem_rect = None
     try:
         elem = base.find_element(by_css, element_selector)
@@ -777,11 +770,7 @@ def cdp_click_iframe_element(
         + elem_rect["height"] / 2
         + rng.uniform(-5, 5)
     )
-    for evt in ("mousePressed", "mouseReleased"):
-        base.execute_cdp_cmd(
-            "Input.dispatchMouseEvent",
-            {"type": evt, "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1},
-        )
+    _dispatch_cdp_click_sequence(base, abs_x, abs_y, rng=rng, jitter=True)
     return abs_x, abs_y
 
 
