@@ -36,9 +36,11 @@ try:
     from selenium.webdriver.support.ui import WebDriverWait  # type: ignore[import]
     from selenium.webdriver.support import expected_conditions as EC  # type: ignore[import]
     from selenium.common.exceptions import TimeoutException  # type: ignore[import]
+    from selenium.common.exceptions import WebDriverException  # type: ignore[import]
 except ImportError:  # pragma: no cover - selenium always present in prod
     _ActionChains = By = WebDriverWait = EC = None  # type: ignore[assignment,misc]
     TimeoutException = Exception  # type: ignore[assignment,misc]
+    WebDriverException = Exception  # type: ignore[assignment,misc]
 
 try:
     from modules.cdp.mouse import GhostCursor as _GhostCursor
@@ -818,14 +820,14 @@ def _popup_xpath_click_close(driver) -> bool:
     base = getattr(driver, "_driver", driver)
     try:
         elements = base.find_elements("xpath", XPATH_POPUP_CLOSE)
-    except Exception as exc:  # pylint: disable=broad-except
+    except WebDriverException as exc:
         _log.warning("popup XPath close: find_elements failed: %s", exc)
         return False
     for element in elements:
         try:
             element.click()
             return True
-        except Exception as exc:  # pylint: disable=broad-except
+        except WebDriverException as exc:
             _log.debug(
                 "popup XPath close: click failed on element: %s", exc
             )

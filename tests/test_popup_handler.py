@@ -664,8 +664,10 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
 
     def test_xpath_fallback_tries_next_element_when_first_click_raises(self):
         """If the first XPath match's click() raises, fallback must try the next."""
+        from selenium.common.exceptions import StaleElementReferenceException
+
         bad_el = MagicMock()
-        bad_el.click.side_effect = RuntimeError("detached")
+        bad_el.click.side_effect = StaleElementReferenceException("detached")
         good_el = MagicMock()
         base_driver = MagicMock()
         base_driver.find_elements.return_value = [bad_el, good_el]
