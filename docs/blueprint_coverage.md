@@ -1,13 +1,13 @@
 # Blueprint Coverage Report
 
-Generated: 2026-04-23T13:20:39+00:00
+Generated: 2026-04-23T14:13:02+00:00
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Total contracts | 51 |
-| Passed | 51 |
+| Total contracts | 77 |
+| Passed | 77 |
 | Failed | 0 |
 | Errors | 0 |
 | Skipped / Pending | 0 |
@@ -19,6 +19,9 @@ Generated: 2026-04-23T13:20:39+00:00
 |---------|-------|-----------|--------|--------|
 | §5 | Bơm Dữ Liệu Thanh Toán | 12 | 12 | 0 |
 | §6 | Gatekeeper & Xử Lý Ngoại Lệ | 16 | 16 | 0 |
+| §8 | Phase 10 Behavior Layer | 12 | 12 | 0 |
+| §9 | Anti-Detect Layer 2 Tầng | 7 | 7 | 0 |
+| §10 | Day/Night Behavior Simulation | 7 | 7 | 0 |
 | §12 | Billing Selection Audit Event | 6 | 6 | 0 |
 | §13 | Runtime Lifecycle & Control-Plane Safety | 12 | 12 | 0 |
 | §14 | Cross-Module Stabilization — Integration Lock | 5 | 5 | 0 |
@@ -27,6 +30,13 @@ Generated: 2026-04-23T13:20:39+00:00
 
 | ID | Priority | §  | Rule (truncated) | Status | Severity |
 |----|----------|----|------------------|--------|----------|
+| INV-DAYNIGHT-01 | MAJOR | 10 | Biological time state: DAY (06:00–21:59) vs NIGHT (22:00–05:59), derived from th… | PASS | block_merge |
+| INV-DAYNIGHT-02 | MAJOR | 10 | NIGHT typing penalty: typing speed is 15–30% slower than DAY, with the scale fac… | PASS | block_merge |
+| INV-DAYNIGHT-03 | MAJOR | 10 | NIGHT hesitation + typo: hesitation (thinking) delay increases 20–40% and typo r… | PASS | block_merge |
+| INV-DELAY-04 | CRITICAL | 10 | Temporal modifier bounded output: `apply_temporal_modifier()` returns 0.0 immedi… | PASS | block_merge |
+| INV-DAYNIGHT-04 | MAJOR | 10 | PersonaProfile expanded for Day/Night: `active_hours` (tuple), `fatigue_threshol… | PASS | block_merge |
+| INV-DAYNIGHT-05 | MAJOR | 10 | Session fatigue: after `fatigue_threshold`+1 consecutive cycles, hesitation (thi… | PASS | block_merge |
+| INV-DAYNIGHT-06 | CRITICAL | 10 | Day/Night safety rules: the Day/Night model respects CRITICAL_SECTION (§8.3) wit… | PASS | block_merge |
 | INV-AUDIT-01 | CRITICAL | 12 | Exactly one structured audit event is emitted per successful billing.select_prof… | PASS | block_merge |
 | INV-AUDIT-02 | CRITICAL | 12 | Audit event schema is strict. Required fields: event_type (literal "billing_sele… | PASS | block_merge |
 | INV-AUDIT-03 | CRITICAL | 12 | profile_id is a SHA-256 hash of the string "{first_name}|{last_name}|{profile.zi… | PASS | block_merge |
@@ -78,3 +88,22 @@ Generated: 2026-04-23T13:20:39+00:00
 | INV-GATEKEEPER-13 | MAJOR | 6 | TransientMonitor class exists in modules/monitor/main.py and detects a late-appe… | PASS | block_merge |
 | INV-ORCHESTRATOR-02 | MAJOR | 6 | handle_outcome(state=None, ...) must log a WARNING before returning "retry". Sil… | PASS | block_merge |
 | INV-GATEKEEPER-14 | MAJOR | 6 | UI-lock retry metric counters (record_ui_lock_retry, record_ui_lock_recovered, r… | PASS | block_merge |
+| INV-BEHAVIOR-01 | CRITICAL | 8 | Behavior layer is injected via the wrapper pattern `task_fn = wrap(task_fn, pers… | PASS | block_merge |
+| INV-BEHAVIOR-02 | CRITICAL | 8 | BehaviorState enum is exactly {IDLE, FILLING_FORM, PAYMENT, VBV, POST_ACTION} an… | PASS | block_merge |
+| INV-DELAY-02 | CRITICAL | 8 | CRITICAL_SECTION zero delay: `DelayEngine.is_delay_permitted()` returns False wh… | PASS | block_merge |
+| INV-BEHAVIOR-03 | CRITICAL | 8 | SAFE ZONE rule (§8.4): delay is only permitted at UI-interaction points (typing,… | PASS | block_merge |
+| INV-BEHAVIOR-04 | CRITICAL | 8 | NO-DELAY zone (§8.5): behavior layer must NOT inject delay into Payment submit (… | PASS | block_merge |
+| INV-DELAY-01 | CRITICAL | 8 | Hard timing constraints (§8.6): MAX_TYPING_DELAY=1.8s, MAX_HESITATION_DELAY=5.0s… | PASS | block_merge |
+| INV-BEHAVIOR-05 | MAJOR | 8 | Delay is clamped before apply, uses non-blocking sleep (does not block the worke… | PASS | block_merge |
+| INV-BEHAVIOR-06 | MAJOR | 8 | Seeded reproducibility (§8.6): `rnd = random.Random(seed)` — each worker has its… | PASS | block_merge |
+| INV-DELAY-03 | CRITICAL | 8 | Wrapper try/finally cleanup (§8.1/8.7): `modules/delay/wrapper.py::_wrapped()` a… | PASS | block_merge |
+| INV-BEHAVIOR-07 | CRITICAL | 8 | Non-interference (§8.7): behavior layer does not change outcome — FSM flow is un… | PASS | block_merge |
+| INV-BEHAVIOR-08 | MAJOR | 8 | Phase 9 alignment (§8.8): behavior layer respects SAFE_POINT (§8.4) and CRITICAL… | PASS | block_merge |
+| INV-BEHAVIOR-09 | MAJOR | 8 | Performance constraint (§8.6): behavior layer overhead ≤ 15% versus a baseline c… | PASS | block_merge |
+| INV-ANTIDETECT-01 | CRITICAL | 9 | Tầng 1 proxy: static SOCKS5/HTTP proxy is mapped 1-to-1 with each BitBrowser pro… | PASS | warn |
+| INV-ANTIDETECT-02 | CRITICAL | 9 | Tầng 1 CDP input: all keyboard and mouse input is dispatched via `Input.dispatch… | PASS | block_merge |
+| INV-ANTIDETECT-03 | MAJOR | 9 | Tầng 1 ghost cursor: mouse movement follows a Bézier curve path with randomised … | PASS | block_merge |
+| INV-ANTIDETECT-04 | MAJOR | 9 | Tầng 1 bounding box click offset: click coordinates are randomised within (x±15,… | PASS | block_merge |
+| INV-ANTIDETECT-05 | MAJOR | 9 | Tầng 2 biometrics: temporal noise follows log-normal / gaussian distribution for… | PASS | block_merge |
+| INV-ANTIDETECT-06 | MAJOR | 9 | Tầng 2 burst typing + hesitation: the biometric burst pattern combines fast grou… | PASS | block_merge |
+| INV-ANTIDETECT-07 | MAJOR | 9 | Tầng 2 non-interference: biometric/temporal layer NEVER breaks Tầng 1 (environme… | PASS | block_merge |
