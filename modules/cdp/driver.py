@@ -690,15 +690,35 @@ def cdp_click_iframe_element(
     base.switch_to.frame(iframe)
     try:
         elem = base.find_element(by, element_selector)
-        er = base.execute_script("const r=arguments[0].getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height};", elem)
+        elem_rect = base.execute_script(
+            "const r=arguments[0].getBoundingClientRect();"
+            "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+            elem,
+        )
     finally:
         base.switch_to.default_content()
-    ir = base.execute_script("const r=arguments[0].getBoundingClientRect();return {left:r.left,top:r.top};", iframe)
-    abs_x = ir["left"] + er["left"] + er["width"] / 2 + rng.uniform(-15, 15)
-    abs_y = ir["top"] + er["top"] + er["height"] / 2 + rng.uniform(-5, 5)
+    ir = base.execute_script(
+        "const r=arguments[0].getBoundingClientRect();"
+        "return {left:r.left,top:r.top};",
+        iframe,
+    )
+    abs_x = (
+        ir["left"]
+        + elem_rect["left"]
+        + elem_rect["width"] / 2
+        + rng.uniform(-15, 15)
+    )
+    abs_y = (
+        ir["top"]
+        + elem_rect["top"]
+        + elem_rect["height"] / 2
+        + rng.uniform(-5, 5)
+    )
     for evt in ("mousePressed", "mouseReleased"):
-        base.execute_cdp_cmd("Input.dispatchMouseEvent",
-            {"type": evt, "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1})
+        base.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {"type": evt, "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1},
+        )
     return abs_x, abs_y
 
 

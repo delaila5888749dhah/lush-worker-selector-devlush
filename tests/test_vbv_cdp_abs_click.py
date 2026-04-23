@@ -107,7 +107,8 @@ class TestVbvCdpAbsClick(unittest.TestCase):
         driver.switch_to.default_content.assert_called_once_with()
 
     def test_default_content_restored_on_execute_script_raise(self):
-        """If getBoundingClientRect script raises inside iframe, default_content() must still run."""
+        """If getBoundingClientRect script raises inside iframe,
+        default_content() must still run."""
         elem_rect = {"left": 0, "top": 0, "width": 10, "height": 10}
         iframe_rect = {"left": 0, "top": 0}
         driver, _iframe, _elem = _make_driver(elem_rect, iframe_rect)
