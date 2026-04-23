@@ -163,11 +163,12 @@ def _record_autoscaler_failure(worker_id: str) -> None:
         _logger.debug("autoscaler.record_failure skipped", exc_info=True)
 
 
-def _notify_success(task, worker_id: str, total) -> None:
+def _notify_success(task, worker_id: str, total, ctx=None) -> None:
     """Send success screenshot+notification (Blueprint §6 Ngã rẽ 2). Never raises.
 
     The registry stores ``GivexDriver`` wrappers (see ``integration.worker_task``);
     screenshot capture must use the underlying Selenium WebDriver (``._driver``).
+    Pass *ctx* for full caption including billing and duration.
     """
     # pylint: disable=import-outside-toplevel
     try:
@@ -184,7 +185,7 @@ def _notify_success(task, worker_id: str, total) -> None:
             capture_and_blur(raw_driver, task.primary_card.card_number)
             if raw_driver else None
         )
-        send_success_notification(worker_id, task, total, screenshot)
+        send_success_notification(worker_id, task, total, screenshot, ctx=ctx)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] success notify failed worker=%s: %s",
                         _get_trace_id(), worker_id, exc)
@@ -1469,8 +1470,20 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         if state.name == "vbv_cancelled":
             try:
                 driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+                url_before = driver.current_url if driver else None
                 if is_payment_page_reloaded(driver):
                     refill_after_vbv_reload(driver, ctx, next_card)
+                else:
+                    url_after = driver.current_url if driver else None
+                    if (url_before is not None and url_after is not None
+                            and url_after != url_before):
+                        _logger.warning(
+                            "No-reload invariant violated: %s → %s (state=%s)",
+                            _sanitize_error(url_before),
+                            _sanitize_error(url_after),
+                            state.name,
+                        )
+                        refill_after_vbv_reload(driver, ctx, next_card)
             except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
                 _logger.warning("VBV reload refill failed: %s", _sanitize_error(exc))
         return ("retry_new_card", next_card)
@@ -1487,12 +1500,22 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         )
         try:
             driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
-            if driver.handle_vbv_challenge():
+            result = driver.handle_vbv_challenge()
+            if result in ("cancelled", "iframe_missing"):
                 driver.detect_page_state()
                 return handle_outcome(
                     State("vbv_cancelled"), order_queue,
                     worker_id=worker_id, ctx=ctx,
                 )
+            elif result == "cdp_fail":
+                # retry once on CDP/WebDriver failure
+                result = driver.handle_vbv_challenge()
+                if result in ("cancelled", "iframe_missing"):
+                    driver.detect_page_state()
+                    return handle_outcome(
+                        State("vbv_cancelled"), order_queue,
+                        worker_id=worker_id, ctx=ctx,
+                    )
         except Exception as exc:
             _logger.warning(
                 "[trace=%s] VBV challenge handling failed for worker=%s: %s",
@@ -1590,7 +1613,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                 success = True
                 _record_autoscaler_success(worker_id)
                 # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
-                _notify_success(task, worker_id, total)
+                _notify_success(task, worker_id, total, ctx=ctx)
                 if task_id is not None:
                     _get_idempotency_store().mark_completed(task_id)
             else:
@@ -1773,7 +1796,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             success = True
             _record_autoscaler_success(worker_id)
             # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
-            _notify_success(task, worker_id, total)
+            _notify_success(task, worker_id, total, ctx=ctx)
             if task_id is not None:
                 _get_idempotency_store().mark_completed(task_id)
         else:

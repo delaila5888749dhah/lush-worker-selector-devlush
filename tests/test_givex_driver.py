@@ -12,7 +12,7 @@ Covers:
 - run_full_cycle — steps called in the correct order
 - _wait_for_element — returns True when found, False on timeout
 - detect_page_state — checks all URL_CONFIRM_FRAGMENTS, element presence,
-  VBV iframe, declined text, ui_lock spinner, raises PageStateError on unknown
+  VBV iframe, declined text, ui_lock spinner, returns 'ui_lock' on unknown after 3s poll
 """
 
 import time
@@ -684,15 +684,17 @@ class TestDetectPageState(unittest.TestCase):
         gd = GivexDriver(selenium)
         self.assertEqual(gd.detect_page_state(), "ui_lock")
 
-    def test_detect_page_state_raises_page_state_error_on_unknown(self):
+    def test_detect_page_state_returns_ui_lock_on_unknown_after_3s(self):
         selenium = _make_driver()
         selenium.find_elements.return_value = []
         body_el = MagicMock()
         body_el.text = "Some normal page content"
         selenium.find_element.return_value = body_el
         gd = GivexDriver(selenium)
-        with self.assertRaises(PageStateError):
-            gd.detect_page_state()
+        with patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.time", side_effect=[0.0, 100.0]):
+            result = gd.detect_page_state()
+        self.assertEqual(result, "ui_lock")
 
     def test_detect_page_state_success_takes_priority_over_vbv(self):
         """success should be returned even if a VBV iframe is also present."""
@@ -766,8 +768,10 @@ class TestDetectPageState(unittest.TestCase):
         body_el.text = "Some blog post"
         selenium.find_element.return_value = body_el
         gd = GivexDriver(selenium)
-        with self.assertRaises(PageStateError):
-            gd.detect_page_state()
+        with patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.time", side_effect=[0.0, 100.0]):
+            result = gd.detect_page_state()
+        self.assertEqual(result, "ui_lock")
 
     def test_detect_page_state_ignores_thank_you_text_off_host(self):
         """P1-6: 'thank you for your order' text on non-Givex host must NOT
@@ -778,8 +782,10 @@ class TestDetectPageState(unittest.TestCase):
         body_el.text = "Thank you for your order of our newsletter subscription."
         selenium.find_element.return_value = body_el
         gd = GivexDriver(selenium)
-        with self.assertRaises(PageStateError):
-            gd.detect_page_state()
+        with patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.time", side_effect=[0.0, 100.0]):
+            result = gd.detect_page_state()
+        self.assertEqual(result, "ui_lock")
 
 
 class TestNavigateToEgift(unittest.TestCase):

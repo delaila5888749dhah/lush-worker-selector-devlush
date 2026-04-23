@@ -37,10 +37,14 @@ try:
     from selenium.webdriver.support import expected_conditions as EC  # type: ignore[import]
     from selenium.common.exceptions import TimeoutException  # type: ignore[import]
     from selenium.common.exceptions import WebDriverException  # type: ignore[import]
+    from selenium.common.exceptions import NoSuchElementException  # type: ignore[import]
+    from selenium.common.exceptions import StaleElementReferenceException  # type: ignore[import]
 except ImportError:  # pragma: no cover - selenium always present in prod
     _ActionChains = By = WebDriverWait = EC = None  # type: ignore[assignment,misc]
     TimeoutException = Exception  # type: ignore[assignment,misc]
     WebDriverException = Exception  # type: ignore[assignment,misc]
+    NoSuchElementException = Exception  # type: ignore[assignment,misc]
+    StaleElementReferenceException = Exception  # type: ignore[assignment,misc]
 
 try:
     from modules.cdp.mouse import GhostCursor as _GhostCursor
@@ -1236,16 +1240,29 @@ class GivexDriver:
             else None
         )
 
-    def handle_vbv_challenge(self) -> bool:
-        """Cancel VBV/3DS iframe challenge (Blueprint §6 Fork 3); swallow all errors."""
+    def handle_vbv_challenge(self) -> str:
+        """Cancel VBV/3DS iframe challenge (Blueprint §6 Fork 3).
+
+        Returns:
+            'cancelled'       — successfully cancelled the 3DS challenge.
+            'iframe_missing'  — benign; no iframe to cancel (likely already gone).
+            'cdp_fail'        — CDP/WebDriver error; caller may retry.
+            'error'           — other unexpected error; caller decides.
+        """
         try:
             vbv_dynamic_wait(rng=self._get_rng())
             cdp_click_iframe_element(self, SEL_VBV_IFRAME, SEL_VBV_CANCEL_BTN, rng=self._get_rng())
             handle_something_wrong_popup(self)
-            return True
+            return "cancelled"
+        except (NoSuchElementException, StaleElementReferenceException) as exc:
+            _log.info("handle_vbv_challenge iframe missing: %s", _sanitize_error(str(exc)))
+            return "iframe_missing"
+        except WebDriverException as exc:
+            _log.warning("handle_vbv_challenge CDP fail: %s", _sanitize_error(str(exc)))
+            return "cdp_fail"
         except Exception as exc:  # pylint: disable=broad-except
-            _log.warning("handle_vbv_challenge failed: %s", _sanitize_error(str(exc)))
-            return False
+            _log.error("handle_vbv_challenge unexpected: %s", _sanitize_error(str(exc)))
+            return "error"
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 
@@ -1973,7 +1990,21 @@ class GivexDriver:
         if self.find_elements(SEL_UI_LOCK_SPINNER):
             return "ui_lock"
 
-        raise PageStateError("unknown")
+        # 5 — 3s timeout fallback: sustained stall with no recognisable state → ui_lock
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            time.sleep(0.3)
+            current_url = self._driver.current_url
+            if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
+                return "success"
+            if self.find_elements(SEL_VBV_IFRAME):
+                return "vbv_3ds"
+            if "error=vv" in current_url:
+                return "declined"
+            if self.find_elements(SEL_UI_LOCK_SPINNER):
+                return "ui_lock"
+        # After 3s no state change → treat as stuck ui_lock
+        return "ui_lock"
 
     # ── Full-cycle orchestrator ───────────────────────────────────────────────
 

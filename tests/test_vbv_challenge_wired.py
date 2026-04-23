@@ -43,14 +43,14 @@ class TestVbvChallengeWiring(unittest.TestCase):
              patch("modules.cdp.driver.handle_something_wrong_popup", side_effect=lambda *args, **kwargs: record("popup")):
             result = gd.handle_vbv_challenge()
 
-        self.assertTrue(result)
+        self.assertEqual(result, "cancelled")
         self.assertEqual(calls, ["wait", "click", "popup"])
 
     def test_vbv_3ds_transitions_to_vbv_cancelled_on_success(self):
         task = _make_task()
         ctx = CycleContext(cycle_id="cycle-1", worker_id="worker-1", task=task)
         driver = MagicMock()
-        driver.handle_vbv_challenge.return_value = True
+        driver.handle_vbv_challenge.return_value = "cancelled"
         driver.detect_page_state.return_value = "declined"
 
         with patch("integration.orchestrator.cdp") as mock_cdp, \
@@ -149,7 +149,7 @@ class TestVbvChallengeWiring(unittest.TestCase):
             action = handle_outcome(State("vbv_3ds"), task.order_queue, ctx=ctx)
 
         # (1) VBV handler succeeded.
-        self.assertTrue(outcome_ok)
+        self.assertEqual(outcome_ok, "cancelled")
         # (2) Popup close button was clicked.
         driver.bounding_box_click.assert_any_call(SEL_POPUP_CLOSE)
         # (3) clear_card_fields_cdp was invoked inside the popup handler
