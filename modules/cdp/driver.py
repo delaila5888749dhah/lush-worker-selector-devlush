@@ -698,6 +698,8 @@ def cdp_click_iframe_element(
         )
     finally:
         base.switch_to.default_content()
+    if elem_rect is None:
+        raise RuntimeError("Failed to resolve iframe element rect.")
     ir = base.execute_script(
         "const r=arguments[0].getBoundingClientRect();"
         "return {left:r.left,top:r.top};",
