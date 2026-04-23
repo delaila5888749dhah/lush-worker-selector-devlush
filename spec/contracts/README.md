@@ -38,8 +38,8 @@ directory. The CI runner enforces this at every run.
 | `priority` | enum | `CRITICAL`, `MAJOR`, or `MINOR` |
 | `rule` | string | 1–2 sentence prose rule extracted verbatim from the blueprint |
 | `blueprint_ref` | string | Path + anchor, e.g. `spec/blueprint.md#section-6` |
-| `source_files` | list[str] | Production code paths (relative to repo root), min 1 |
-| `enforced_by` | list[str] | Test node paths (see format below), min 1 |
+| `source_files` | `list[str]` | Production code paths (relative to repo root), min 1 |
+| `enforced_by` | `list[str]` | Test node paths (see format below), min 1 |
 | `fail_severity` | enum | `block_merge`, `warn`, or `info` |
 
 ## Optional Fields

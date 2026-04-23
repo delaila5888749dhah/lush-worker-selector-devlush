@@ -67,7 +67,8 @@
           },
           "audit_lock_ref": {
             "type": "string",
-            "description": "Optional: reference to spec/audit-lock.md entry."
+            "description": "Optional: reference to spec/audit-lock.md entry (e.g. 'spec/audit-lock.md#INV-FSM-01').",
+            "pattern": "^spec/audit-lock\\.md#INV-[A-Z]+(-[A-Z]+)?-\\d{2,3}$"
           },
           "source_files": {
             "type": "array",

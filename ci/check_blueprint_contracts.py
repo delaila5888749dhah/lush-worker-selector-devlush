@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import subprocess
+import subprocess  # nosec B404 — subprocess used only to invoke local pytest with hard-coded args derived from validated contract YAML paths; no shell, no untrusted input.
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -254,67 +254,115 @@ def check_enforced_by(contracts: list[dict]) -> list[str]:
 # Step 6: Run tests
 # ---------------------------------------------------------------------------
 
-def _collect_unique_test_files(contracts: list[dict]) -> dict[str, list[str]]:
-    """Return {test_file_path: [nodeid, ...]} for all enforced_by entries."""
-    file_to_nodes: dict[str, list[str]] = {}
+def _collect_test_nodes(contracts: list[dict]) -> list[tuple[str, str]]:
+    """Return ordered list of (nodeid, test_path) for all enforced_by entries.
+
+    Duplicates are deduplicated by nodeid so we run each precise reference once.
+    """
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
     for c in contracts:
         for entry in c.get("enforced_by", []):
             test_path, class_name, method_name = _parse_enforced_by(entry)
-            file_to_nodes.setdefault(test_path, [])
             if class_name and method_name:
                 node = f"{test_path}::{class_name}::{method_name}"
             elif class_name:
                 node = f"{test_path}::{class_name}"
             else:
                 node = test_path
-            if node not in file_to_nodes[test_path]:
-                file_to_nodes[test_path].append(node)
-    return file_to_nodes
+            if node in seen:
+                continue
+            seen.add(node)
+            out.append((node, test_path))
+    return out
 
 
-def run_tests(contracts: list[dict]) -> dict[str, str]:
-    """Run pytest for each unique test file. Returns {nodeid: 'PASS'|'FAIL'|'ERROR'}."""
-    file_to_nodes = _collect_unique_test_files(contracts)
+def run_tests(contracts: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+    """Run pytest per unique nodeid from `enforced_by`.
+
+    Running each nodeid individually (rather than an entire file) isolates
+    contract verification from pre-existing drift in unrelated tests that
+    happen to live in the same file — the precise reference a contract
+    makes is the *only* thing that should determine its PASS/FAIL status.
+
+    Returns:
+        (results, failure_details) where:
+          results[nodeid]          ∈ {"PASS", "FAIL", "ERROR"}
+          failure_details[nodeid]  — short message (pytest tail) when not PASS
+    """
+    nodes = _collect_test_nodes(contracts)
     results: dict[str, str] = {}
+    details: dict[str, str] = {}
 
-    for test_path, nodeids in file_to_nodes.items():
+    for nodeid, test_path in nodes:
         abs_path = ROOT_DIR / test_path
         if not abs_path.exists():
-            for nid in nodeids:
-                results[nid] = "ERROR"
+            results[nodeid] = "ERROR"
+            details[nodeid] = f"test file '{test_path}' not found"
             continue
 
-        # Run the entire file with pytest; collect pass/fail per nodeid
+        # Pass the full nodeid (not just the file) so unrelated test failures
+        # in the same file do NOT spuriously fail this contract.
         cmd = [
             sys.executable, "-m", "pytest",
-            test_path,
+            nodeid,
             "-q", "--no-header",
             "-m", "not real_browser",
-            "--tb=no",
+            "--tb=short",
         ]
         try:
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec B603 — args are a fixed list; nodeid derives from validated YAML (no shell, no untrusted input).
                 cmd,
                 capture_output=True,
                 text=True,
                 cwd=str(ROOT_DIR),
                 timeout=120,
+                check=False,
             )
-            file_passed = proc.returncode == 0
         except subprocess.TimeoutExpired:
-            for nid in nodeids:
-                results[nid] = "ERROR"
+            results[nodeid] = "ERROR"
+            details[nodeid] = "pytest timed out after 120s"
             continue
-        except Exception:  # pragma: no cover
-            for nid in nodeids:
-                results[nid] = "ERROR"
+        except (OSError, ValueError) as exc:  # pragma: no cover
+            results[nodeid] = "ERROR"
+            details[nodeid] = f"pytest invocation error: {exc}"
             continue
 
-        status = "PASS" if file_passed else "FAIL"
-        for nid in nodeids:
-            results[nid] = status
+        if proc.returncode == 0:
+            results[nodeid] = "PASS"
+            continue
 
-    return results
+        # returncode 5 = "no tests collected" (nodeid doesn't match anything).
+        # That's an ERROR (broken reference), not a FAIL.
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode == 5:
+            results[nodeid] = "ERROR"
+            details[nodeid] = _summarize_pytest_output(combined) or "no tests collected"
+        elif "ModuleNotFoundError" in combined or "ImportError" in combined:
+            results[nodeid] = "ERROR"
+            details[nodeid] = _summarize_pytest_output(combined) or "import error"
+        else:
+            results[nodeid] = "FAIL"
+            details[nodeid] = _summarize_pytest_output(combined) or "test failed"
+
+    return results, details
+
+
+def _summarize_pytest_output(output: str) -> str:
+    """Extract a short, one-line summary from pytest output (best-effort)."""
+    if not output:
+        return ""
+    # Look for the pytest short summary line, e.g. "FAILED tests/x.py::Class::m - AssertionError"
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("FAILED ", "ERROR ")):
+            return stripped[:200]
+    # Fallback: last non-empty line of output
+    for line in reversed(output.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped[:200]
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +372,7 @@ def run_tests(contracts: list[dict]) -> dict[str, str]:
 def classify_contracts(
     contracts: list[dict],
     test_results: dict[str, str],
+    test_details: dict[str, str],
     source_errors: list[str],
     enforced_by_errors: list[str],
     section: int,
@@ -356,7 +405,7 @@ def classify_contracts(
             continue
 
         # Determine status from test results
-        statuses: list[str] = []
+        per_node: list[tuple[str, str, str]] = []  # (nodeid, status, detail)
         for entry in c.get("enforced_by", []):
             test_path, class_name, method_name = _parse_enforced_by(entry)
             if class_name and method_name:
@@ -365,8 +414,11 @@ def classify_contracts(
                 nid = f"{test_path}::{class_name}"
             else:
                 nid = test_path
-            statuses.append(test_results.get(nid, "PENDING"))
+            per_node.append(
+                (nid, test_results.get(nid, "PENDING"), test_details.get(nid, ""))
+            )
 
+        statuses = [s for _, s, _ in per_node]
         if not statuses:
             cr.status = "SKIP"
         elif all(s == "PASS" for s in statuses):
@@ -377,6 +429,15 @@ def classify_contracts(
             cr.status = "FAIL"
         else:
             cr.status = "PENDING"
+
+        # Surface failed/errored test nodeids + one-line summary in the detail.
+        if cr.status in ("FAIL", "ERROR"):
+            bad = [
+                f"{nid} [{status}]: {detail or 'no detail'}"
+                for nid, status, detail in per_node
+                if status in ("FAIL", "ERROR", "PENDING")
+            ]
+            cr.detail = "; ".join(bad)
 
         results.append(cr)
 
@@ -599,9 +660,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 — complexity is 
 
     # Step 6: Run tests (unless --skip-tests)
     test_results: dict[str, str] = {}
+    test_details: dict[str, str] = {}
     if not args.skip_tests:
-        print("Running pytest for enforced_by test files...")
-        test_results = run_tests(all_raw_contracts)
+        print("Running pytest for enforced_by test nodes (per-nodeid isolation)...")
+        test_results, test_details = run_tests(all_raw_contracts)
     else:
         print("--skip-tests: skipping pytest invocation")
         for c in all_raw_contracts:
@@ -613,7 +675,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 — complexity is 
         sec = c.get("_section", 0)
         sec_title = c.get("_section_title", "")
         cr_list = classify_contracts(
-            [c], test_results, source_errors, enforced_errors, sec, sec_title
+            [c], test_results, test_details,
+            source_errors, enforced_errors, sec, sec_title,
         )
         report.contracts.extend(cr_list)
 

@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyyaml jsonschema
+          pip install pytest pyyaml jsonschema
 
       - name: Run blueprint contract gate
         run: python ci/check_blueprint_contracts.py --strict
