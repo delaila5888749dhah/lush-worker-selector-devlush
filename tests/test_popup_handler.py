@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from selenium.common.exceptions import TimeoutException
+
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     SEL_POPUP_CLOSE,
@@ -26,15 +28,18 @@ class TestPopupHandler(unittest.TestCase):
         wrapper.bounding_box_click = MagicMock()
 
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            # First call = initial presence check (popup present);
+            # subsequent calls = post-click verify (popup gone).
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(),
+                TimeoutException(),
+            ]
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertTrue(result)
         wrapper.bounding_box_click.assert_called_once_with(SEL_POPUP_CLOSE)
 
     def test_returns_false_when_no_popup(self):
-        from selenium.common.exceptions import TimeoutException
-
         base_driver = MagicMock()
         wrapper = MagicMock()
         wrapper._driver = base_driver
@@ -323,7 +328,12 @@ class TestPopupXPathLocator(unittest.TestCase):
         with patch.object(drv.EC, "presence_of_element_located",
                           side_effect=fake_presence), \
              patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            # First call = initial presence check; subsequent calls =
+            # post-click verify that the popup has gone.
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(),
+                drv.TimeoutException(),
+            ]
             handle_something_wrong_popup(wrapper, timeout=0.1)
         return captured.get("locator")
 
@@ -387,8 +397,10 @@ class TestPopupXPathLocator(unittest.TestCase):
         with patch.object(drv.EC, "presence_of_element_located",
                           side_effect=fake_presence), \
              patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock(
-                text="Something went wrong, please try again")
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(text="Something went wrong, please try again"),
+                drv.TimeoutException(),
+            ]
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertTrue(result)
@@ -417,10 +429,15 @@ class TestPopupClearAfterClose(unittest.TestCase):
         )
         return wrapper
 
+    @staticmethod
+    def _close_then_gone():
+        """Mock side-effect: popup present on first check, gone afterwards."""
+        return [MagicMock(), TimeoutException()]
+
     def test_close_success_calls_clear_and_returns_needs_refill(self):
         wrapper = self._make_wrapper()
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            mock_wait.return_value.until.side_effect = self._close_then_gone()
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
@@ -429,8 +446,6 @@ class TestPopupClearAfterClose(unittest.TestCase):
         wrapper.clear_card_fields_cdp.assert_called_once_with()
 
     def test_no_popup_returns_not_present_and_skips_clear(self):
-        from selenium.common.exceptions import TimeoutException
-
         wrapper = self._make_wrapper()
         with patch.object(drv, "WebDriverWait") as mock_wait:
             mock_wait.return_value.until.side_effect = TimeoutException()
@@ -444,6 +459,8 @@ class TestPopupClearAfterClose(unittest.TestCase):
         wrapper = self._make_wrapper()
         wrapper.bounding_box_click.side_effect = RuntimeError("boom")
         with patch.object(drv, "WebDriverWait") as mock_wait:
+            # Click fails on every retry, so we never reach a verify check;
+            # only the initial presence check needs to succeed.
             mock_wait.return_value.until.return_value = MagicMock()
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
@@ -455,7 +472,7 @@ class TestPopupClearAfterClose(unittest.TestCase):
         wrapper = self._make_wrapper()
         wrapper.clear_card_fields_cdp.side_effect = RuntimeError("cdp down")
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            mock_wait.return_value.until.side_effect = self._close_then_gone()
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
@@ -465,7 +482,7 @@ class TestPopupClearAfterClose(unittest.TestCase):
         os.environ["POPUP_CLEAR_AFTER_CLOSE"] = "0"
         wrapper = self._make_wrapper()
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            mock_wait.return_value.until.side_effect = self._close_then_gone()
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
@@ -477,10 +494,115 @@ class TestPopupClearAfterClose(unittest.TestCase):
             bounding_box_click=MagicMock(),
         )
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            mock_wait.return_value.until.side_effect = self._close_then_gone()
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+
+
+class TestPopupCloseRetry(unittest.TestCase):
+    """Retry loop for close-button click (popup may re-render after click)."""
+
+    def setUp(self):
+        self._saved = os.environ.get("POPUP_CLOSE_MAX_RETRIES")
+        os.environ.pop("POPUP_CLOSE_MAX_RETRIES", None)
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("POPUP_CLOSE_MAX_RETRIES", None)
+        else:
+            os.environ["POPUP_CLOSE_MAX_RETRIES"] = self._saved
+
+    @staticmethod
+    def _make_wrapper():
+        return SimpleNamespace(
+            _driver=MagicMock(),
+            bounding_box_click=MagicMock(),
+            clear_card_fields_cdp=MagicMock(),
+        )
+
+    def test_retries_until_popup_gone(self):
+        """Popup re-renders after first click, goes away after second."""
+        wrapper = self._make_wrapper()
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            # 1: initial presence check → present.
+            # 2: verify after click #1 → still present.
+            # 3: verify after click #2 → gone.
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(),
+                MagicMock(),
+                TimeoutException(),
+            ]
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
+        self.assertEqual(wrapper.bounding_box_click.call_count, 2)
+        wrapper.clear_card_fields_cdp.assert_called_once_with()
+
+    def test_gives_up_after_max_retries_and_logs_warning(self):
+        """Popup never goes away → warning logged, CLOSE_FAILED returned."""
+        wrapper = self._make_wrapper()
+        with patch.object(drv, "WebDriverWait") as mock_wait, \
+             self.assertLogs("modules.cdp.driver", level="WARNING") as log_cm:
+            # Every until() call returns truthy → popup always present.
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
+        # Default cap = 3 attempts.
+        self.assertEqual(wrapper.bounding_box_click.call_count, 3)
+        wrapper.clear_card_fields_cdp.assert_not_called()
+        # Final warning must clearly state we gave up.
+        self.assertTrue(
+            any("giving up" in msg for msg in log_cm.output),
+            f"expected giving-up warning, got {log_cm.output!r}",
+        )
+
+    def test_env_override_caps_retries(self):
+        """POPUP_CLOSE_MAX_RETRIES=1 limits to a single click."""
+        os.environ["POPUP_CLOSE_MAX_RETRIES"] = "1"
+        wrapper = self._make_wrapper()
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
+        self.assertEqual(wrapper.bounding_box_click.call_count, 1)
+
+    def test_env_override_clamped_to_max_10(self):
+        """Values above 10 are clamped to the upper bound."""
+        os.environ["POPUP_CLOSE_MAX_RETRIES"] = "999"
+        self.assertEqual(drv._popup_close_max_retries(), 10)  # noqa: SLF001  # pylint: disable=protected-access
+
+    def test_env_override_clamped_to_min_1(self):
+        """Values < 1 (including negatives) are clamped to 1."""
+        os.environ["POPUP_CLOSE_MAX_RETRIES"] = "0"
+        self.assertEqual(drv._popup_close_max_retries(), 1)  # noqa: SLF001  # pylint: disable=protected-access
+        os.environ["POPUP_CLOSE_MAX_RETRIES"] = "-5"
+        self.assertEqual(drv._popup_close_max_retries(), 1)  # noqa: SLF001  # pylint: disable=protected-access
+
+    def test_env_invalid_falls_back_to_default(self):
+        """Non-numeric env value falls back to the default (3)."""
+        os.environ["POPUP_CLOSE_MAX_RETRIES"] = "not-a-number"
+        self.assertEqual(drv._popup_close_max_retries(), 3)  # noqa: SLF001  # pylint: disable=protected-access
+
+    def test_default_is_three(self):
+        """With the env var unset the helper returns the default (3)."""
+        self.assertEqual(drv._popup_close_max_retries(), 3)  # noqa: SLF001  # pylint: disable=protected-access
+
+    def test_click_exception_still_retries(self):
+        """A click raising is retried; after all raise, CLOSE_FAILED returned."""
+        wrapper = self._make_wrapper()
+        wrapper.bounding_box_click.side_effect = RuntimeError("boom")
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            # Only initial presence check gets consumed (verify skipped
+            # after click failure).
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
+        # All 3 attempts ran even though each raised.
+        self.assertEqual(wrapper.bounding_box_click.call_count, 3)
 
 
 if __name__ == "__main__":

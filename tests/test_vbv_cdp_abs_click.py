@@ -86,5 +86,39 @@ class TestVbvCdpAbsClick(unittest.TestCase):
         self.assertLess(order.index("default"), order.index("dispatch"))
 
 
+    def test_default_content_restored_on_find_element_raise(self):
+        """If element lookup inside iframe raises, default_content() must still run."""
+        driver = MagicMock()
+        driver.switch_to = MagicMock()
+        driver._driver = driver
+        iframe = MagicMock(name="iframe")
+
+        def find_element(_by, selector):
+            if selector == "iframe":
+                return iframe
+            raise RuntimeError("element not found")
+
+        driver.find_element.side_effect = find_element
+
+        with self.assertRaises(RuntimeError):
+            cdp_click_iframe_element(driver, "iframe", "button", rng=_FixedRng([0.0, 0.0]))
+
+        driver.switch_to.frame.assert_called_once_with(iframe)
+        driver.switch_to.default_content.assert_called_once_with()
+
+    def test_default_content_restored_on_execute_script_raise(self):
+        """If getBoundingClientRect script raises inside iframe,
+        default_content() must still run."""
+        elem_rect = {"left": 0, "top": 0, "width": 10, "height": 10}
+        iframe_rect = {"left": 0, "top": 0}
+        driver, _iframe, _elem = _make_driver(elem_rect, iframe_rect)
+        driver.execute_script.side_effect = RuntimeError("script failed")
+
+        with self.assertRaises(RuntimeError):
+            cdp_click_iframe_element(driver, "iframe", "button", rng=_FixedRng([0.0, 0.0]))
+
+        driver.switch_to.default_content.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()
