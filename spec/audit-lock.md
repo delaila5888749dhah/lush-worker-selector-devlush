@@ -75,6 +75,16 @@ modules/delay/temporal.py — apply_gradual_drift():
 modules/delay/temporal.py — apply_micro_variation():
   result = max(0.0, base_delay * uniform(0.90, 1.10))
   → result is always non-negative
+
+modules/delay/wrapper.py — inject_step_delay():
+  Compound pipeline is (for typing/thinking):
+    base → apply_temporal_modifier → apply_fatigue → apply_micro_variation
+  Because fatigue and micro-variation run AFTER the inner clamp, the wrapper
+  re-clamps the final value:
+    typing   → max(MIN_TYPING_DELAY,   min(delay, MAX_TYPING_DELAY))
+    thinking → max(MIN_THINKING_DELAY, min(delay, MAX_HESITATION_DELAY))
+  so worst-case NIGHT × drift=1.30 × fatigue × micro_variation=1.10 still
+  respects MAX_*_DELAY (Phase 5B Task 3 compound-clamp regression).
 ```
 **Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator. `apply_gradual_drift` is an AR(1) envelope strictly bounded to ±30%; the final `min(modified, MAX_*)` clamp still applies after drift so hard caps are never violated.
 

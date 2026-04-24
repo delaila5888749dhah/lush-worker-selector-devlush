@@ -77,12 +77,16 @@ contracts:
       0.0 immediately for non-positive input and clamps all outputs to
       [0.0, MAX_*] for typing / hesitation / step constants.
       `apply_micro_variation()` returns `max(0.0, base * uniform(0.90, 1.10))`
-      — never negative. All Day/Night-modified delays remain clamped by
-      §8.6 hard constants.
+      — never negative. Because `wrapper.inject_step_delay` applies
+      fatigue and micro-variation AFTER the temporal inner clamp, it
+      re-clamps the final value to MAX_TYPING_DELAY / MAX_HESITATION_DELAY
+      so the worst-case NIGHT × drift × fatigue × micro-variation pipeline
+      still respects §8.6 hard constants.
     blueprint_ref: "spec/blueprint.md#section-10"
     audit_lock_ref: "spec/audit-lock.md#INV-DELAY-04"
     source_files:
       - modules/delay/temporal.py
+      - modules/delay/wrapper.py
     enforced_by:
       - tests/test_temporal_model.py::TestTemporalModifier::test_non_positive_base_returns_zero
       - tests/test_temporal_model.py::TestTemporalModifier::test_typing_clamped
@@ -92,6 +96,7 @@ contracts:
       - tests/test_temporal_model.py::TestMicroVariation::test_negative_base_is_clamped_to_zero
       - tests/test_temporal_model.py::TestMicroVariationMultiSeed::test_reproducible_across_5_seeds
       - tests/test_temporal_model.py::TestFatigue::test_fatigue_clamped_to_hard_limit
+      - tests/test_phase5b_polish.py::TestCompoundClamp::test_worst_case_compound_delays_still_clamped
     fail_severity: block_merge
 
   - id: INV-DAYNIGHT-04
