@@ -34,9 +34,11 @@ class TestForkCounterSurface(unittest.TestCase):
     def test_unknown_branch_logged_not_counted(self):
         # Unknown branch should not raise and not mutate any counter.
         before = monitor.get_fork_metrics()
-        monitor.record_fork("nonexistent_branch")
+        with self.assertLogs("modules.monitor.main", level="WARNING") as cm:
+            monitor.record_fork("nonexistent_branch")
         after = monitor.get_fork_metrics()
         self.assertEqual(before, after)
+        self.assertTrue(any("Unknown fork branch" in line for line in cm.output))
 
     def test_all_six_branches_exposed(self):
         metrics = monitor.get_fork_metrics()

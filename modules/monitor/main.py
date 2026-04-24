@@ -50,7 +50,6 @@ _fork_counters: dict[str, int] = {
     "fork_ui_lock": 0,
     "fork_abort_cycle": 0,
 }
-_fork_counters_lock = threading.Lock()
 
 # Snapshot of metrics from the previous rollout step (used for delta checks)
 _baseline_success_rate = None
@@ -153,7 +152,7 @@ def record_fork(branch: str) -> None:
     instead of silently inflating counters.
     """
     key = f"fork_{branch}"
-    with _fork_counters_lock:
+    with _lock:
         if key in _fork_counters:
             _fork_counters[key] += 1
             return
@@ -162,7 +161,7 @@ def record_fork(branch: str) -> None:
 
 def get_fork_metrics() -> dict:
     """Return a point-in-time snapshot of all fork counters."""
-    with _fork_counters_lock:
+    with _lock:
         return dict(_fork_counters)
 
 
@@ -309,10 +308,8 @@ def get_metrics():
             "ui_lock_recovered_count": _ui_lock_recovered_count,
             "ui_lock_exhausted_count": _ui_lock_exhausted_count,
             "vbv_detections": _vbv_detections,
+            **dict(_fork_counters),
         }
-    # Fork counters use a dedicated lock (_fork_counters_lock); merge after
-    # releasing ``_lock`` to avoid nested-lock ordering issues.
-    metrics.update(get_fork_metrics())
     return metrics
 
 
@@ -377,7 +374,6 @@ def reset():
         _ui_lock_retry_count = 0
         _ui_lock_recovered_count = 0
         _ui_lock_exhausted_count = 0
-    with _fork_counters_lock:
         for _fork_key in _fork_counters:
             _fork_counters[_fork_key] = 0
 

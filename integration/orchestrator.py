@@ -1034,8 +1034,9 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
 
 def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     """Enable CDP Network monitoring and set up total interception."""
-    # "cws4.0" is intentionally substring-matched because this endpoint path
-    # can appear with varying prefixes across environments.
+    # Phase 4 [F2]: match only narrow pricing-related path fragments from
+    # _CDP_NETWORK_URL_PATTERNS; do NOT fall back to the broad "cws4.0"
+    # substring because it also matches static assets and other non-pricing XHRs.
     try:
         driver_obj.execute_cdp_cmd("Network.enable", {})
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except

@@ -1251,7 +1251,7 @@ class GivexDriver:
             else None
         )
 
-    def _find_vbv_cancel_button(self):
+    def _find_vbv_cancel_button(self, finder=None):
         """Return ``(element, selector)`` for the first VBV cancel match.
 
         Iterates :data:`SEL_VBV_CANCEL_BUTTONS` in priority order and returns
@@ -1260,8 +1260,9 @@ class GivexDriver:
         close icons (Phase 4 [D6]).  When nothing matches, returns
         ``(None, None)``.
         """
+        finder = finder or self.find_elements
         for sel in SEL_VBV_CANCEL_BUTTONS:
-            elements = self.find_elements(sel)
+            elements = finder(sel)
             if elements:
                 _log.debug("VBV cancel matched selector: %s", sel)
                 return elements[0], sel
@@ -1278,24 +1279,28 @@ class GivexDriver:
         """
         try:
             vbv_dynamic_wait(rng=self._get_rng())
-            # Phase 4 [D6]: iterate priority-ordered selectors so that
-            # explicit Cancel/Return buttons always win over generic Close/X
-            # icons that may appear together on the challenge page.
-            last_exc: Exception | None = None
-            for sel in SEL_VBV_CANCEL_BUTTONS:
+            base = getattr(self, "_driver", self)
+            by_css = By.CSS_SELECTOR if By is not None else "css selector"
+
+            def _find_in_iframe(sel: str):
+                iframe = base.find_element(by_css, SEL_VBV_IFRAME)
+                base.switch_to.frame(iframe)
                 try:
-                    cdp_click_iframe_element(
-                        self, SEL_VBV_IFRAME, sel, rng=self._get_rng(),
-                    )
-                    _log.debug("handle_vbv_challenge cancelled via %s", sel)
-                    handle_something_wrong_popup(self)
-                    return "cancelled"
-                except (NoSuchElementException, StaleElementReferenceException) as exc:
-                    last_exc = exc
-                    continue
-            # No selector matched inside the iframe — treat as missing.
-            if last_exc is not None:
-                raise last_exc
+                    return base.find_elements(by_css, sel)
+                finally:
+                    base.switch_to.default_content()
+
+            # Phase 4 [D6]: resolve the selector once via the priority-ordered
+            # helper, then dispatch the absolute CDP click with that selector.
+            _element, selector = GivexDriver._find_vbv_cancel_button(
+                self, finder=_find_in_iframe,
+            )
+            if selector is None:
+                raise NoSuchElementException("No VBV cancel selector matched")
+            cdp_click_iframe_element(
+                self, SEL_VBV_IFRAME, selector, rng=self._get_rng(),
+            )
+            _log.debug("handle_vbv_challenge cancelled via %s", selector)
             handle_something_wrong_popup(self)
             return "cancelled"
         except (NoSuchElementException, StaleElementReferenceException) as exc:

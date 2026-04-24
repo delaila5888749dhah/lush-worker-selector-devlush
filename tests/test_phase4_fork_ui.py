@@ -154,6 +154,23 @@ class TestFindVbvCancelButtonPriority(unittest.TestCase):
         self.assertIsNone(element)
         self.assertIsNone(sel)
 
+    def test_handle_vbv_challenge_uses_helper_selected_selector(self):
+        gd = drv.GivexDriver(MagicMock(name="selenium_driver"))
+        selected = "button[aria-label*='close' i]"
+        rng = object()
+        with patch.object(drv.GivexDriver, "_find_vbv_cancel_button",
+                          return_value=(MagicMock(name="close"), selected)) as mock_find, \
+                patch.object(gd, "_get_rng", return_value=rng), \
+                patch.object(drv, "vbv_dynamic_wait"), \
+                patch.object(drv, "handle_something_wrong_popup"), \
+                patch.object(drv, "cdp_click_iframe_element") as mock_click:
+            result = gd.handle_vbv_challenge()
+        self.assertEqual(result, "cancelled")
+        mock_find.assert_called_once()
+        mock_click.assert_called_once_with(
+            gd, drv.SEL_VBV_IFRAME, selected, rng=rng,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
