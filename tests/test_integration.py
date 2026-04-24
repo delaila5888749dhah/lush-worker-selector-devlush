@@ -754,6 +754,32 @@ class SanitizeErrorTests(unittest.TestCase):
         result = _sanitize_error(exc)
         self.assertEqual(result, "Worker timeout after 30 seconds")
 
+    def test_redacts_amex_pan(self):
+        """INV-PII-UNIFIED-01: orchestrator sanitiser must redact 15-digit Amex PANs."""
+        from integration.orchestrator import _sanitize_error
+        exc = RuntimeError("Amex 378282246310005 declined")
+        result = _sanitize_error(exc)
+        self.assertNotIn("378282246310005", result)
+        self.assertIn("[REDACTED-CARD]", result)
+
+    def test_runtime_sanitize_redacts_amex_pan(self):
+        """INV-PII-UNIFIED-01: runtime sanitiser must redact 15-digit Amex PANs."""
+        from integration.runtime import _sanitize_error as runtime_sanitize
+        exc = RuntimeError("Amex 378282246310005 declined")
+        result = runtime_sanitize(exc)
+        self.assertNotIn("378282246310005", result)
+        self.assertIn("[REDACTED-CARD]", result)
+
+    def test_runtime_sanitize_redacts_email_and_redis_creds(self):
+        """INV-PII-UNIFIED-01: runtime sanitiser delegates to canonical (emails, redis creds)."""
+        from integration.runtime import _sanitize_error as runtime_sanitize
+        exc = RuntimeError("connect user@example.com via redis://u:secret@host:6379/0")
+        result = runtime_sanitize(exc)
+        self.assertNotIn("user@example.com", result)
+        self.assertNotIn("secret", result)
+        self.assertIn("[REDACTED-EMAIL]", result)
+        self.assertIn("[REDACTED-REDIS-CREDS]", result)
+
 
 class TraceIdPropagationTests(unittest.TestCase):
     """Verify _get_trace_id() returns a value from the runtime."""

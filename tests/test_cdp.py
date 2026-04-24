@@ -142,6 +142,20 @@ class SanitizeErrorTests(unittest.TestCase):
         self.assertIn("[REDACTED-CARD]", result)
         self.assertIn("[REDACTED-EMAIL]", result)
 
+    def test_redacts_amex_pan(self):
+        """INV-PII-UNIFIED-01: canonical sanitiser redacts 15-digit Amex PANs."""
+        msg = "Amex 378282246310005 declined"
+        result = _sanitize_error(msg)
+        self.assertNotIn("378282246310005", result)
+        self.assertIn("[REDACTED-CARD]", result)
+
+    def test_redacts_amex_pan_grouped(self):
+        """Amex grouped 4-6-5 form must be redacted."""
+        msg = "Amex 3782 822463 10005 declined"
+        result = _sanitize_error(msg)
+        self.assertNotIn("3782 822463 10005", result)
+        self.assertIn("[REDACTED-CARD]", result)
+
 
 # ---------------------------------------------------------------------------
 # _register_pid() and force_kill() tests

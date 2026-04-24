@@ -12,7 +12,6 @@ import json as _json
 import logging
 import os
 import random as _random
-import re as _re
 import secrets
 import socket
 import threading
@@ -233,33 +232,7 @@ def stop_maxmind_auto_reload() -> None:
         thread.join(timeout=5)
     _MAXMIND_RELOAD_THREAD = None
 
-# ── PII redaction patterns ────────────────────────────────────────────────
-# Matches 16-digit PAN-like sequences in plain (4111111111111111),
-# space-separated (4111 1111 1111 1111), and dash-separated
-# (4111-1111-1111-1111) formats.
-_CARD_PAN_RE = _re.compile(r"(?<!\d)\d{4}(?:[ -]?\d{4}){3}(?!\d)")
-_CVV_RE = _re.compile(r"\bcvv\s*=\s*\d{3,4}\b", _re.IGNORECASE)
-_EMAIL_RE = _re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-
-
-def _sanitize_error(msg: str) -> str:
-    """Redact PAN-like card numbers, CVV patterns, and emails from *msg*.
-
-    Handles card numbers in plain (``4111111111111111``), space-separated
-    (``4111 1111 1111 1111``), and dash-separated (``4111-1111-1111-1111``)
-    formats so that sensitive data is never exposed in logs or re-raised
-    exception messages from the driver layer.
-
-    Args:
-        msg: The raw message that may contain PII.
-
-    Returns:
-        The message with all recognised PII replaced by placeholder tokens.
-    """
-    msg = _CARD_PAN_RE.sub("[REDACTED-CARD]", msg)
-    msg = _CVV_RE.sub("[REDACTED-CVV]", msg)
-    msg = _EMAIL_RE.sub("[REDACTED-EMAIL]", msg)
-    return msg
+from modules.common.sanitize import sanitize_error as _sanitize_error  # INV-PII-UNIFIED-01
 
 
 # ── URL constants ─────────────────────────────────────────────────────────

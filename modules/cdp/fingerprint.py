@@ -15,6 +15,66 @@ from uuid import uuid4
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
+# ── BitBrowser endpoint scheme validation (INV-BITBROWSER-ENDPOINT-01) ───
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _validate_endpoint_scheme(endpoint: str) -> None:
+    """Warn (or raise in strict mode) when ``endpoint`` is HTTP on a non-loopback host.
+
+    Plain HTTP is only safe on loopback (127.0.0.1 / localhost / ::1). On any
+    other host the API key transits the network in clear-text, so a warning
+    is emitted. When ``BITBROWSER_ENDPOINT_STRICT`` is truthy the condition
+    escalates to ``ValueError`` instead.
+    """
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme != "http":
+        return
+    host = (parsed.hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        return
+    msg = (
+        "BITBROWSER_ENDPOINT is HTTP on non-loopback host %r — the API key "
+        "will be sent in clear-text. Use HTTPS or a loopback endpoint."
+    ) % host
+    if _env_flag("BITBROWSER_ENDPOINT_STRICT"):
+        raise ValueError(msg)
+    _log.warning(msg)
+
+
+# ── _post() retry configuration (INV-BITBROWSER-RETRY-01) ────────────────
+def _retry_attempts() -> int:
+    try:
+        return max(1, int(os.getenv("BITBROWSER_RETRY_ATTEMPTS", "3")))
+    except ValueError:
+        return 3
+
+
+def _retry_wait_initial_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("BITBROWSER_RETRY_WAIT_INITIAL_S", "0.5")))
+    except ValueError:
+        return 0.5
+
+
+def _retry_wait_max_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("BITBROWSER_RETRY_WAIT_MAX_S", "8.0")))
+    except ValueError:
+        return 8.0
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry only on transient network failures and 5xx responses — NOT 4xx."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return 500 <= exc.code < 600
+    return isinstance(exc, (urllib.error.URLError, OSError))
+
+
 class BitBrowserClient:
     """Thin HTTP client for BitBrowser profile APIs."""
 
@@ -23,6 +83,7 @@ class BitBrowserClient:
         scheme = urllib.parse.urlparse(self._endpoint).scheme
         if scheme not in ("http", "https"):
             raise ValueError(f"Unsupported endpoint scheme: {scheme!r}")
+        _validate_endpoint_scheme(self._endpoint)
         self._api_key = api_key
 
     def _url(self, path: str) -> str:
@@ -34,24 +95,48 @@ class BitBrowserClient:
 
     def _post(self, path: str, payload: Dict[str, object],
               timeout: int = 10) -> Dict[str, object]:
-        """POST JSON to the given API path and return parsed response dict."""
+        """POST JSON with exponential backoff on transient failures.
+
+        Retries on ``URLError``, ``OSError``, and 5xx responses up to
+        ``BITBROWSER_RETRY_ATTEMPTS`` total attempts. 4xx responses and
+        other errors fail fast. Backoff doubles each attempt, capped at
+        ``BITBROWSER_RETRY_WAIT_MAX_S``.
+        """
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self._url(path),
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-Api-Key": self._api_key,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-            body = json.loads(resp.read().decode("utf-8"))
-        if isinstance(body, dict) and isinstance(body.get("data"), dict):
-            return body["data"]
-        if isinstance(body, dict):
-            return body
-        raise RuntimeError("BitBrowser API returned non-dict JSON payload")
+        attempts = _retry_attempts()
+        wait = _retry_wait_initial_s()
+        wait_max = _retry_wait_max_s()
+        last_exc: Optional[BaseException] = None
+        for attempt in range(1, attempts + 1):
+            req = urllib.request.Request(
+                self._url(path),
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Api-Key": self._api_key,
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+                    body = json.loads(resp.read().decode("utf-8"))
+                if isinstance(body, dict) and isinstance(body.get("data"), dict):
+                    return body["data"]
+                if isinstance(body, dict):
+                    return body
+                raise RuntimeError("BitBrowser API returned non-dict JSON payload")
+            except Exception as exc:  # pylint: disable=broad-except
+                last_exc = exc
+                if not _is_retryable(exc) or attempt >= attempts:
+                    raise
+                _log.warning(
+                    "BitBrowser _post %s attempt %d/%d failed (%s); retrying in %.2fs",
+                    path, attempt, attempts, type(exc).__name__, wait,
+                )
+                time.sleep(wait)
+                wait = min(wait * 2 if wait > 0 else _retry_wait_initial_s(), wait_max)
+        # Unreachable — loop either returns or re-raises.
+        raise RuntimeError("BitBrowser _post exhausted retries") from last_exc
 
     def create_profile(self) -> str:
         """POST /api/v1/browser/create → returns profile_id string."""

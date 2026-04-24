@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 import logging
 import os
 import random
-import re
 import signal
 import threading
 import time
@@ -26,6 +25,7 @@ from modules.billing import main as billing
 from modules.cdp import main as cdp
 from modules.cdp.proxy import get_default_pool
 from modules.common.exceptions import CycleExhaustedError
+from modules.common.sanitize import sanitize_error as _canonical_sanitize_error  # INV-PII-UNIFIED-01
 from modules.common.thresholds import ERROR_RATE_THRESHOLD, MAX_RESTARTS_PER_HOUR
 _logger = logging.getLogger(__name__)
 
@@ -61,7 +61,6 @@ _pending_restarts = 0
 _stop_requests = set()
 _behavior_delay_enabled = True
 _stop_event = threading.Event()
-_SENSITIVE_PATTERN = re.compile(r'(?<!\w)(?:\d[ -]?){13,16}(?!\w)')
 _MAX_RESTART_BACKOFF = 60
 _restart_delay: float = 0
 _loop_error_count = 0
@@ -150,8 +149,11 @@ def _log_event(worker_id, state, action, metrics=None) -> None:
             "log_sink.emit() failed (total sink failures: %d)", sink_fail_count, exc_info=True
         )
 def _sanitize_error(exc: Exception) -> str:
-    """Redact card-like digit sequences from exception messages before logging."""
-    return _SENSITIVE_PATTERN.sub("[REDACTED]", str(exc))
+    """Redact PII from exception messages before logging.
+
+    Delegates to the canonical sanitiser (INV-PII-UNIFIED-01).
+    """
+    return _canonical_sanitize_error(str(exc))
 def _safe_sleep(interval):
     try:
         _stop_event.wait(timeout=float(interval))
