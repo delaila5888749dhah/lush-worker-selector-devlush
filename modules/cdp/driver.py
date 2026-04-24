@@ -59,6 +59,7 @@ from modules.common.exceptions import (
     SelectorTimeoutError,
     SessionFlaggedError,
 )
+from modules.common.sanitize import sanitize_error as _sanitize_error  # INV-PII-UNIFIED-01
 
 
 try:
@@ -231,8 +232,6 @@ def stop_maxmind_auto_reload() -> None:
     if thread is not None:
         thread.join(timeout=5)
     _MAXMIND_RELOAD_THREAD = None
-
-from modules.common.sanitize import sanitize_error as _sanitize_error  # INV-PII-UNIFIED-01
 
 
 # ── URL constants ─────────────────────────────────────────────────────────

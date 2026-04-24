@@ -6,6 +6,7 @@ Covers INV-BITBROWSER-RETRY-01:
 * Retry count is bounded by BITBROWSER_RETRY_ATTEMPTS.
 * Backoff wait doubles each attempt, capped at BITBROWSER_RETRY_WAIT_MAX_S.
 """
+# pylint: disable=protected-access
 import io
 import json
 import os

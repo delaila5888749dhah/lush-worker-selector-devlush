@@ -203,14 +203,40 @@ point for CDP to signal that a checkout total has been received.
 
 ---
 
-### INV-CDP-01 — _sanitize_error() PII Redaction
+### INV-CDP-01 — _sanitize_error() PII Redaction (delegated)
 ```
-modules/cdp/main.py — _sanitize_error(msg) redacts card numbers, CVV patterns,
-and email addresses before any exception message is logged or re-raised.
-Compiled regex patterns: _CARD_PATTERN (16-digit \b\d{16}\b), _CVV_PATTERN
-(cvv\s*=\s*\d{3,4}, case-insensitive), _EMAIL_PATTERN (RFC-5321 subset).
+modules/cdp/main.py — _sanitize_error is re-exported from
+  modules.common.sanitize.sanitize_error (INV-PII-UNIFIED-01).
+  No local regex patterns remain in this module.
+modules/cdp/driver.py — _sanitize_error is re-exported from
+  modules.common.sanitize.sanitize_error (INV-PII-UNIFIED-01).
 ```
-**Rule:** Any log output or re-raised exception from the CDP layer MUST have PII stripped by `_sanitize_error()` first. Card numbers (16-digit), CVV patterns, and email addresses MUST NOT appear in log output.
+**Rule:** Any log output or re-raised exception from the CDP layer MUST have PII
+stripped by `modules.common.sanitize.sanitize_error()` first. The canonical
+sanitiser redacts 13/15/16/19-digit PANs (bare / spaced / dashed), CVV keyword
+patterns, bare CVVs adjacent to a redacted PAN, email addresses, and Redis URL
+credentials. CDP modules MUST NOT define their own regex patterns or local
+`_sanitize_error` functions.
+
+---
+
+### INV-PII-UNIFIED-01 — Single PII Sanitiser Source of Truth
+```
+modules/common/sanitize.py — sanitize_error() is the canonical PII redaction
+  function. Redacts in order: Redis URL credentials, PANs (13/15/16/19 digits
+  in bare/spaced/dashed forms), bare CVV adjacent to redacted PAN, keyword
+  CVV (cvv=123), email addresses.
+Delegating modules:
+  - modules/cdp/main.py          → from modules.common.sanitize import sanitize_error as _sanitize_error
+  - modules/cdp/driver.py        → from modules.common.sanitize import sanitize_error as _sanitize_error
+  - integration/orchestrator.py  → _canonical_sanitize_error wrapper accepting Exception
+  - integration/runtime.py       → _sanitize_error adapter accepting Exception
+```
+**Rule:** No module in `modules/*` or `integration/*` may define a local
+function named `_sanitize_error` or `sanitize_error` that contains regex
+patterns. All PII redaction MUST go through `modules.common.sanitize`. Thin
+adapters that accept `Exception` and delegate to `sanitize_error(str(exc))`
+are permitted for backward-compatible call sites.
 
 ---
 
@@ -228,7 +254,7 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 
 | ID | Description | Resolution |
 |---|---|---|
-| GAP-CDP-01 | `modules/cdp/main.py` — PID tracking, `_sanitize_error()`, driver delegation | ✅ Resolved — PR #238 |
+| GAP-CDP-01 | `modules/cdp/main.py` — PID tracking, `_sanitize_error()`, driver delegation | ✅ Resolved — PR #238; INV-CDP-01 rewritten and INV-PII-UNIFIED-01 added in PR #232 |
 | GAP-FSM-02 | FSM singleton shares state across all workers | Acceptable: `orchestrator._lock` serializes `initialize_cycle()` calls; each cycle resets the FSM before use |
 | GAP-BILLING-01 | `_find_matching_index()` cursor snap race (theoretical) | Acceptable: entire `select_profile()` holds `_lock` during actual selection |
 
@@ -297,3 +323,36 @@ semantics, to the round-robin cursor invariant, or to the
 compatibility for `BITBROWSER_POOL_MODE=0` (legacy create/delete flow) is
 MANDATORY — tests/test_bitbrowser_pool.py#test_backward_compat_legacy_mode_unaffected
 enforces this at CI level.
+
+---
+
+### INV-BITBROWSER-RETRY-01 — _post() Retry Semantics
+```
+modules/cdp/fingerprint.py — BitBrowserClient._post() retries transient failures:
+  Retryable:    urllib.error.URLError, OSError, HTTPError with 500 <= code < 600
+  Fail-fast:    HTTPError with 400 <= code < 500, RuntimeError, JSONDecodeError
+  Config (env): BITBROWSER_RETRY_ATTEMPTS        (default 3, min 1)
+                BITBROWSER_RETRY_WAIT_INITIAL_S  (default 0.5)
+                BITBROWSER_RETRY_WAIT_MAX_S      (default 8.0)
+  Backoff:      doubles each attempt, capped at WAIT_MAX_S
+```
+**Rule:** 4xx responses MUST fail fast (caller bug — bad payload or auth).
+5xx and network errors MUST be retried up to `BITBROWSER_RETRY_ATTEMPTS` total
+attempts. The combined worst-case wall-clock (attempts × WAIT_MAX_S) MUST
+remain below the watchdog timeout (_WATCHDOG_TIMEOUT = 30s and
+_CDP_CALL_TIMEOUT). If defaults are changed, re-verify this budget.
+
+---
+
+### INV-BITBROWSER-ENDPOINT-01 — Endpoint Scheme/Host Safety
+```
+modules/cdp/fingerprint.py — _validate_endpoint_scheme() runs in
+  BitBrowserClient.__init__. HTTP on any non-loopback host (not in
+  {"127.0.0.1", "localhost", "::1"}) emits a WARNING because the API key
+  would transit clear-text. BITBROWSER_ENDPOINT_STRICT=1 escalates the
+  warning to ValueError.
+```
+**Rule:** Plain HTTP is only safe on loopback. Operators deploying the worker
+against a remote BitBrowser instance MUST use HTTPS or explicitly accept
+risk by leaving `BITBROWSER_ENDPOINT_STRICT` unset. CI MUST NOT bypass this
+warning by setting loopback endpoints in non-loopback test environments.
