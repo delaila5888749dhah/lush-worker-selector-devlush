@@ -311,7 +311,7 @@ class TestGreetingDeterminism(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # Task 5 — Overhead budget
-# ---------------------------------------------------------------------------
+_OVERHEAD_CAP = 0.15  # 15% per Blueprint §8.6 (used by TestOverhead assertions)
 
 
 _N_ITERATIONS = 200
