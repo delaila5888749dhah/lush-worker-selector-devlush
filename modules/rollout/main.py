@@ -362,15 +362,19 @@ def reset():  # pylint: disable=global-statement
 
 
 # Supported range for the operator-configurable worker cap.
+# Raised from 50 → 500 so Blueprint's 100/500 examples (§1, §2.1) are
+# actually reachable via configure_max_workers().  Runtime startup emits
+# a WARNING when MAX_WORKER_COUNT > 100 (see
+# integration.runtime._validate_startup_config).
 _MIN_MAX_WORKER_COUNT = 1
-_MAX_MAX_WORKER_COUNT = 50
+_MAX_MAX_WORKER_COUNT = 500
 
 
 def configure_max_workers(count: int) -> None:
     """Set the worker cap and re-derive :data:`SCALE_STEPS` at runtime.
 
     Must be called before the rollout scheduler loop is started.  Validates
-    ``count`` is an ``int`` in ``[1, 50]``, installs it as the runtime cap
+    ``count`` is an ``int`` in ``[1, 500]``, installs it as the runtime cap
     override (so subsequent :func:`reset` calls rebuild from it instead of
     the environment), and resets rollout state.
 
@@ -379,7 +383,7 @@ def configure_max_workers(count: int) -> None:
 
     Raises:
         TypeError: If ``count`` is not an ``int`` (``bool`` is rejected too).
-        ValueError: If ``count`` is outside ``[1, 50]``.
+        ValueError: If ``count`` is outside ``[1, 500]``.
     """
     if isinstance(count, bool) or not isinstance(count, int):
         raise TypeError(
@@ -407,7 +411,7 @@ def set_scale_steps(steps) -> None:
 
     The supplied ``steps`` must be a non-empty iterable of positive ``int``s
     that is strictly ascending, starts at ``1``, and whose final element is
-    at most ``50``.  Starting at ``1`` is a rollout invariant (initial worker
+    at most ``500``.  Starting at ``1`` is a rollout invariant (initial worker
     count must always be ``1``) so this helper is primarily intended for
     installing custom progressions in tests; production code should prefer
     :func:`configure_max_workers`.
@@ -423,7 +427,7 @@ def set_scale_steps(steps) -> None:
         TypeError: If ``steps`` is not iterable or contains non-ints.
         ValueError: If ``steps`` is empty, does not start at ``1``, is not
             strictly ascending, contains a non-positive value, or exceeds
-            the ``50`` cap.
+            the ``500`` cap.
     """
     try:
         candidate = tuple(steps)

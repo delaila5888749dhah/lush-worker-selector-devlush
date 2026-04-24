@@ -108,7 +108,7 @@ class TestMaxWorkerCountCap(_CapRuntimeMixin, unittest.TestCase):
         cases = [
             ({"MAX_WORKER_COUNT": "abc"}, "non-int"),
             ({"MAX_WORKER_COUNT": "0"}, "zero"),
-            ({"MAX_WORKER_COUNT": "51"}, "over-50"),
+            ({"MAX_WORKER_COUNT": "501"}, "over-500"),
             ({"MAX_WORKER_COUNT": "3", "WORKER_COUNT": "5"}, "worker>max"),
         ]
         for env, label in cases:
