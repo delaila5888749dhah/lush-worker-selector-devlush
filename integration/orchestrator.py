@@ -1235,10 +1235,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         # Fallback: read total from DOM to unblock watchdog
         _notify_total_from_dom(driver_obj, worker_id)
         try:
-            post_total = watchdog.wait_for_total(
+            phase_c_total = watchdog.wait_for_total(
                 worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
             )
-            total = post_total if post_total is not None else total
+            total = phase_c_total if phase_c_total is not None else total
         except SessionFlaggedError:
             _phase_c_task_id = getattr(task, "task_id", None)
             _logger.warning(

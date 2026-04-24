@@ -132,6 +132,16 @@ class CDPTimeoutContractDocTests(unittest.TestCase):
         # Must not claim 30s for the network total watchdog.
         self.assertNotRegex(text, r"timeout\s*=\s*30\b")
 
+    def test_payment_watchdog_timeout_default_is_10s(self):
+        """The orchestrator's compiled-in payment watchdog timeout is 10s."""
+        import os
+        import integration.orchestrator as orch
+        # Baseline: with no operator override, default is 10s (see
+        # _load_payment_watchdog_timeout).  Skip if a CI override is active.
+        if os.environ.get("PAYMENT_WATCHDOG_TIMEOUT_S"):
+            self.skipTest("PAYMENT_WATCHDOG_TIMEOUT_S override is set")
+        self.assertEqual(orch._WATCHDOG_TIMEOUT_PAYMENT, 10.0)
+
 
 if __name__ == "__main__":
     unittest.main()
