@@ -725,11 +725,10 @@ def probe_cdp_listener_support(driver_obj: object) -> None:
     that mis-configured Selenium flavors are caught at driver bring-up time
     rather than silently at the first network-watchdog attach.
 
-    Called from ``integration/worker_task.py`` (currently lines 127-128)
-    immediately after the seleniumwire driver is constructed so the probe
-    fires once per cycle before any CDP listener is registered.  Keep this
-    helper as the single source of truth for the check; callers should not
-    re-implement it.
+    Called from ``integration/worker_task.py`` immediately after the
+    seleniumwire driver is constructed so the probe fires once per cycle
+    before any CDP listener is registered.  Keep this helper as the single
+    source of truth for the check; callers should not re-implement it.
     """
     if not (hasattr(driver_obj, "add_cdp_listener")
             and callable(getattr(driver_obj, "add_cdp_listener", None))):

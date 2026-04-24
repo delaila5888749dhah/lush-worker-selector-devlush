@@ -73,7 +73,11 @@ class TestEnvExampleDocumentsAllRuntimeEnvVars(unittest.TestCase):
             f".env.example missing at {ENV_EXAMPLE}",
         )
         content = ENV_EXAMPLE.read_text(encoding="utf-8")
-        documented = _REQUIRED_ENV_VARS + tuple(sorted(_grep_derived_env_vars()))
+        documented = tuple(
+            dict.fromkeys(
+                _REQUIRED_ENV_VARS + tuple(sorted(_grep_derived_env_vars()))
+            )
+        )
         # Accept either `NAME=...` (live default) or `# NAME=...` (commented
         # default) — both count as "documented" since operators see the knob.
         for name in documented:
@@ -135,9 +139,12 @@ class TestStaggerEnabledIndependentOfBehaviorDelay(unittest.TestCase):
         """The helper itself must only consult _stagger_enabled."""
         runtime.set_behavior_delay_enabled(False)
         runtime.set_stagger_enabled(False)
+        with runtime._stagger_lock:  # pylint: disable=protected-access
+            runtime._last_worker_launch_ts = 123.0  # pylint: disable=protected-access
         with mock.patch.object(runtime._stop_event, "wait") as m_wait:  # pylint: disable=protected-access
             self.assertEqual(runtime._stagger_sleep_before_launch(), 0.0)  # pylint: disable=protected-access
         m_wait.assert_not_called()
+        self.assertEqual(runtime._last_worker_launch_ts, 123.0)  # pylint: disable=protected-access
 
     def test_stagger_disabled_skips_sleep_helper(self):
         """Sanity: the new flag gates the stagger path, not behavior delay."""
