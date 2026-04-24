@@ -91,6 +91,32 @@ class BoundingBoxClickStrictModeTests(unittest.TestCase):
                 gd.bounding_box_click("#x")
         el.click.assert_not_called()
 
+    def test_strict_raises_on_negative_width_rect(self):
+        """CSS transform scale(-1) can yield negative width — must still raise in strict."""
+        d, el = _make_driver(rect={"left": 10.0, "top": 10.0, "width": -40.0, "height": 20.0})
+        gd = GivexDriver(d, persona=_make_persona(), strict=True)
+        with patch("time.sleep"):
+            with self.assertRaises(CDPClickError):
+                gd.bounding_box_click("#x")
+        el.click.assert_not_called()
+
+    def test_strict_raises_on_negative_height_rect(self):
+        d, el = _make_driver(rect={"left": 10.0, "top": 10.0, "width": 40.0, "height": -20.0})
+        gd = GivexDriver(d, persona=_make_persona(), strict=True)
+        with patch("time.sleep"):
+            with self.assertRaises(CDPClickError):
+                gd.bounding_box_click("#x")
+        el.click.assert_not_called()
+
+    def test_strict_raises_on_missing_rect_keys(self):
+        """Rect missing required keys is treated as invalid."""
+        d, el = _make_driver(rect={"left": 10.0, "top": 10.0})  # no width/height
+        gd = GivexDriver(d, persona=_make_persona(), strict=True)
+        with patch("time.sleep"):
+            with self.assertRaises(CDPClickError):
+                gd.bounding_box_click("#x")
+        el.click.assert_not_called()
+
     # Branch 3 — persona RNG missing
     def test_strict_raises_on_missing_rng(self):
         d, el = _make_driver()

@@ -61,7 +61,7 @@ class WaitForTotalOrderingTests(unittest.TestCase):
                 lambda *a, **kw: call_order.append("wait") or 50.0
             )
             mock_fsm.get_current_state_for_worker.return_value = State("success")
-            run_payment_step(task, worker_id="ord-worker")
+            orch.run_payment_step(task, worker_id="ord-worker")
 
         # First call must be "wait" (Phase A).
         self.assertEqual(call_order[0], "wait", f"got: {call_order}")
@@ -87,7 +87,7 @@ class WaitForTotalOrderingTests(unittest.TestCase):
             mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("preflight timeout")
 
             with self.assertRaises(SessionFlaggedError):
-                run_payment_step(task, worker_id="abort-worker")
+                orch.run_payment_step(task, worker_id="abort-worker")
 
         mock_cdp.run_preflight_and_fill.assert_not_called()
         mock_cdp.submit_purchase.assert_not_called()

@@ -419,12 +419,14 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         self.assertIn(task.primary_card.cvv, cdp_chars)
 
         # Billing text fields now also route through CDP (Phase 3A Task 1);
-        # Selenium send_keys must NOT be used for any §5 text field.
+        # Selenium send_keys must NOT be used for any §5 text field.  With
+        # no persona attached, typo injection is disabled and each field
+        # value appears verbatim in the dispatched key-event stream.
         element.send_keys.assert_not_called()
-        self.assertIn(billing.address[0], cdp_chars)
-        self.assertIn(billing.city[0], cdp_chars)
-        self.assertIn(billing.zip_code[0], cdp_chars)
-        self.assertIn(billing.phone[0], cdp_chars)
+        self.assertIn(billing.address, cdp_chars)
+        self.assertIn(billing.city, cdp_chars)
+        self.assertIn(billing.zip_code, cdp_chars)
+        self.assertIn(billing.phone, cdp_chars)
 
         # Select options for expiry, country, state
         select_calls = {c.args[0]: c.args[1] for c in mock_select.call_args_list}
@@ -512,16 +514,17 @@ class TestFillBilling(unittest.TestCase):
             gd.fill_billing(billing)
 
         # Phase 3A Task 1 — billing text fields route through CDP dispatchKeyEvent,
-        # not Selenium send_keys.
+        # not Selenium send_keys.  With no persona attached, typo injection is
+        # disabled so each field value appears verbatim in the key-event stream.
         element.send_keys.assert_not_called()
         cdp_chars = "".join(
             c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
             if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
         )
-        self.assertIn(billing.address[0], cdp_chars)
-        self.assertIn(billing.city[0], cdp_chars)
-        self.assertIn(billing.zip_code[0], cdp_chars)
-        self.assertIn(billing.phone[0], cdp_chars)
+        self.assertIn(billing.address, cdp_chars)
+        self.assertIn(billing.city, cdp_chars)
+        self.assertIn(billing.zip_code, cdp_chars)
+        self.assertIn(billing.phone, cdp_chars)
 
         # State and country selected
         state_calls = [c for c in mock_select.call_args_list if c.args[0] == SEL_BILLING_STATE]

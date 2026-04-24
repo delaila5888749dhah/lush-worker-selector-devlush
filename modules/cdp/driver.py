@@ -1323,11 +1323,13 @@ class GivexDriver:
         events that defeat anti-detect and MUST NOT be used on the production
         hot-path.
 
-        When the ``ENFORCE_CDP_TYPING_STRICT`` environment variable is set to
-        ``"1"`` (production default), calling this helper raises
-        :class:`RuntimeError` rather than silently dispatching Selenium keys.
-        In non-strict mode a :class:`DeprecationWarning` is emitted instead
-        so test suites can still patch this entry point.
+        When the ``ENFORCE_CDP_TYPING_STRICT`` environment variable is unset
+        or set to ``"1"`` (the production default), calling this helper
+        raises :class:`RuntimeError` rather than silently dispatching Selenium
+        keys.  Set ``ENFORCE_CDP_TYPING_STRICT=0`` only in test environments
+        that legitimately exercise the deprecated fallback; a
+        :class:`DeprecationWarning` is still emitted in that case so
+        regressions remain noisy in logs.
 
         Args:
             selector: CSS selector for the input/textarea element.
@@ -1337,7 +1339,12 @@ class GivexDriver:
             SelectorTimeoutError: if no matching element is found.
             RuntimeError: when ``ENFORCE_CDP_TYPING_STRICT=1``.
         """
-        if os.environ.get("ENFORCE_CDP_TYPING_STRICT", "0") == "1":
+        # Default defaults to ``"1"`` (strict) so production environments —
+        # which rarely set the variable explicitly — fail loudly if any
+        # regression re-introduces a call-site.  Tests that need the legacy
+        # shim behavior must opt into non-strict explicitly via
+        # ``ENFORCE_CDP_TYPING_STRICT=0``.
+        if os.environ.get("ENFORCE_CDP_TYPING_STRICT", "1") == "1":
             raise RuntimeError(
                 "_cdp_type_field called in strict mode; all text fields must "
                 "route through _realistic_type_field (CDP Input.dispatchKeyEvent)."
@@ -1523,14 +1530,25 @@ class GivexDriver:
             elements[0].click()
             return
 
-        # Branch 2: rect valid
-        if not rect or not rect.get("width") or not rect.get("height"):
+        # Branch 2: rect valid — guard against falsy rect, missing keys,
+        # zero dimensions, AND negative dimensions (e.g. a CSS transform
+        # ``scale(-1)`` can produce a non-positive bounding-box width).
+        rect_w = rect.get("width") if rect else None
+        rect_h = rect.get("height") if rect else None
+        if (
+            not rect
+            or not isinstance(rect_w, (int, float))
+            or not isinstance(rect_h, (int, float))
+            or rect_w <= 0
+            or rect_h <= 0
+        ):
             if self._strict:
                 raise CDPClickError(
-                    f"Element {selector!r} has falsy/zero-size rect: {rect!r}"
+                    f"Element {selector!r} has invalid rect (non-positive "
+                    f"width/height): {rect!r}"
                 )
             _log.warning(
-                "bounding_box_click: rect is falsy/zero-size for selector %r;"
+                "bounding_box_click: rect is falsy/non-positive for selector %r;"
                 " falling back to plain click",
                 selector,
             )

@@ -184,6 +184,14 @@ class CDPTypeFieldStrictModeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             gd._cdp_type_field("#x", "value")  # pylint: disable=protected-access
 
+    def test_cdp_type_field_default_env_is_strict(self):
+        """With ENFORCE_CDP_TYPING_STRICT unset, production default is strict (raises)."""
+        os.environ.pop("ENFORCE_CDP_TYPING_STRICT", None)
+        driver = _mk_driver()
+        gd = GivexDriver(driver, strict=False)
+        with self.assertRaises(RuntimeError):
+            gd._cdp_type_field("#x", "value")  # pylint: disable=protected-access
+
 
 if __name__ == "__main__":
     unittest.main()
