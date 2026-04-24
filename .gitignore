@@ -1,6 +1,19 @@
 __pycache__/
 *.pyc
 .venv/
+.env
+.env.local
+*.pem
+*.key
 .idempotency_store.json
 billing_pool/*.txt
+!billing_pool/profiles_seed.txt
 data/GeoLite2-City.mmdb
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml

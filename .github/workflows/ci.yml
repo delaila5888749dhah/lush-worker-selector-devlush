@@ -30,7 +30,22 @@ jobs:
         python-version: "3.11"
 
     - name: Install dependencies
-      run: python -m pip install -r requirements.txt pytest
+      run: python -m pip install -r requirements.txt pytest coverage
+
+    - name: Security audit dependencies (pip-audit)
+      run: |
+        python -m pip install pip-audit
+        pip-audit -r requirements.txt --strict
+
+    - name: Lint (ruff)
+      run: |
+        python -m pip install ruff
+        ruff check .
+
+    - name: Type check (mypy)
+      run: |
+        python -m pip install mypy
+        mypy app modules integration || true
 
     - name: Check import scope
       run: python ci/check_import_scope.py
@@ -72,8 +87,12 @@ jobs:
         PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         CHANGE_CLASS_APPROVED: ${{ vars.CHANGE_CLASS_APPROVED || 'false' }}
 
-    - name: Unit tests
-      run: python -m unittest discover tests
+    - name: Unit tests (with coverage)
+      run: |
+        python -m coverage run --source=app,modules,integration \
+            -m unittest discover tests
+        python -m coverage xml -o coverage.xml
+        python -m coverage report --fail-under=0
 
     - name: Integration tests (L3 harness + L4 smoke)
       run: python -m unittest discover tests/integration -v

@@ -4,7 +4,8 @@
 # separately from the unit/integration suites because the acceptance criterion
 # requires: "CI job mới: make test-e2e (tách khỏi unit test)".
 
-.PHONY: test test-unit test-integration test-e2e test-all
+.PHONY: test test-unit test-integration test-e2e test-all \
+        lint format typecheck coverage audit
 
 # Default target — unit suite (fast path used by most contributors).
 test: test-unit
@@ -24,3 +25,22 @@ test-e2e:
 
 # Convenience: run everything locally.
 test-all: test-unit test-integration test-e2e
+
+# ── Quality gates (issue #226) ─────────────────────────────────────
+lint:
+	ruff check .
+
+format:
+	ruff format .
+
+typecheck:
+	mypy app modules integration
+
+coverage:
+	python -m coverage run --source=app,modules,integration \
+	    -m unittest discover tests
+	python -m coverage report
+	python -m coverage xml -o coverage.xml
+
+audit:
+	pip-audit -r requirements.txt --strict

@@ -1,0 +1,69 @@
+# Project tooling configuration — issue #226 hardening pass.
+#
+# Configs are intentionally lenient for the legacy code in app/, modules/,
+# integration/ — the goal is to establish a baseline gate without forcing
+# a repository-wide refactor.  Tighten rules incrementally in follow-up PRs.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    ".venv",
+    "build",
+    "dist",
+    "data",
+    "billing_pool",
+    "spec",
+]
+
+[tool.ruff.lint]
+# Start with the "E" (pycodestyle errors) and "F" (pyflakes) rule families
+# only.  Additional rule sets (I, B, UP, …) will be enabled in follow-up PRs
+# once the existing code has been cleaned up.
+select = ["E", "F"]
+ignore = [
+    "E501",  # line-too-long — formatter handles wrapping
+    "E402",  # module-level import not at top — common in conditional imports
+    "E701",  # multiple statements on one line (colon) — legacy style
+    "E702",  # multiple statements on one line (semicolon) — legacy style
+    "E731",  # lambda assignment — used intentionally in a few places
+    "E741",  # ambiguous variable name — legacy naming
+    "F401",  # unused imports — some re-exports rely on this
+    "F841",  # assigned but unused — legitimate in error-handling paths
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+follow_imports = "silent"
+# Legacy code has no type hints yet — treat mypy as a warning-only advisory
+# gate until hints are added incrementally.  See TODO in CI.
+check_untyped_defs = false
+disallow_untyped_defs = false
+warn_unused_ignores = false
+warn_return_any = false
+no_implicit_optional = true
+strict_optional = false
+exclude = "(^build/|^dist/|^\\.venv/|^data/|^billing_pool/|^spec/|^tests/)"
+
+[tool.coverage.run]
+branch = true
+source = ["app", "modules", "integration"]
+omit = [
+    "*/__main__.py",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
