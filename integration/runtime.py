@@ -89,14 +89,18 @@ _stagger_lock = threading.Lock()
 def _stagger_sleep_before_launch(rng=None) -> float:
     """Sleep between worker launches per Blueprint §1.
 
-    The first launch is immediate (no stagger).  Subsequent launches wait so
-    that the delta since the previous launch falls within
-    ``_STAGGER_RANGE``.  Uses the interruptible ``_stop_event`` so that
-    ``stop()`` can unblock the sleep.
+    Gated solely by ``_stagger_enabled`` (RT-STAGGER-FLAG).  When the flag is
+    off the helper returns immediately.  Otherwise the first launch is
+    immediate (no stagger) and subsequent launches wait so that the delta
+    since the previous launch falls within ``_STAGGER_RANGE``.  Uses the
+    interruptible ``_stop_event`` so that ``stop()`` can unblock the sleep.
 
     Returns the number of seconds slept (0.0 when no sleep was required).
     """
     global _last_worker_launch_ts
+    with _lock:
+        if not _stagger_enabled:
+            return 0.0
     rng = rng or random
     with _stagger_lock:
         now = time.monotonic()
@@ -721,10 +725,11 @@ def probe_cdp_listener_support(driver_obj: object) -> None:
     that mis-configured Selenium flavors are caught at driver bring-up time
     rather than silently at the first network-watchdog attach.
 
-    Called from ``integration/worker_task.py`` immediately after the
-    seleniumwire driver is constructed so the probe fires once per cycle
-    before any CDP listener is registered.  Keep this helper as the single
-    source of truth for the check; callers should not re-implement it.
+    Called from ``integration/worker_task.py`` (currently lines 127-128)
+    immediately after the seleniumwire driver is constructed so the probe
+    fires once per cycle before any CDP listener is registered.  Keep this
+    helper as the single source of truth for the check; callers should not
+    re-implement it.
     """
     if not (hasattr(driver_obj, "add_cdp_listener")
             and callable(getattr(driver_obj, "add_cdp_listener", None))):
@@ -995,7 +1000,7 @@ def set_behavior_delay_enabled(enabled):
     global _behavior_delay_enabled
     with _lock:
         _behavior_delay_enabled = bool(enabled)
-def set_stagger_enabled(enabled):
+def set_stagger_enabled(enabled: bool) -> None:
     """Enable or disable the 12–25s stagger between worker launches.
 
     Independent from :func:`set_behavior_delay_enabled` (RT-STAGGER-FLAG):

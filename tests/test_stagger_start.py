@@ -11,11 +11,13 @@ class TestStaggerStart(unittest.TestCase):
     def setUp(self):
         # Reset the module-level stagger state without calling reset()
         # (which tries to stop the loop and touches other subsystems).
+        runtime.set_stagger_enabled(True)
         with runtime._stagger_lock:
             runtime._last_worker_launch_ts = 0.0
         runtime._stop_event.clear()
 
     def tearDown(self):
+        runtime.set_stagger_enabled(True)
         with runtime._stagger_lock:
             runtime._last_worker_launch_ts = 0.0
         runtime._stop_event.clear()

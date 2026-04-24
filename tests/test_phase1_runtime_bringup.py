@@ -23,6 +23,14 @@ from modules.rollout import main as rollout_module
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
+_ENV_SOURCE_FILES = (
+    REPO_ROOT / "integration/runtime.py",
+    REPO_ROOT / "modules/rollout/main.py",
+    REPO_ROOT / "modules/delay/config.py",
+    REPO_ROOT / "modules/billing/main.py",
+    REPO_ROOT / "modules/cdp/fingerprint.py",
+    REPO_ROOT / "modules/cdp/driver.py",
+)
 
 # All runtime env vars the Phase 1 ticket requires to be documented.
 _REQUIRED_ENV_VARS = (
@@ -45,6 +53,17 @@ _REQUIRED_ENV_VARS = (
 )
 
 
+def _grep_derived_env_vars() -> set[str]:
+    """Return the literal env var names grep would find in the review files."""
+    pattern = re.compile(
+        r"""os\.(?:environ\.get|getenv)\(\s*['"]([^'"]+)['"]"""
+    )
+    names: set[str] = set()
+    for path in _ENV_SOURCE_FILES:
+        names.update(pattern.findall(path.read_text(encoding="utf-8")))
+    return names
+
+
 class TestEnvExampleDocumentsAllRuntimeEnvVars(unittest.TestCase):
     """RT-ENV-DOCS — parse .env.example, assert all listed vars present."""
 
@@ -54,9 +73,10 @@ class TestEnvExampleDocumentsAllRuntimeEnvVars(unittest.TestCase):
             f".env.example missing at {ENV_EXAMPLE}",
         )
         content = ENV_EXAMPLE.read_text(encoding="utf-8")
+        documented = _REQUIRED_ENV_VARS + tuple(sorted(_grep_derived_env_vars()))
         # Accept either `NAME=...` (live default) or `# NAME=...` (commented
         # default) — both count as "documented" since operators see the knob.
-        for name in _REQUIRED_ENV_VARS:
+        for name in documented:
             with self.subTest(var=name):
                 pattern = re.compile(
                     rf"^[#\s]*{re.escape(name)}=", re.MULTILINE
@@ -103,14 +123,21 @@ class TestStaggerEnabledIndependentOfBehaviorDelay(unittest.TestCase):
                 runtime, "start_worker", side_effect=_fake_start
             ):
                 runtime._apply_scale(3, lambda _: None)  # pylint: disable=protected-access
-            # Two extra launches beyond the initial worker-0 baseline → both
-            # must go through the stagger helper even though behavior delay
-            # is disabled.
+            # Three launches from an empty worker set → every launch goes
+            # through the stagger helper even though behavior delay is off.
             self.assertEqual(len(launches), 3)
-            self.assertGreaterEqual(m_stagger.call_count, 3)
+            self.assertEqual(m_stagger.call_count, 3)
         finally:
             with runtime._lock:  # pylint: disable=protected-access
                 runtime._state = "INIT"  # pylint: disable=protected-access
+
+    def test_stagger_helper_ignores_behavior_delay_flag(self):
+        """The helper itself must only consult _stagger_enabled."""
+        runtime.set_behavior_delay_enabled(False)
+        runtime.set_stagger_enabled(False)
+        with mock.patch.object(runtime._stop_event, "wait") as m_wait:  # pylint: disable=protected-access
+            self.assertEqual(runtime._stagger_sleep_before_launch(), 0.0)  # pylint: disable=protected-access
+        m_wait.assert_not_called()
 
     def test_stagger_disabled_skips_sleep_helper(self):
         """Sanity: the new flag gates the stagger path, not behavior delay."""
@@ -185,6 +212,13 @@ class TestMaxWorkerCountCapConsistent(unittest.TestCase):
             os.environ.pop("WORKER_COUNT", None)
             with self.assertRaises(ConfigError):
                 runtime._validate_startup_config()  # pylint: disable=protected-access
+
+    def test_build_scale_steps_reaches_blueprint_500_example(self):
+        """The 500-cap progression must match the Blueprint decade series."""
+        self.assertEqual(
+            rollout_module._build_scale_steps(500),  # pylint: disable=protected-access
+            (1, 3, 5, 10, 20, 50, 100, 200, 500),
+        )
 
     def test_startup_warns_when_max_worker_count_exceeds_100(self):
         """Option (a) contract: values >100 are legal but must log a warning."""

@@ -88,7 +88,7 @@ class TestMaxWorkerCountCap(_CapRuntimeMixin, unittest.TestCase):
 
     def test_runtime_never_exceeds_cap(self):
         """Runtime scale targets stay within the configured cap."""
-        for cap in (1, 2, 4, 7, 10, 12):
+        for cap in (1, 2, 4, 7, 10, 12, 500):
             with self.subTest(cap=cap):
                 applied = self._run_for_cap(cap)
                 self.assertTrue(applied)
