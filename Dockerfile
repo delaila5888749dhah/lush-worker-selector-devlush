@@ -33,7 +33,7 @@ RUN apt-get update \
 # reproducible and hash-verified.
 WORKDIR /app
 COPY requirements.txt requirements-lock.txt ./
-RUN pip install --require-hashes -r requirements-lock.txt
+RUN pip install --require-hashes --no-deps -r requirements-lock.txt
 
 # Copy application sources.  `.dockerignore` strips dev-only paths.
 COPY . .
