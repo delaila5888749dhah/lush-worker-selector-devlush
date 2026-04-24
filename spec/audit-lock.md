@@ -319,7 +319,7 @@ modules/cdp/fingerprint.py — BitBrowserPoolClient
     when len(pool) < 2 × WORKER_COUNT.
 
 modules/cdp/fingerprint.py — BitBrowserSession (INV-POOL-INT, Phase 2)
-  __init__: duck-types pool capability via hasattr(client, 'acquire_profile')
+  __init__: detects pool capability via isinstance(client, BitBrowserPoolClient)
   __enter__ pool-mode flow:
     acquire_profile → randomize_fingerprint → launch_profile(/browser/open)
     HTTPError 404 on /browser/open → _evict_profile + release_profile

@@ -66,8 +66,19 @@ class TestSessionPoolAware(unittest.TestCase):
     """INV-POOL-INT — BitBrowserSession must use the pool client protocol."""
 
     def test_session_uses_pool_client_when_pool_mode_1(self):
-        """create_profile/delete_profile NEVER called in pool mode."""
-        client = _make_pool_client()
+        """create_profile/delete_profile NEVER called in pool mode; each pool
+        primitive (acquire/randomize/launch/close/release) called exactly once."""
+        with patch.dict(
+            os.environ,
+            {
+                "BITBROWSER_API_KEY": "k",
+                "BITBROWSER_POOL_MODE": "1",
+                "BITBROWSER_PROFILE_IDS": "p1,p2,p3",
+            },
+            clear=False,
+        ):
+            client = get_bitbrowser_client()
+        self.assertIsInstance(client, BitBrowserPoolClient)
         rec = _RecordingPost()
         with patch.object(BitBrowserPoolClient, "_post", new=rec), \
              patch.object(
@@ -77,10 +88,36 @@ class TestSessionPoolAware(unittest.TestCase):
              patch.object(
                  BitBrowserClient, "delete_profile",
                  side_effect=AssertionError("delete_profile must NOT be called")
-             ):
+             ), \
+             patch.object(
+                 BitBrowserPoolClient, "acquire_profile",
+                 wraps=client.acquire_profile,
+             ) as m_acq, \
+             patch.object(
+                 BitBrowserPoolClient, "randomize_fingerprint",
+                 wraps=client.randomize_fingerprint,
+             ) as m_rnd, \
+             patch.object(
+                 BitBrowserPoolClient, "launch_profile",
+                 wraps=client.launch_profile,
+             ) as m_launch, \
+             patch.object(
+                 BitBrowserPoolClient, "_close_browser",
+                 wraps=client._close_browser,
+             ) as m_close, \
+             patch.object(
+                 BitBrowserPoolClient, "release_profile",
+                 wraps=client.release_profile,
+             ) as m_rel:
             with BitBrowserSession(client) as (profile_id, wsurl):
                 self.assertIn(profile_id, ["p1", "p2", "p3"])
                 self.assertEqual(wsurl, "http://127.0.0.1:9999")
+        # Each pool primitive must be called exactly once.
+        self.assertEqual(m_acq.call_count, 1)
+        self.assertEqual(m_rnd.call_count, 1)
+        self.assertEqual(m_launch.call_count, 1)
+        self.assertEqual(m_close.call_count, 1)
+        self.assertEqual(m_rel.call_count, 1)
         # /browser/create and /browser/delete must never appear in the path list
         self.assertNotIn("/browser/create", rec.paths())
         self.assertNotIn("/browser/delete", rec.paths())
@@ -151,51 +188,63 @@ class TestPoolEvict404(unittest.TestCase):
         self.assertNotIn("p1", client._pool)
 
     def test_runtime_404_on_browser_open_evicts_profile(self):
-        """404 from /browser/open must also evict the profile."""
+        """404 from /browser/open must also evict the profile; cursor
+        re-anchors so the next acquire does not IndexError."""
         client = _make_pool_client(ids=["p1", "p2", "p3"])
         http_404 = self._http_404()
         rec = _RecordingPost(responses={"/browser/open": http_404})
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
-            with self.assertRaises(Exception):
+            with self.assertRaises(urllib.error.HTTPError):
                 with BitBrowserSession(client):
                     pass  # pragma: no cover
         # Acquired profile (p1) was evicted because /browser/open 404'd.
         self.assertEqual(len(client._pool), 2)
         self.assertNotIn("p1", client._pool)
+        # Cursor must be within bounds for a subsequent acquire — no IndexError.
+        self.assertLess(client._cursor, len(client._pool))
+        rec2 = _RecordingPost()
+        with patch.object(BitBrowserPoolClient, "_post", new=rec2):
+            next_pid = client.acquire_profile()
+        self.assertIn(next_pid, ["p2", "p3"])
+        client.release_profile(next_pid)
 
 
 class TestWorkerCountExceedsPoolSize(unittest.TestCase):
     """When N workers contend over M<N profiles, excess workers must time out."""
 
     def test_worker_count_exceeds_pool_size_timeout_e2e(self):
+        """Pool size 2, 3 contending workers → the loser raises
+        RuntimeError whose message contains 'All N profiles BUSY'."""
         client = _make_pool_client(
             ids=["p1", "p2"],
             acquire_timeout_s=0.3,
             poll_interval_s=0.05,
         )
         rec = _RecordingPost()
-        results = []  # list of ("ok", pid) or ("timeout",)
+        results = []  # list of ("ok", pid) or ("timeout", msg)
         results_lock = threading.Lock()
         proceed = threading.Event()
+        acquired = threading.Semaphore(0)
 
         def run_one():
             try:
                 with patch.object(BitBrowserPoolClient, "_post", new=rec):
-                    # Enter acquires + randomize + open; hold until 'proceed'.
                     with BitBrowserSession(client) as (pid, _ws):
                         with results_lock:
                             results.append(("ok", pid))
+                        acquired.release()
                         proceed.wait(timeout=1.0)
-            except RuntimeError:
+            except RuntimeError as exc:
                 with results_lock:
-                    results.append(("timeout",))
+                    results.append(("timeout", str(exc)))
 
-        threads = [threading.Thread(target=run_one) for _ in range(4)]
+        threads = [threading.Thread(target=run_one) for _ in range(3)]
         for t in threads:
             t.start()
-        # Give a moment for 2 workers to acquire and 2 to start waiting.
-        time.sleep(0.1)
-        # Wait for the 2 losers to exhaust their acquire timeout.
+        # Wait until both holders have acquired, then let the loser time out.
+        self.assertTrue(acquired.acquire(timeout=1.0))
+        self.assertTrue(acquired.acquire(timeout=1.0))
+        # Loser's acquire_timeout_s is 0.3s, so 0.5s is enough to time out.
         time.sleep(0.5)
         proceed.set()
         for t in threads:
@@ -204,7 +253,9 @@ class TestWorkerCountExceedsPoolSize(unittest.TestCase):
         oks = [r for r in results if r[0] == "ok"]
         timeouts = [r for r in results if r[0] == "timeout"]
         self.assertEqual(len(oks), 2)
-        self.assertEqual(len(timeouts), 2)
+        self.assertEqual(len(timeouts), 1)
+        # Message must identify the BUSY exhaustion condition.
+        self.assertIn("All 2 profiles BUSY", timeouts[0][1])
 
 
 class TestLegacyBackwardCompat(unittest.TestCase):
@@ -223,6 +274,13 @@ class TestLegacyBackwardCompat(unittest.TestCase):
         client.launch_profile.assert_called_once_with("legacy-id")
         client.close_profile.assert_called_once_with("legacy-id")
         client.delete_profile.assert_called_once_with("legacy-id")
+        # Legacy mode MUST NOT reach the pool-only randomize endpoint.
+        self.assertFalse(
+            hasattr(client, "randomize_fingerprint")
+            and client.randomize_fingerprint.called,
+            "legacy session must not call randomize_fingerprint "
+            "(/browser/update/partial).",
+        )
 
 
 class TestPoolClientFactoryWarnings(unittest.TestCase):

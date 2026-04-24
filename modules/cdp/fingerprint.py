@@ -193,10 +193,20 @@ class BitBrowserClient:
 
 
 class BitBrowserSession:
-    """Context manager for BitBrowser profile lifecycle.
+    """Context manager for BitBrowser profile lifecycle (Blueprint §2.1).
 
-    __enter__: create_profile() → launch_profile() → return (profile_id, webdriver_url)
-    __exit__: release_profile() — idempotent close + delete, best-effort
+    Supports two modes, selected by ``isinstance(client, BitBrowserPoolClient)``:
+
+    * **POOL MODE** (``BITBROWSER_POOL_MODE=1``, pool client):
+      ``__enter__`` runs ``acquire_profile()`` → ``randomize_fingerprint()``
+      → ``launch_profile()`` (POST ``/browser/open``). ``__exit__`` runs
+      ``release_profile()`` which posts ``/browser/close`` and clears the
+      pool BUSY set. ``create_profile()`` / ``delete_profile()`` are **NEVER**
+      called (POOL-NO-DELETE). On HTTP 404 from ``/browser/open`` the
+      profile is evicted from the pool (POOL-EVICT).
+    * **LEGACY MODE** (non-pool client): ``__enter__`` runs
+      ``create_profile()`` → ``launch_profile()``. ``__exit__`` runs
+      ``close_profile()`` + ``delete_profile()`` (idempotent, best-effort).
     """
 
     def __init__(self, client: BitBrowserClient):
@@ -222,19 +232,31 @@ class BitBrowserSession:
             try:
                 self._client.randomize_fingerprint(profile_id)
                 launch_data = self._client.launch_profile(profile_id)
-            except BaseException as exc:
+            except urllib.error.HTTPError as exc:
                 # POOL-EVICT: 404 on /browser/open must also evict the
                 # profile from the pool; randomize_fingerprint evicts on
                 # its own 404 internally before re-raising.
-                if (isinstance(exc, urllib.error.HTTPError)
-                        and exc.code == 404):
+                if exc.code == 404:
                     self._client._evict_profile(  # pylint: disable=protected-access
                         profile_id)
                 # Always release BUSY so the pool does not leak a slot.
                 try:
                     self._client.release_profile(profile_id)
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except (urllib.error.URLError, OSError, RuntimeError) as rel_exc:
+                    _log.warning(
+                        "release_profile failed after HTTPError for %s: %s",
+                        profile_id, rel_exc)
+                self._released = True
+                raise
+            except (urllib.error.URLError, OSError, RuntimeError):
+                # Network / runtime failure (e.g. randomize_fingerprint's
+                # RuntimeError-wrapped 404). Release BUSY then propagate.
+                try:
+                    self._client.release_profile(profile_id)
+                except (urllib.error.URLError, OSError, RuntimeError) as rel_exc:
+                    _log.warning(
+                        "release_profile failed after error for %s: %s",
+                        profile_id, rel_exc)
                 self._released = True
                 raise
         else:
@@ -245,8 +267,10 @@ class BitBrowserSession:
             if self._pool_mode:
                 try:
                     self._client.release_profile(profile_id)
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except (urllib.error.URLError, OSError, RuntimeError) as rel_exc:
+                    _log.warning(
+                        "release_profile failed after missing webdriver "
+                        "for %s: %s", profile_id, rel_exc)
                 self._released = True
             raise RuntimeError("BitBrowser launch_profile response missing webdriver")
         self._profile_id = profile_id
@@ -280,7 +304,7 @@ class BitBrowserSession:
                 # handles /browser/close + BUSY clear, never /browser/delete.
                 try:
                     self._client.release_profile(profile_id)
-                except Exception as exc:  # pylint: disable=broad-except
+                except (urllib.error.URLError, OSError, RuntimeError) as exc:
                     _log.warning(
                         "Best-effort BitBrowser pool release_profile failed "
                         "for %s: %s", profile_id, exc)
@@ -449,7 +473,7 @@ class BitBrowserPoolClient(BitBrowserClient):
         """
         try:
             self._close_browser(profile_id)
-        except Exception as exc:  # pylint: disable=broad-except
+        except (urllib.error.URLError, OSError, RuntimeError) as exc:
             _log.warning("close_browser failed for %s: %s", profile_id, exc)
         finally:
             with self._lock:
