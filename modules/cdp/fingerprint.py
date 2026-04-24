@@ -392,12 +392,22 @@ class BitBrowserPoolClient(BitBrowserClient):
                 "to be a non-empty CSV list."
             )
         super().__init__(endpoint=endpoint, api_key=api_key)
+        # Strip + filter empty entries first so direct callers get the same
+        # sanitisation as the get_bitbrowser_client() CSV factory path.
+        sanitised: List[str] = [
+            pid.strip() for pid in profile_ids if pid and pid.strip()
+        ]
+        if not sanitised:
+            raise ValueError(
+                "BITBROWSER_POOL_MODE=1 requires BITBROWSER_PROFILE_IDS "
+                "to be a non-empty CSV list."
+            )
         # Dedupe preserving order — a duplicate id would bias round-robin
         # towards the same profile (audit [E2]).
         seen: set = set()
         deduped: List[str] = []
         had_duplicates = False
-        for pid in profile_ids:
+        for pid in sanitised:
             if pid in seen:
                 _log.warning(
                     "Duplicate BitBrowser profile ID ignored: %s", pid,

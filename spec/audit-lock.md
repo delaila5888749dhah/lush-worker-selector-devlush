@@ -317,7 +317,9 @@ modules/cdp/fingerprint.py — BitBrowserPoolClient
     (decrements when cursor was strictly past the removed index, else
     clamps back to 0 when the cursor would fall off the end)
   __init__ validation:
+    • strips + filters empty/whitespace-only profile IDs before dedupe
     • dedupes profile_ids, emits WARNING per duplicate
+    • raises ValueError when the sanitised pool is empty
     • raises RuntimeError when len(pool) < WORKER_COUNT
     • emits WARNING when len(pool) < 2 × WORKER_COUNT
     • migration note: deployments with pool < WORKER_COUNT now fail fast

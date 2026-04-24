@@ -299,6 +299,40 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
         self.assertEqual(client._pool, ["a"])
         m_warning.assert_not_called()
 
+    def test_worker_count_zero_skips_guards(self):
+        with patch.dict(os.environ, {"WORKER_COUNT": "0"}, clear=False):
+            with patch("modules.cdp.fingerprint._log.warning") as m_warning:
+                client = BitBrowserPoolClient(
+                    endpoint="http://127.0.0.1:54345",
+                    api_key="k",
+                    profile_ids=["a"],
+                )
+        self.assertEqual(client._pool, ["a"])
+        m_warning.assert_not_called()
+
+    # Task 3 edge ─ empty-string profile IDs are filtered out ──
+    def test_empty_string_profile_ids_are_filtered(self):
+        saved = os.environ.pop("WORKER_COUNT", None)
+        try:
+            client = BitBrowserPoolClient(
+                endpoint="http://127.0.0.1:54345",
+                api_key="k",
+                profile_ids=["a", "", "  ", "b", ""],
+            )
+        finally:
+            if saved is not None:
+                os.environ["WORKER_COUNT"] = saved
+        self.assertEqual(client._pool, ["a", "b"])
+        self.assertNotIn("", client._pool)
+
+    def test_all_empty_string_profile_ids_raises(self):
+        with self.assertRaises(ValueError):
+            BitBrowserPoolClient(
+                endpoint="http://127.0.0.1:54345",
+                api_key="k",
+                profile_ids=["", "  ", ""],
+            )
+
     # Task 4 ─ cursor rewind after eviction ───────────────────
     def test_evict_rewinds_cursor_correctly(self):
         c = self._make_client(ids=["a", "b", "c"])
