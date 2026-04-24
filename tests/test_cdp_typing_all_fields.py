@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, patch
 
 from modules.cdp.driver import (
     GivexDriver,
-    SEL_GUEST_CONTINUE,
     SEL_GUEST_EMAIL,
     SEL_GUEST_HEADING,
 )
