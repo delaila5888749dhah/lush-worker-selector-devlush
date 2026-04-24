@@ -14,7 +14,6 @@ Covers:
 from __future__ import annotations
 
 import re
-import textwrap
 import unittest
 from unittest.mock import MagicMock, patch
 
