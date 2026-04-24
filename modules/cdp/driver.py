@@ -303,7 +303,34 @@ SEL_CONFIRMATION_EL = ".order-confirmation, .confirmation-message"
 SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
-SEL_VBV_CANCEL_BTN  = "button[id*='cancel'], a[id*='cancel'], button[id*='return'], a[id*='return']"
+# ── VBV / 3DS cancel-button selector list (Phase 4 [D6]) ──────────────────
+# Ordered by priority — callers SHOULD iterate in sequence and use the
+# first selector that matches a live element.  CSS comma-list lookups
+# collapse these to DOM order (losing the priority signal), so prefer
+# :func:`GivexDriver._find_vbv_cancel_button` or equivalent stepwise
+# fallbacks.
+SEL_VBV_CANCEL_BUTTONS = (
+    # Priority 1 — explicit "Cancel" affordances
+    "button[id*='cancel' i]",
+    "a[id*='cancel' i]",
+    "button[aria-label*='cancel' i]",
+    # Priority 2 — "Return to Merchant" affordances
+    "button[id*='return' i]",
+    "a[id*='return' i]",
+    "button[aria-label*='return' i]",
+    # Priority 3 — generic Close / X
+    "button[aria-label*='close' i]",
+    "button.close",
+    ".modal-close",
+    "[role='button'][aria-label*='close' i]",
+    # Priority 4 — icon-based X / dismiss
+    "button > svg[class*='close']",
+    "[class*='icon-close']",
+    "[data-dismiss='modal']",
+)
+# Backward-compat alias — callers still using a flat CSS comma-list get
+# the union.  Note: this loses priority ordering at the DOM level.
+SEL_VBV_CANCEL_BTN  = ", ".join(SEL_VBV_CANCEL_BUTTONS)
 SEL_POPUP_CLOSE_BTN = "button.modal-close, button[aria-label='Close'], .modal button[type='button']"
 SEL_POPUP_SOMETHING_WRONG = ".modal, .popup, .dialog, .alert, .error-modal"
 # P1-1: XPath text-match for "Something went wrong" popup — avoids false
@@ -688,11 +715,15 @@ def handle_ui_lock_focus_shift(driver) -> bool:
     """Focus-Shift Retry per Blueprint §6 Ngã rẽ 1.
 
     Steps:
-      1. Click ``SEL_NEUTRAL_DIV`` (``body``) to shift focus away from the
+      1. CDP-click ``SEL_NEUTRAL_DIV`` (``body``) to shift focus away from the
          locked submit button.
-      2. Wait 0.5s to let any animation settle.
-      3. Re-locate ``SEL_COMPLETE_PURCHASE`` and click it once via
-         ``ActionChains.click``.
+      2. Wait 0.5s to let any onBlur/animation settle.
+      3. Re-click ``SEL_COMPLETE_PURCHASE`` via CDP (``bounding_box_click``).
+
+    All clicks go through :meth:`GivexDriver.bounding_box_click` so they
+    emit ``isTrusted=True`` events via the DevTools ``Input.dispatchMouseEvent``
+    path — the Selenium-native ``ActionChains`` branch is intentionally
+    removed because it leaves a detectable anti-bot fingerprint (audit B2).
 
     This helper executes **exactly once** per invocation and never retries
     internally — the caller is responsible for enforcing the one-retry-per-
@@ -700,21 +731,29 @@ def handle_ui_lock_focus_shift(driver) -> bool:
     ``False`` on any exception (already logged).
 
     Args:
-        driver: Selenium-compatible driver.
+        driver: :class:`GivexDriver` instance exposing ``bounding_box_click``.
     """
-    if _ActionChains is None:  # pragma: no cover - selenium always present in prod
-        _log.warning("handle_ui_lock_focus_shift: ActionChains unavailable")
+    click = getattr(driver, "bounding_box_click", None)
+    if not callable(click):  # pragma: no cover - orchestrator passes GivexDriver
+        _log.warning(
+            "handle_ui_lock_focus_shift: driver lacks bounding_box_click; "
+            "cannot perform CDP-only focus shift"
+        )
         return False
+    # Step 1: CDP click neutral region.
     try:
-        neutral = driver.find_element("css selector", SEL_NEUTRAL_DIV)
-        _ActionChains(driver).move_to_element(neutral).click().perform()
-        time.sleep(0.5)
-        btn = driver.find_element("css selector", SEL_COMPLETE_PURCHASE)
-        _ActionChains(driver).move_to_element(btn).click().perform()
-        return True
+        click(SEL_NEUTRAL_DIV)
     except Exception as exc:  # pylint: disable=broad-except
-        _log.warning("focus_shift_retry failed: %s", exc)
+        _log.warning("UI lock neutral-click failed: %s", exc)
         return False
+    time.sleep(0.5)
+    # Step 2: re-click Complete Purchase via CDP (never ActionChains).
+    try:
+        click(SEL_COMPLETE_PURCHASE)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("UI lock re-click failed: %s", exc)
+        return False
+    return True
 
 
 def vbv_dynamic_wait(rng: _random.Random | None = None) -> float:
@@ -1212,6 +1251,22 @@ class GivexDriver:
             else None
         )
 
+    def _find_vbv_cancel_button(self):
+        """Return ``(element, selector)`` for the first VBV cancel match.
+
+        Iterates :data:`SEL_VBV_CANCEL_BUTTONS` in priority order and returns
+        the first selector that yields at least one element, preferring
+        explicit "Cancel" / "Return to Merchant" affordances over generic
+        close icons (Phase 4 [D6]).  When nothing matches, returns
+        ``(None, None)``.
+        """
+        for sel in SEL_VBV_CANCEL_BUTTONS:
+            elements = self.find_elements(sel)
+            if elements:
+                _log.debug("VBV cancel matched selector: %s", sel)
+                return elements[0], sel
+        return None, None
+
     def handle_vbv_challenge(self) -> str:
         """Cancel VBV/3DS iframe challenge (Blueprint §6 Fork 3).
 
@@ -1223,7 +1278,24 @@ class GivexDriver:
         """
         try:
             vbv_dynamic_wait(rng=self._get_rng())
-            cdp_click_iframe_element(self, SEL_VBV_IFRAME, SEL_VBV_CANCEL_BTN, rng=self._get_rng())
+            # Phase 4 [D6]: iterate priority-ordered selectors so that
+            # explicit Cancel/Return buttons always win over generic Close/X
+            # icons that may appear together on the challenge page.
+            last_exc: Exception | None = None
+            for sel in SEL_VBV_CANCEL_BUTTONS:
+                try:
+                    cdp_click_iframe_element(
+                        self, SEL_VBV_IFRAME, sel, rng=self._get_rng(),
+                    )
+                    _log.debug("handle_vbv_challenge cancelled via %s", sel)
+                    handle_something_wrong_popup(self)
+                    return "cancelled"
+                except (NoSuchElementException, StaleElementReferenceException) as exc:
+                    last_exc = exc
+                    continue
+            # No selector matched inside the iframe — treat as missing.
+            if last_exc is not None:
+                raise last_exc
             handle_something_wrong_popup(self)
             return "cancelled"
         except (NoSuchElementException, StaleElementReferenceException) as exc:

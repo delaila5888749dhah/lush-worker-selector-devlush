@@ -267,6 +267,10 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | BUG-001 | `modules/delay/wrapper.py` | Missing `try/finally` — state stuck on exception |
 | BUG-002 | `modules/watchdog/main.py` | Singleton race + cross-thread blindspot → replaced with `worker_id` registry |
 | BUG-003 | `integration/orchestrator.py` | `cdp.clear_card_fields()` unguarded in `handle_outcome()` |
+| PHASE4-B2 | `modules/cdp/driver.py`, `modules/cdp/main.py` | `handle_ui_lock_focus_shift` replaced Selenium `ActionChains` clicks with CDP `bounding_box_click` (isTrusted=True). Main.py wrapper now passes the `GivexDriver` wrapper (not raw `_driver`) so the helper can reach `bounding_box_click`. |
+| PHASE4-D6 | `modules/cdp/driver.py` | `SEL_VBV_CANCEL_BTN` replaced by priority-ordered `SEL_VBV_CANCEL_BUTTONS` tuple (Cancel → Return → Close → icon X) + `_find_vbv_cancel_button` helper. `handle_vbv_challenge` iterates selectors so explicit Cancel always wins over generic Close. Backward-compat alias retained as joined comma-list. |
+| PHASE4-H3 | `modules/monitor/main.py`, `integration/orchestrator.py` | Added per-fork counters (`fork_success`/`fork_declined`/`fork_vbv_3ds`/`fork_vbv_cancelled`/`fork_ui_lock`/`fork_abort_cycle`) with `record_fork()` / `get_fork_metrics()`. `handle_outcome` and `run_cycle` wire calls to record exactly one fork per cycle outcome. Merged into `get_metrics()` output. |
+| PHASE4-F2 | `integration/orchestrator.py` | `_CDP_NETWORK_URL_PATTERNS` no longer contains `"cws4.0"` — that domain-level substring matched every XHR on the Givex payment page, inflating callback rate and masking the first-notify-wins path. Only narrow path fragments (`/checkout/total`, `/api/tax`, `/api/checkout`) remain. |
 
 ---
 

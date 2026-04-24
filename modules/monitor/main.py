@@ -38,6 +38,20 @@ _ui_lock_exhausted_count = 0
 # is added, preserving the spec/interface.md contract — A4).
 _vbv_detections = 0
 
+# ── Per-branch FSM-fork counters (Phase 4 [H3]) ────────────────────────────
+# Incremented once per handle_outcome() branch dispatch by
+# ``integration/orchestrator.py``.  Exposed via :func:`get_fork_metrics` and
+# merged into :func:`get_metrics` — no cross-module imports required (INV-§5).
+_fork_counters: dict[str, int] = {
+    "fork_success": 0,
+    "fork_declined": 0,
+    "fork_vbv_3ds": 0,
+    "fork_vbv_cancelled": 0,
+    "fork_ui_lock": 0,
+    "fork_abort_cycle": 0,
+}
+_fork_counters_lock = threading.Lock()
+
 # Snapshot of metrics from the previous rollout step (used for delta checks)
 _baseline_success_rate = None
 
@@ -125,6 +139,34 @@ def record_ui_lock_exhausted() -> None:
     global _ui_lock_exhausted_count
     with _lock:
         _ui_lock_exhausted_count += 1
+
+
+# ── Per-branch FSM-fork counters — public surface (Phase 4 [H3]) ───────────
+_KNOWN_FORK_BRANCHES = frozenset(
+    name.removeprefix("fork_") for name in _fork_counters
+)
+
+
+def record_fork(branch: str) -> None:
+    """Increment the per-fork counter for ``branch``.
+
+    ``branch`` is the bare state name (e.g. ``"success"``, ``"declined"``,
+    ``"vbv_3ds"``, ``"vbv_cancelled"``, ``"ui_lock"``, ``"abort_cycle"``).
+    Unknown names are ignored with a WARNING so typos surface in logs
+    instead of silently inflating counters.
+    """
+    key = f"fork_{branch}"
+    with _fork_counters_lock:
+        if key in _fork_counters:
+            _fork_counters[key] += 1
+            return
+    _logger.warning("Unknown fork branch: %s", branch)
+
+
+def get_fork_metrics() -> dict:
+    """Return a point-in-time snapshot of all fork counters."""
+    with _fork_counters_lock:
+        return dict(_fork_counters)
 
 
 def get_success_rate():
@@ -256,7 +298,7 @@ def get_metrics():
         cutoff = time.time() - 3600
         restarts_hour = sum(1 for ts in _restart_timestamps if ts >= cutoff)
         baseline = _baseline_success_rate
-        return {
+        metrics = {
             "success_count": success_count,
             "error_count": error_count,
             "success_rate": success_rate,
@@ -271,6 +313,10 @@ def get_metrics():
             "ui_lock_exhausted_count": _ui_lock_exhausted_count,
             "vbv_detections": _vbv_detections,
         }
+    # Fork counters use a dedicated lock (_fork_counters_lock); merge after
+    # releasing ``_lock`` to avoid nested-lock ordering issues.
+    metrics.update(get_fork_metrics())
+    return metrics
 
 
 def check_rollback_needed():
@@ -334,6 +380,9 @@ def reset():
         _ui_lock_retry_count = 0
         _ui_lock_recovered_count = 0
         _ui_lock_exhausted_count = 0
+    with _fork_counters_lock:
+        for _fork_key in _fork_counters:
+            _fork_counters[_fork_key] = 0
 
 
 class TransientMonitor:

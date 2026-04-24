@@ -33,10 +33,15 @@ class TestCDPNetworkUrlPatterns(unittest.TestCase):
         self.assertIn("/api/tax", self._patterns(),
                       "'/api/tax' must be in _CDP_NETWORK_URL_PATTERNS")
 
-    def test_cws40_coverage(self):
-        """'cws4.0' is present and covers the Givex base domain path."""
-        self.assertIn("cws4.0", self._patterns(),
-                      "'cws4.0' must be in _CDP_NETWORK_URL_PATTERNS")
+    def test_cws40_coverage_removed(self):
+        """Phase 4 [F2]: the broad ``cws4.0`` substring was removed because
+        it matched every XHR on the Givex payment page (static assets
+        included), inflating the callback rate and masking the
+        first-notify-wins bug.  The narrow path fragments
+        (``/checkout/total``, ``/api/tax``, ``/api/checkout``) already
+        cover the pricing endpoint under ``/cws4.0/…/api/checkout/total``.
+        """
+        self.assertNotIn("cws4.0", self._patterns())
 
     def test_api_checkout_coverage(self):
         """'/api/checkout' is present as redundant coverage for checkout endpoints."""
@@ -45,7 +50,7 @@ class TestCDPNetworkUrlPatterns(unittest.TestCase):
 
     def test_exact_membership(self):
         """Full lock-in: assert exact set to catch any silent additions or removals."""
-        expected = {"/checkout/total", "/api/tax", "/api/checkout", "cws4.0"}
+        expected = {"/checkout/total", "/api/tax", "/api/checkout"}
         self.assertEqual(set(self._patterns()), expected,
                          "_CDP_NETWORK_URL_PATTERNS membership changed — update "
                          "addendum-cdp-url-patterns.md and this test if intentional")

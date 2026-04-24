@@ -250,7 +250,18 @@ _network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
 # Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
 # Protected by _network_listener_lock.
 _notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptable-object
-_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
+# Phase 4 [F2]: pricing-endpoint patterns for CDP Network listeners.
+# The broad substring ``"cws4.0"`` was removed because every XHR on the
+# Givex payment page contains it (static assets included), inflating the
+# callback rate and masking the first-notify-wins bug.  If a future audit
+# of DevTools reveals a distinct pricing path beyond the three explicit
+# endpoints below, add it here as a *narrow* path fragment — never a
+# domain-level substring.
+_CDP_NETWORK_URL_PATTERNS = (
+    "/checkout/total",
+    "/api/tax",
+    "/api/checkout",
+)
 
 # NOTE on _active_cdp_requests:
 # This counter reflects orchestration-level tracking only.
@@ -1449,12 +1460,20 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        try:
+            monitor.record_fork("success")
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug("monitor.record_fork(success) failed", exc_info=True)
         return "complete"
     if state.name in ("declined", "vbv_cancelled"):
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        try:
+            monitor.record_fork(state.name)
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug("monitor.record_fork(%s) failed", state.name, exc_info=True)
         try:
             _alerting.send_alert(
                 f"Card declined: worker={worker_id} state={state.name}"
@@ -1492,12 +1511,20 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        try:
+            monitor.record_fork("ui_lock")
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug("monitor.record_fork(ui_lock) failed", exc_info=True)
         return "retry"
     if state.name == "vbv_3ds":
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        try:
+            monitor.record_fork("vbv_3ds")
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug("monitor.record_fork(vbv_3ds) failed", exc_info=True)
         try:
             driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
             result = driver.handle_vbv_challenge()
@@ -1801,6 +1828,15 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                 _get_idempotency_store().mark_completed(task_id)
         else:
             _record_autoscaler_failure(worker_id)
+            if action == "abort_cycle":
+                # Phase 4 [H3] — record fork=abort_cycle exactly once, at
+                # the single place where the cycle finalizes to abort.
+                try:
+                    monitor.record_fork("abort_cycle")
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.debug(
+                        "monitor.record_fork(abort_cycle) failed", exc_info=True
+                    )
         return action, state, total
     except SessionFlaggedError as exc:
         _logger.error(

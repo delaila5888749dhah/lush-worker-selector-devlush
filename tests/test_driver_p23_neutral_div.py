@@ -1,80 +1,65 @@
-"""P2-3 tests: handle_ui_lock_focus_shift uses SEL_NEUTRAL_DIV (#122).
+"""P2-3 tests: handle_ui_lock_focus_shift clicks SEL_NEUTRAL_DIV first (#122).
 
-Verifies that handle_ui_lock_focus_shift clicks the element found via
-SEL_NEUTRAL_DIV (css selector "body") rather than using move_by_offset,
-so focus always lands on a known neutral element.
+Phase 4 [B2] update: the helper now uses ``GivexDriver.bounding_box_click``
+(CDP-based, ``isTrusted=True``) rather than Selenium ``ActionChains``
+(``isTrusted=False`` — anti-bot fingerprint).  These tests assert the
+new contract while preserving the P2-3 invariant that the neutral
+region is clicked BEFORE the Complete-Purchase button.
 """
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from modules.cdp.driver import (
+    SEL_COMPLETE_PURCHASE,
     SEL_NEUTRAL_DIV,
     handle_ui_lock_focus_shift,
 )
 
 
 def _make_driver():
-    d = MagicMock()
-    neutral_el = MagicMock(name="neutral_body")
-    purchase_btn = MagicMock(name="purchase_btn")
-    d.find_element.side_effect = lambda by, sel: (
-        neutral_el if sel == SEL_NEUTRAL_DIV else purchase_btn
-    )
-    return d, neutral_el, purchase_btn
+    return MagicMock(name="givex_driver")
 
 
 class NeutralDivClickTest(unittest.TestCase):
-    """handle_ui_lock_focus_shift must click SEL_NEUTRAL_DIV element."""
-
-    def setUp(self):
-        self.mock_chains_cls = MagicMock()
-        self.patcher = patch("modules.cdp.driver._ActionChains", self.mock_chains_cls)
-        self.patcher.start()
-
-    def tearDown(self):
-        self.patcher.stop()
+    """handle_ui_lock_focus_shift must CDP-click SEL_NEUTRAL_DIV first."""
 
     @patch("time.sleep")
-    def test_neutral_element_found_by_css_selector(self, _sleep):
-        """find_element called with 'css selector' and SEL_NEUTRAL_DIV."""
-        d, _neutral_el, _ = _make_driver()
+    def test_neutral_element_clicked_via_bounding_box_click(self, _sleep):
+        """The first bounding_box_click targets SEL_NEUTRAL_DIV."""
+        d = _make_driver()
         handle_ui_lock_focus_shift(d)
-        self.assertIn(
-            call("css selector", SEL_NEUTRAL_DIV),
-            d.find_element.call_args_list,
-        )
+        calls = [c.args[0] for c in d.bounding_box_click.call_args_list]
+        self.assertEqual(calls[0], SEL_NEUTRAL_DIV)
 
     @patch("time.sleep")
-    def test_move_to_element_used_not_move_by_offset(self, _sleep):
-        """ActionChains.move_to_element is used; move_by_offset is NOT called."""
-        d, neutral_el, _ = _make_driver()
-        handle_ui_lock_focus_shift(d)
-        chain_instance = self.mock_chains_cls.return_value
-        # First call to move_to_element must be with the neutral element
-        first_call_args = chain_instance.move_to_element.call_args_list[0]
-        self.assertEqual(first_call_args, call(neutral_el))
-        chain_instance.move_by_offset.assert_not_called()
+    def test_no_action_chains_used(self, _sleep):
+        """ActionChains must NOT be instantiated — CDP-only contract (B2)."""
+        from modules.cdp import driver as drv
+        ac_spy = MagicMock(name="_ActionChains")
+        with patch.object(drv, "_ActionChains", ac_spy):
+            handle_ui_lock_focus_shift(_make_driver())
+        ac_spy.assert_not_called()
 
     @patch("time.sleep")
     def test_returns_true_on_success(self, _sleep):
-        d, _, _ = _make_driver()
-        result = handle_ui_lock_focus_shift(d)
-        self.assertTrue(result)
+        d = _make_driver()
+        self.assertTrue(handle_ui_lock_focus_shift(d))
 
     @patch("time.sleep")
-    def test_returns_false_on_find_element_failure(self, _sleep):
-        d = MagicMock()
-        d.find_element.side_effect = Exception("element not found")
-        result = handle_ui_lock_focus_shift(d)
-        self.assertFalse(result)
+    def test_returns_false_on_click_failure(self, _sleep):
+        d = _make_driver()
+        d.bounding_box_click.side_effect = Exception("element not found")
+        self.assertFalse(handle_ui_lock_focus_shift(d))
 
     @patch("time.sleep")
     def test_purchase_btn_also_clicked(self, _sleep):
-        """After neutral click, the purchase button is also clicked via ActionChains."""
-        d, _, _ = _make_driver()
+        """After neutral click, the Complete-Purchase button is CDP-clicked."""
+        d = _make_driver()
         handle_ui_lock_focus_shift(d)
-        # ActionChains instantiated twice: once for neutral click, once for button click
-        self.assertEqual(self.mock_chains_cls.call_count, 2)
+        # Exactly two bounding_box_click invocations: neutral + purchase btn.
+        self.assertEqual(d.bounding_box_click.call_count, 2)
+        ordered = [c.args[0] for c in d.bounding_box_click.call_args_list]
+        self.assertEqual(ordered, [SEL_NEUTRAL_DIV, SEL_COMPLETE_PURCHASE])
 
 
 if __name__ == "__main__":
