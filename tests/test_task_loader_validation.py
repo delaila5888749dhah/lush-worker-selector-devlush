@@ -72,8 +72,10 @@ class MakeCardValidationTests(unittest.TestCase):
     def test_rejects_cvv_2_digits(self):
         with self.assertRaises(ValueError) as ctx:
             _make_card(["4111111111111111", "01", "2030", "12"])
-        # CVV itself must not be echoed either.
-        self.assertNotIn("12", str(ctx.exception).replace("3-4", ""))
+        # Privacy: CVV value itself must not appear in error message.
+        msg = str(ctx.exception)
+        self.assertNotRegex(msg, r"\b12\b")
+        self.assertIn("CVV", msg)
 
     def test_rejects_cvv_5_digits(self):
         with self.assertRaises(ValueError):

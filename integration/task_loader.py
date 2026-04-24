@@ -43,10 +43,10 @@ def _make_card(fields: List[str]) -> CardInfo:
         )
     exp_m_s = exp_m.strip()
     if not _RE_EXP_MONTH.match(exp_m_s):
-        raise ValueError(f"Invalid exp_month: {exp_m_s!r} (expected 01-12)")
+        raise ValueError("Invalid exp_month format (expected 01-12)")
     exp_y_s = exp_y.strip()
     if not _RE_EXP_YEAR.match(exp_y_s):
-        raise ValueError(f"Invalid exp_year: {exp_y_s!r} (expected YY or YYYY)")
+        raise ValueError("Invalid exp_year format (expected YY or YYYY)")
     cvv_s = cvv.strip()
     if not _RE_CVV.match(cvv_s):
         raise ValueError("Invalid CVV: expected 3-4 digits")
