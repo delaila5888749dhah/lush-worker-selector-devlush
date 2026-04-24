@@ -23,6 +23,7 @@ import ipaddress
 import urllib.parse
 import urllib.request
 import urllib.error
+from typing import Any as _Any
 
 try:
     from selenium.webdriver.support.ui import Select  # type: ignore[import]
@@ -1279,7 +1280,11 @@ class GivexDriver:
         """
         try:
             vbv_dynamic_wait(rng=self._get_rng())
-            base = getattr(self, "_driver", self)
+            # ``base`` is the underlying Selenium WebDriver exposing
+            # ``find_element`` / ``switch_to``; ``GivexDriver`` itself does
+            # not re-export those attributes, so we annotate as ``Any`` to
+            # avoid spurious union-attr errors (Phase 4 [D6]).
+            base: _Any = getattr(self, "_driver", self)
             by_css = By.CSS_SELECTOR if By is not None else "css selector"
 
             def _find_in_iframe(sel: str):

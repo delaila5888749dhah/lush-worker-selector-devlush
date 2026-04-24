@@ -105,6 +105,24 @@ class TestHandleOutcomeRecordsForkMetrics(unittest.TestCase):
         self.assertEqual(monitor.get_fork_metrics()["fork_declined"], 1)
         self.assertEqual(monitor.get_fork_metrics()["fork_abort_cycle"], 0)
 
+    def test_declined_exhausted_ctx_does_not_double_count(self):
+        """When swap context is exhausted, handle_outcome returns abort_cycle
+        and fork_declined must NOT also fire — run_cycle records
+        fork_abort_cycle instead, so the fork_* keys stay mutually
+        exclusive per cycle (Phase 4 [H3])."""
+        from modules.common.types import CycleContext
+
+        ctx = CycleContext(cycle_id="fm-exhaust-1", worker_id="w-fm-1")
+        # Force ``_ctx_next_swap_card`` to report exhausted by patching it.
+        with patch.object(self._orchestrator, "_ctx_next_swap_card",
+                          return_value=None):
+            action = self._orchestrator.handle_outcome(
+                State("declined"), [], ctx=ctx,
+            )
+        self.assertEqual(action, "abort_cycle")
+        self.assertEqual(monitor.get_fork_metrics()["fork_declined"], 0)
+        self.assertEqual(monitor.get_fork_metrics()["fork_abort_cycle"], 0)
+
     def test_ui_lock_records_fork_ui_lock(self):
         self._orchestrator.handle_outcome(State("ui_lock"), [])
         self.assertEqual(monitor.get_fork_metrics()["fork_ui_lock"], 1)

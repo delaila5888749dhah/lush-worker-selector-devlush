@@ -1472,20 +1472,34 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             _get_trace_id(), state.name, worker_id, _swap,
         )
         try:
-            monitor.record_fork(state.name)
-        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
-            _logger.debug("monitor.record_fork(%s) failed", state.name, exc_info=True)
-        try:
             _alerting.send_alert(
                 f"Card declined: worker={worker_id} state={state.name}"
             )
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.debug("alerting.send_alert (decline) failed", exc_info=True)
         if ctx is None:
+            # No swap context → retry path; counter fires exactly once.
+            try:
+                monitor.record_fork(state.name)
+            except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                _logger.debug(
+                    "monitor.record_fork(%s) failed", state.name, exc_info=True,
+                )
             return "retry_new_card" if order_queue else "retry"
         next_card = _ctx_next_swap_card(ctx)
         if next_card is None:
+            # Swap exhausted → run_cycle will record fork_abort_cycle; skip the
+            # per-state counter so fork_* keys remain mutually exclusive per
+            # cycle (Phase 4 [H3]).
             return "abort_cycle"
+        # Swap available → retry with new card; record the state-specific
+        # counter exactly once.
+        try:
+            monitor.record_fork(state.name)
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.debug(
+                "monitor.record_fork(%s) failed", state.name, exc_info=True,
+            )
         ctx.swap_count += 1
         if state.name == "vbv_cancelled":
             try:
