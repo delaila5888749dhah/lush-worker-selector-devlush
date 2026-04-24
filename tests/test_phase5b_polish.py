@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from modules.delay import temporal as _temporal_mod
 from modules.delay.biometrics import BiometricProfile, _FAST_MIN, _FAST_MAX
+from modules.delay.config import MAX_HESITATION_DELAY
 from modules.delay.persona import PersonaProfile
 from modules.delay.temporal import (
     TemporalModel,
@@ -391,7 +392,7 @@ class TestCompoundClamp(unittest.TestCase):
                 "thinking",
                 cycle_count=persona.fatigue_threshold + 1,
             )
-        self.assertEqual(result, 5.0)
+        self.assertEqual(result, MAX_HESITATION_DELAY)
 
 
 if __name__ == "__main__":

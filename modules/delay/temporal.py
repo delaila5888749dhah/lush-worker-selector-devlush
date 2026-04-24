@@ -69,6 +69,9 @@ class TemporalModel:
         """
         local_hour = (time.gmtime().tm_hour + utc_offset_hours) % 24
         start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
+        # Spec §10 defines DAY as 06:00–21:59, so the inclusive integer end
+        # hour becomes an exclusive ``end + 1`` boundary when ``local_hour``
+        # includes fractional offsets such as UTC+5.5 or UTC-3.5.
         end_exclusive = (end + 1) % 24
         if start <= end:
             in_day = start <= local_hour < end + 1
