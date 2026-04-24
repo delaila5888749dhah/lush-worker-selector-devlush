@@ -315,14 +315,29 @@ modules/cdp/fingerprint.py — BitBrowserPoolClient
   get_bitbrowser_client() factory branches on BITBROWSER_POOL_MODE:
     "1"/"true"/"yes" → BitBrowserPoolClient (requires BITBROWSER_PROFILE_IDS)
     otherwise        → legacy BitBrowserClient (unchanged behaviour)
+  get_bitbrowser_client() dedupes BITBROWSER_PROFILE_IDS (warns) and warns
+    when len(pool) < 2 × WORKER_COUNT.
+
+modules/cdp/fingerprint.py — BitBrowserSession (INV-POOL-INT, Phase 2)
+  __init__: duck-types pool capability via hasattr(client, 'acquire_profile')
+  __enter__ pool-mode flow:
+    acquire_profile → randomize_fingerprint → launch_profile(/browser/open)
+    HTTPError 404 on /browser/open → _evict_profile + release_profile
+    (create_profile / delete_profile are NEVER called)
+  __enter__ legacy-mode flow: create_profile → launch_profile (unchanged)
+  release_profile pool-mode: delegates to client.release_profile (close only,
+    POOL-NO-DELETE — /browser/delete is NEVER called)
+  release_profile legacy-mode: close_profile + delete_profile (unchanged)
 ```
 
 **Rule:** Any modification to `BitBrowserPoolClient` acquire/release/eviction
-semantics, to the round-robin cursor invariant, or to the
-`get_bitbrowser_client()` factory branching MUST update this entry. Backward
-compatibility for `BITBROWSER_POOL_MODE=0` (legacy create/delete flow) is
-MANDATORY — tests/test_bitbrowser_pool.py#test_backward_compat_legacy_mode_unaffected
-enforces this at CI level.
+semantics, to the round-robin cursor invariant, to `BitBrowserSession`
+pool/legacy branching, or to the `get_bitbrowser_client()` factory branching
+MUST update this entry. Backward compatibility for `BITBROWSER_POOL_MODE=0`
+(legacy create/delete flow) is MANDATORY — both
+`tests/test_bitbrowser_pool.py#test_backward_compat_legacy_mode_unaffected`
+and `tests/test_bitbrowser_pool_session.py#test_legacy_session_still_creates_and_deletes`
+enforce this at CI level.
 
 ---
 
