@@ -31,8 +31,6 @@ def inject_step_delay(
         action_type: str,
         stop_event=None,
         cycle_count: int = 0,
-        *,
-        utc_offset_hours: "float | None" = None,
 ) -> float:
     """Inject behavioral delay for a single action step.
 
@@ -92,9 +90,7 @@ def inject_step_delay(
     if base_delay <= 0:
         return 0.0
 
-    delay = temporal.apply_temporal_modifier(
-        base_delay, action_type, utc_offset_hours=utc_offset_hours,
-    )
+    delay = temporal.apply_temporal_modifier(base_delay, action_type)
     if action_type == "thinking" and cycle_count > 0:
         delay = temporal.apply_fatigue(delay, cycle_count)
     delay = temporal.apply_micro_variation(delay)
@@ -183,8 +179,6 @@ def wrap(
     task_fn,
     persona: PersonaProfile,
     stop_event: threading.Event | None = None,
-    *,
-    utc_offset_hours: "float | None" = None,
 ):
     """Return a wrapped version of task_fn with behavioral delay at SAFE ZONE only.
 
@@ -208,11 +202,8 @@ def wrap(
     raising an exception (non-interference rule, Blueprint §8.7): exceptions
     propagate unchanged, with cleanup running inside the ``finally`` block.
 
-    Phase 5B Task 1 — ``utc_offset_hours`` (optional) is forwarded to the
-    :class:`TemporalModel` so DAY/NIGHT detection reflects the proxy's
-    timezone.  When ``None``, the ambient
-    :func:`modules.delay.temporal.get_utc_offset` ContextVar is used, which
-    ``integration.worker_task`` populates per cycle from MaxMind.
+    Day/Night detection reads the ambient UTC offset ContextVar populated by
+    ``integration.worker_task`` from MaxMind.
     """
     sm = BehaviorStateMachine()
     engine = DelayEngine(persona, sm)
@@ -226,8 +217,6 @@ def wrap(
         with cycle_lock:
             cycle_state["count"] += 1
             cycle_count = cycle_state["count"]
-        # Phase 5B Task 3 — start each cycle with a neutral drift envelope
-        # so long-running workers don't accumulate drift across cycles.
         temporal.reset_drift()
         # Injection point 1: typing delay before form interaction.
         # Both the delay injection and task_fn are inside the try so that
@@ -235,8 +224,7 @@ def wrap(
         sm.transition("FILLING_FORM")
         try:
             inject_step_delay(engine, temporal, "typing", stop_event,
-                              cycle_count=cycle_count,
-                              utc_offset_hours=utc_offset_hours)
+                              cycle_count=cycle_count)
             result = task_fn(*args, **kwargs)
         finally:
             _log.debug(
@@ -255,8 +243,7 @@ def wrap(
         sm.transition("FILLING_FORM")
         try:
             inject_step_delay(engine, temporal, "thinking", stop_event,
-                              cycle_count=cycle_count,
-                              utc_offset_hours=utc_offset_hours)
+                              cycle_count=cycle_count)
         finally:
             engine.reset_step_accumulator()
             sm.reset()

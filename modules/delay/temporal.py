@@ -22,20 +22,13 @@ from modules.delay.config import (
 from modules.delay.persona import PersonaProfile
 
 
-# Phase 5B Task 1 — ambient UTC offset propagated via ContextVar so that
-# per-cycle MaxMind-derived timezones reach ``apply_temporal_modifier``
-# without threading the value through every call site signature.
 _utc_offset_var: "contextvars.ContextVar[float]" = contextvars.ContextVar(
     "utc_offset_hours", default=0.0
 )
 
 
 def set_utc_offset(offset: float) -> "contextvars.Token":
-    """Set the ambient UTC offset (in hours) for the current context.
-
-    Returns the ``Token`` returned by :meth:`ContextVar.set` so callers may
-    restore the previous value via :func:`reset_utc_offset` if desired.
-    """
+    """Set the ambient UTC offset for the current context."""
     try:
         value = float(offset)
     except (TypeError, ValueError):
@@ -49,7 +42,7 @@ def get_utc_offset() -> float:
 
 
 def reset_utc_offset(token: "contextvars.Token") -> None:
-    """Restore a previous ambient UTC offset via the token from :func:`set_utc_offset`."""
+    """Restore a previous UTC offset via the token from :func:`set_utc_offset`."""
     _utc_offset_var.reset(token)
 
 
@@ -61,8 +54,6 @@ class TemporalModel:
         # seed+1: intentional offset; worker seeds are CRC32-derived (non-adjacent).
         self._rnd = random.Random(persona._seed + 1)
         self._rnd_lock = threading.Lock()
-        # Gradual-drift state (Blueprint §10). AR(1) envelope around 1.0,
-        # protected by ``_rnd_lock`` since it shares the same RNG.
         self._drift_multiplier: float = 1.0
         self._drift_step_count: int = 0
 
@@ -76,14 +67,13 @@ class TemporalModel:
         exposes no ``active_hours`` attribute, falls back to the global
         ``DAY_START..DAY_END`` constants.
         """
-        # Accept float offsets (e.g. India UTC+5.5); truncate toward zero to
-        # the hour granularity used by the simple DAY/NIGHT window.
-        local_hour = (time.gmtime().tm_hour + int(utc_offset_hours)) % 24
+        local_hour = (time.gmtime().tm_hour + utc_offset_hours) % 24
         start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
+        end_exclusive = (end + 1) % 24
         if start <= end:
-            in_day = start <= local_hour <= end
+            in_day = start <= local_hour < end + 1
         else:  # wrap-around through midnight
-            in_day = local_hour >= start or local_hour <= end
+            in_day = local_hour >= start or local_hour < end_exclusive
         return "DAY" if in_day else "NIGHT"
 
     def apply_temporal_modifier(
@@ -101,8 +91,7 @@ class TemporalModel:
         - thinking: increased by ``NIGHT_HESITATION_INCREASE_RANGE`` (20–40%)
 
         When ``utc_offset_hours`` is ``None`` (default), the offset is read
-        from the ambient :func:`get_utc_offset` ContextVar — populated by
-        ``integration/worker_task.py`` after MaxMind lookup (Phase 5B Task 1).
+        from the ambient :func:`get_utc_offset` ContextVar.
         """
         if base_delay <= 0:
             return 0.0
@@ -117,8 +106,6 @@ class TemporalModel:
                 modified = base_delay * (1.0 + self._persona.night_penalty_factor)
         else:
             modified = base_delay
-        # Gradual drift (Blueprint §10 — slow-varying envelope). Only applied
-        # to typing/thinking so operational steps (e.g. click) remain stable.
         if ENABLE_GRADUAL_DRIFT and action_type in ("typing", "thinking"):
             modified = self.apply_gradual_drift(modified)
         if action_type == "typing":
@@ -134,26 +121,13 @@ class TemporalModel:
         drift_rate: float = 0.02,
         drift_cap: float = 0.30,
     ) -> float:
-        """AR(1) drift: multiplier random-walks slowly around 1.0, capped ±``drift_cap``.
-
-        Blueprint §10 "Temporal Variation" mechanism #3 — a slow-varying
-        envelope on top of the i.i.d. micro-variation / fatigue signals.
-
-        Parameters
-        ----------
-        drift_rate : float
-            Per-step std-dev of the Gaussian increment.
-        drift_cap : float
-            Maximum absolute deviation from 1.0 (default ±30%).
-        """
+        """AR(1) drift around 1.0, capped to ±``drift_cap``."""
         with self._rnd_lock:
             self._drift_step_count += 1
-            # AR(1) toward 1.0 with Gaussian innovation.
             step = self._rnd.gauss(0.0, drift_rate)
             self._drift_multiplier = (
                 0.98 * self._drift_multiplier + 0.02 * 1.0 + step
             )
-            # Clamp envelope to ±drift_cap around 1.0.
             self._drift_multiplier = max(
                 1.0 - drift_cap,
                 min(1.0 + drift_cap, self._drift_multiplier),

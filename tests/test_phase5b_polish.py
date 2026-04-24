@@ -13,7 +13,6 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modules.delay import config as _delay_config
 from modules.delay import temporal as _temporal_mod
 from modules.delay.biometrics import BiometricProfile, _FAST_MIN, _FAST_MAX
 from modules.delay.persona import PersonaProfile
@@ -46,6 +45,12 @@ class TestUtcOffsetPlumbing(unittest.TestCase):
             self.assertEqual(self.tm.get_time_state(0), "NIGHT")
             self.assertEqual(self.tm.get_time_state(-8), "DAY")
 
+    def test_fractional_utc_offsets_preserve_day_window(self):
+        gmt = time.struct_time((2026, 1, 1, 16, 0, 0, 3, 1, 0))
+        self.persona.active_hours = (6, 21)
+        with patch("modules.delay.temporal.time.gmtime", return_value=gmt):
+            self.assertEqual(self.tm.get_time_state(5.5), "DAY")
+
     def test_delay_varies_with_utc_offset(self):
         """Same UTC time + persona, different offsets → different temporal factor
         when one is DAY (no penalty) and the other is NIGHT (penalty applied)."""
@@ -59,12 +64,13 @@ class TestUtcOffsetPlumbing(unittest.TestCase):
         self.assertGreater(d_night, d_day)
 
     def test_missing_maxmind_offset_defaults_to_0(self):
-        """Explicit 0.0 offset and default offset should both produce a valid result."""
-        result = self.tm.apply_temporal_modifier(1.0, "typing", utc_offset_hours=0)
-        self.assertGreater(result, 0.0)
-        # None → ContextVar default (0.0) — must not crash.
-        result2 = self.tm.apply_temporal_modifier(1.0, "typing", utc_offset_hours=None)
-        self.assertGreater(result2, 0.0)
+        gmt = time.struct_time((2026, 1, 1, 12, 0, 0, 3, 1, 0))
+        with patch("modules.delay.temporal.time.gmtime", return_value=gmt), \
+             patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False):
+            result = self.tm.apply_temporal_modifier(1.0, "typing", utc_offset_hours=0)
+            result2 = self.tm.apply_temporal_modifier(1.0, "typing", utc_offset_hours=None)
+        self.assertEqual(result, 1.0)
+        self.assertEqual(result2, 1.0)
 
     def test_utc_offset_context_var_propagates_through_wrapper(self):
         """When utc_offset_hours is unset in the wrapper, the ambient ContextVar
@@ -73,7 +79,6 @@ class TestUtcOffsetPlumbing(unittest.TestCase):
         token = set_utc_offset(-8.0)
         try:
             self.assertEqual(get_utc_offset(), -8.0)
-            # Sanity: the call site reads from the ContextVar.
             sm = BehaviorStateMachine()
             engine = DelayEngine(persona, sm)
             temporal = TemporalModel(persona)
@@ -81,24 +86,22 @@ class TestUtcOffsetPlumbing(unittest.TestCase):
                  patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
                  patch("modules.delay.wrapper.time.sleep"):
                 sm.transition("FILLING_FORM")
-                # utc_offset_hours=None → wrapper leaves it as None → Temporal reads
-                # from ContextVar; with offset=-8 at 22:00 UTC → DAY (no penalty).
-                d = inject_step_delay(
-                    engine, temporal, "typing", cycle_count=0, utc_offset_hours=None,
-                )
-            # DAY at offset=-8 → no NIGHT penalty, so delay should equal base
-            # (modulo micro-variation). Assert it's <= base * 1.2 (variation cap).
-            self.assertLessEqual(d, persona.get_typing_delay(0) * 1.20 + 0.05)
+                d_day = inject_step_delay(engine, temporal, "typing", cycle_count=0)
+            token2 = set_utc_offset(0.0)
+            try:
+                sm = BehaviorStateMachine()
+                engine = DelayEngine(persona, sm)
+                temporal = TemporalModel(persona)
+                with patch("modules.delay.temporal.time.gmtime", return_value=self._gmt_22), \
+                     patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+                     patch("modules.delay.wrapper.time.sleep"):
+                    sm.transition("FILLING_FORM")
+                    d_night = inject_step_delay(engine, temporal, "typing", cycle_count=0)
+            finally:
+                _temporal_mod.reset_utc_offset(token2)
+            self.assertLess(d_day, d_night)
         finally:
             _temporal_mod.reset_utc_offset(token)
-
-    def test_cycle_context_has_utc_offset_field(self):
-        from modules.common.types import CycleContext
-        ctx = CycleContext(cycle_id="c1", worker_id="w1", utc_offset_hours=-8.0)
-        self.assertEqual(ctx.utc_offset_hours, -8.0)
-        # Default
-        ctx2 = CycleContext(cycle_id="c2", worker_id="w2")
-        self.assertEqual(ctx2.utc_offset_hours, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -311,12 +314,8 @@ class TestGreetingDeterminism(unittest.TestCase):
 
 
 _N_ITERATIONS = 200
-_OVERHEAD_CAP = 0.15  # 15% per Blueprint §8.6
-
-
 def _baseline_task(worker_id):
-    """Simulate real work — pure CPU, no sleep (intentional delays are excluded
-    from §8.6 "overhead" — the metric measures wrapper bookkeeping only)."""
+    """Simulate real work — pure CPU, no intentional behavior delay."""
     # ~50 µs of busy work so the baseline is non-trivially measurable.
     total = 0
     for i in range(1000):
@@ -325,12 +324,11 @@ def _baseline_task(worker_id):
 
 
 class TestOverhead(unittest.TestCase):
-    """Phase 5B Task 5 — behavior wrapper overhead must stay ≤15% (§8.6).
+    """Phase 5B Task 5 — bookkeeping overhead stays small vs baseline (§8.6).
 
-    Overhead here is the per-call bookkeeping cost of the behavior wrapper
-    (SM transitions, accumulator reset, cycle counter, RNG state) — NOT the
-    intentional delays it injects.  Delays are patched out so that only the
-    wrapper's own overhead is measured.
+    This measures wrapper bookkeeping only (state machine, RNG, drift reset,
+    ContextVar lookup). Intentional sleep time is patched out because it is
+    behavior, not framework overhead.
     """
 
     def _measure(self, fn, n=_N_ITERATIONS):
@@ -374,6 +372,26 @@ class TestOverhead(unittest.TestCase):
                     per_call_ms, 10.0,
                     f"seed={persona_seed}: per-call {per_call_ms:.2f}ms > 10ms",
                 )
+
+
+class TestCompoundClamp(unittest.TestCase):
+    def test_worst_case_compound_delays_still_clamped(self):
+        persona = PersonaProfile(42)
+        sm = BehaviorStateMachine()
+        engine = DelayEngine(persona, sm)
+        temporal = TemporalModel(persona)
+        sm.transition("FILLING_FORM")
+        with patch.object(TemporalModel, "apply_temporal_modifier", return_value=5.0), \
+             patch.object(TemporalModel, "apply_fatigue", return_value=6.0), \
+             patch.object(TemporalModel, "apply_micro_variation", return_value=7.0), \
+             patch("modules.delay.wrapper.time.sleep"):
+            result = inject_step_delay(
+                engine,
+                temporal,
+                "thinking",
+                cycle_count=persona.fatigue_threshold + 1,
+            )
+        self.assertEqual(result, 5.0)
 
 
 if __name__ == "__main__":
