@@ -1318,32 +1318,16 @@ class GivexDriver:
     def _cdp_type_field(self, selector: str, value: str) -> None:
         """DEPRECATED: use :meth:`_realistic_type_field` (``field_kind="text"``) instead.
 
-        Retained only for backward-compat with tests that patch it.  The
-        Selenium-native ``send_keys`` fallback emits ``isTrusted=False`` key
-        events that defeat anti-detect and MUST NOT be used on the production
-        hot-path.
-
-        When the ``ENFORCE_CDP_TYPING_STRICT`` environment variable is unset
-        or set to ``"1"`` (the production default), calling this helper
-        raises :class:`RuntimeError` rather than silently dispatching Selenium
-        keys.  Set ``ENFORCE_CDP_TYPING_STRICT=0`` only in test environments
-        that legitimately exercise the deprecated fallback; a
-        :class:`DeprecationWarning` is still emitted in that case so
-        regressions remain noisy in logs.
-
-        Args:
-            selector: CSS selector for the input/textarea element.
-            value: Text to type.
+        Selenium ``send_keys`` emits ``isTrusted=False`` key events and
+        MUST NOT be used on the production hot-path.  When
+        ``ENFORCE_CDP_TYPING_STRICT`` is unset or ``"1"`` (production
+        default), this shim raises :class:`RuntimeError`; set ``"0"`` only
+        in tests that exercise the deprecated fallback.
 
         Raises:
             SelectorTimeoutError: if no matching element is found.
             RuntimeError: when ``ENFORCE_CDP_TYPING_STRICT=1``.
         """
-        # Default defaults to ``"1"`` (strict) so production environments —
-        # which rarely set the variable explicitly — fail loudly if any
-        # regression re-introduces a call-site.  Tests that need the legacy
-        # shim behavior must opt into non-strict explicitly via
-        # ``ENFORCE_CDP_TYPING_STRICT=0``.
         if os.environ.get("ENFORCE_CDP_TYPING_STRICT", "1") == "1":
             raise RuntimeError(
                 "_cdp_type_field called in strict mode; all text fields must "
@@ -1509,7 +1493,6 @@ class GivexDriver:
 
         self._ghost_move_to(selector)
 
-        # Branch 1: rect fetch
         try:
             rect = self._driver.execute_script(
                 "var r=arguments[0].getBoundingClientRect();"
@@ -1530,9 +1513,7 @@ class GivexDriver:
             elements[0].click()
             return
 
-        # Branch 2: rect valid — guard against falsy rect, missing keys,
-        # zero dimensions, AND negative dimensions (e.g. a CSS transform
-        # ``scale(-1)`` can produce a non-positive bounding-box width).
+        # Reject falsy/missing-key/zero/negative rects (e.g. CSS scale(-1)).
         rect_w = rect.get("width") if rect else None
         rect_h = rect.get("height") if rect else None
         if (
@@ -1555,7 +1536,6 @@ class GivexDriver:
             elements[0].click()
             return
 
-        # Branch 3: persona RNG
         if self._rnd is None:
             if self._strict:
                 raise CDPClickError(
@@ -1589,7 +1569,6 @@ class GivexDriver:
         abs_x = max(rect["left"], min(center_x + offset_x, rect["left"] + rect["width"]))
         abs_y = max(rect["top"], min(center_y + offset_y, rect["top"] + rect["height"]))
 
-        # Branch 4: CDP dispatch
         try:
             _dispatch_cdp_click_sequence(self._driver, abs_x, abs_y)
             return
@@ -1869,9 +1848,7 @@ class GivexDriver:
         self._realistic_type_field(SEL_CARD_CVV, card_info.cvv, field_kind="cvv")
         if billing_profile is None:
             return
-        # Billing section — all text fields route via CDP Input.dispatchKeyEvent
-        # (Phase 3A Task 1).  ZIP and phone use field_kind="amount" for
-        # numeric-safe typing with typo_cap=0.0.
+        # Billing section — all text fields route via CDP Input.dispatchKeyEvent (Phase 3A Task 1).
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
