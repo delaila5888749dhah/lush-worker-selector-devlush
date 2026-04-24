@@ -134,7 +134,7 @@ class BitBrowserClient:
                     path, attempt, attempts, type(exc).__name__, wait,
                 )
                 time.sleep(wait)
-                wait = min(wait * 2 if wait > 0 else _retry_wait_initial_s(), wait_max)
+                wait = min(wait * 2, wait_max)
         # Unreachable — loop either returns or re-raises.
         raise RuntimeError("BitBrowser _post exhausted retries") from last_exc
 
