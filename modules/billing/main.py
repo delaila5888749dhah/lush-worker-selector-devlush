@@ -186,6 +186,8 @@ def request_pool_reload() -> None:
     # lazy load that repopulates _profiles from stale disk state.
     with _LOAD_LOCK:
         with _lock:
+            # `_lock` guards the deque object itself; `_LOAD_LOCK` only
+            # serializes the broader cold-start / reload sequence.
             _profiles.clear()
     try:
         # Eagerly re-read from disk so subsequent select_profile() calls see

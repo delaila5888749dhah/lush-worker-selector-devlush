@@ -331,13 +331,13 @@ class TestL3OrchestratorScenarios(_IntegrationBase, unittest.TestCase):
     def test_single_audit_event_per_cycle_with_retry_path(self):
         """Decline + swap retries must still emit exactly one billing_selection event."""
         task = _make_task(task_id="l3-audit-event-retry")
-        # Three swap cards → four total attempts in the retry loop.
+        # Three distinct swap cards → four total attempts in the retry loop.
         task = dataclasses.replace(
             task,
             order_queue=(
-                task.primary_card,
-                task.primary_card,
-                task.primary_card,
+                dataclasses.replace(task.primary_card, cvv="124"),
+                dataclasses.replace(task.primary_card, cvv="125"),
+                dataclasses.replace(task.primary_card, cvv="126"),
             ),
         )
         stub = _StubGivexDriver(self.worker_id, final_state="declined")
