@@ -416,12 +416,16 @@ def _random_greeting(rnd=None) -> str:
     return secrets.choice(_GREETINGS)
 
 
-def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
+def _lookup_maxmind_utc_offset(ip_addr: str) -> float | None:
     """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb.
 
     Uses the module-level singleton reader when available (initialised via
     :func:`init_maxmind_reader`); falls back to a per-call open for backward
     compatibility in stub/test mode (with a warning log).
+
+    Returns a ``float`` hours value (not truncated) so fractional zones such
+    as ``Asia/Kolkata`` (UTC+5.5) and ``America/St_Johns`` (UTC-3.5) survive
+    the plumbing into the delay-layer ContextVar (Phase 5B Task 1).
     """
     if _ZoneInfo is None:
         return None
@@ -445,7 +449,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
                     offset = now.utcoffset()
                     if offset is None:
                         return None
-                    return int(offset.total_seconds() // 3600)
+                    return offset.total_seconds() / 3600.0
         except Exception as exc:  # pylint: disable=broad-except
             _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
         return None
@@ -459,7 +463,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
             offset = now.utcoffset()
             if offset is None:
                 return None
-            return int(offset.total_seconds() // 3600)
+            return offset.total_seconds() / 3600.0
     except Exception as exc:  # pylint: disable=broad-except
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None

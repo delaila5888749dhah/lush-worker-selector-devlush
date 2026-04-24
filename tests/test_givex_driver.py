@@ -1073,6 +1073,50 @@ class TestMaxMindGeoLookup(unittest.TestCase):
             offset = drv._lookup_maxmind_utc_offset("8.8.8.8")  # pylint: disable=protected-access
         self.assertEqual(offset, -5)
 
+    def test_lookup_maxmind_utc_offset_preserves_fractional_hours(self):
+        """Phase 5B Task 1 — half-hour zones (Asia/Kolkata, UTC+5.5) must not
+        be truncated to an integer before reaching the delay-layer ContextVar.
+        """
+        fake_record = MagicMock()
+        fake_record.location.time_zone = "Asia/Kolkata"
+        fixed_now = datetime.datetime(
+            2026,
+            1,
+            15,
+            12,
+            0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)),
+        )
+
+        class FakeReader:
+            """Fake geoip2 Reader for test isolation."""
+
+            def __init__(self, _path):
+                self._path = _path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            @staticmethod
+            def city(_ip):
+                return fake_record
+
+        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch("modules.cdp.driver.datetime.datetime") as mock_datetime, \
+             patch.dict(
+                 "sys.modules",
+                 {"geoip2": fake_geoip2_module, "geoip2.database": fake_database_module},
+             ):
+            mock_datetime.now.return_value = fixed_now
+            offset = drv._lookup_maxmind_utc_offset("8.8.8.8")  # pylint: disable=protected-access
+        self.assertIsInstance(offset, float)
+        self.assertAlmostEqual(offset, 5.5)
+
     def test_lookup_maxmind_utc_offset_returns_none_when_db_missing(self):
         """GEOIP_DB_PATH not set and file absent returns None gracefully."""
         with patch.dict("os.environ", {}, clear=True), \
