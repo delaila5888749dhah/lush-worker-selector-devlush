@@ -5,6 +5,22 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Added (Blueprint §2.1 — BitBrowser Profile Pool)
+- `BITBROWSER_POOL_MODE` env var — bật chế độ pool profile có sẵn,
+  thay create/delete flow (tránh Operation Password prompt của BitBrowser).
+- `BITBROWSER_PROFILE_IDS` env var — CSV profile IDs (VD:
+  `abc123,def456,ghi789`). Bắt buộc khi `BITBROWSER_POOL_MODE=1`.
+- `BitBrowserPoolClient` trong `modules/cdp/fingerprint.py` — round-robin
+  cursor thread-safe (threading.Lock) + BUSY set, eviction khi API trả 404.
+- Blueprint §2.1 mô tả đầy đủ cơ chế + Sync Matrix §11.
+- `tests/test_bitbrowser_pool.py` — 10 unit tests cho round-robin,
+  wrap-around, BUSY skip, timeout, thread-safety, 404 eviction, payload
+  chính xác, và backward compatibility.
+
+### Changed (Blueprint §2.1)
+- None (backward-compatible: `BITBROWSER_POOL_MODE=0` mặc định giữ nguyên
+  hành vi create/delete cũ).
+
 ### Added (P2-5, canary / final gate)
 - `docs/rollback.md` — rollback plan documenting every feature-flag
   kill-switch (`ENABLE_RETRY_LOOP=0`, `ENABLE_RETRY_UI_LOCK=0`,

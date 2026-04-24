@@ -272,3 +272,28 @@ Any PR that modifies the following files MUST include an update to this document
 - `integration/runtime.py` (worker state transitions)
 - `modules/rollout/main.py` (SCALE_STEPS)
 - `modules/cdp/main.py` (PID registry, _sanitize_error, driver registry)
+- `modules/cdp/fingerprint.py` (BitBrowser pool client — FEATURE-POOL-01)
+
+---
+
+## FEATURE-POOL-01 — BitBrowser Profile Pool (Blueprint §2.1)
+
+```
+modules/cdp/fingerprint.py — BitBrowserPoolClient
+  Round-robin cursor + BUSY set, protected by threading.Lock
+  acquire_profile() → str (sequential, thread-safe)
+  release_profile(profile_id) → None (best-effort close, always clears BUSY)
+  randomize_fingerprint(profile_id) → POST /browser/update/partial
+  launch_profile(profile_id) → dict (POST /browser/open)
+  _evict_profile(profile_id) → pool removal on 404
+  get_bitbrowser_client() factory branches on BITBROWSER_POOL_MODE:
+    "1"/"true"/"yes" → BitBrowserPoolClient (requires BITBROWSER_PROFILE_IDS)
+    otherwise        → legacy BitBrowserClient (unchanged behaviour)
+```
+
+**Rule:** Any modification to `BitBrowserPoolClient` acquire/release/eviction
+semantics, to the round-robin cursor invariant, or to the
+`get_bitbrowser_client()` factory branching MUST update this entry. Backward
+compatibility for `BITBROWSER_POOL_MODE=0` (legacy create/delete flow) is
+MANDATORY — tests/test_bitbrowser_pool.py#test_backward_compat_legacy_mode_unaffected
+enforces this at CI level.

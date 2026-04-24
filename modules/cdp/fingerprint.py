@@ -4,10 +4,12 @@
 import json
 import logging
 import os
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -173,12 +175,175 @@ class BitBrowserSession:
 
 
 def get_bitbrowser_client() -> Optional[BitBrowserClient]:
-    """Return BitBrowserClient if env vars set and endpoint reachable, else None."""
+    """Return BitBrowserClient if env vars set and endpoint reachable, else None.
+
+    Blueprint §2.1: when ``BITBROWSER_POOL_MODE`` is truthy ("1"/"true"/"yes")
+    returns a :class:`BitBrowserPoolClient` built from ``BITBROWSER_PROFILE_IDS``
+    (CSV) instead. Legacy behaviour is preserved for all other values.
+    """
     api_key = os.getenv("BITBROWSER_API_KEY")
     if not api_key:
         return None
     endpoint = os.getenv("BITBROWSER_ENDPOINT", "http://127.0.0.1:54345")
+    pool_mode = os.getenv("BITBROWSER_POOL_MODE", "0").strip().lower()
+    if pool_mode in ("1", "true", "yes"):
+        ids_raw = os.getenv("BITBROWSER_PROFILE_IDS", "")
+        profile_ids = [pid.strip() for pid in ids_raw.split(",") if pid.strip()]
+        if not profile_ids:
+            raise RuntimeError(
+                "BITBROWSER_POOL_MODE=1 but BITBROWSER_PROFILE_IDS is empty. "
+                "Add a CSV of profile IDs to .env (Blueprint §2.1)."
+            )
+        return BitBrowserPoolClient(
+            endpoint=endpoint,
+            api_key=api_key,
+            profile_ids=profile_ids,
+        )
     client = BitBrowserClient(endpoint=endpoint, api_key=api_key)
     if not client.is_available():
         return None
     return client
+
+
+class BitBrowserPoolClient(BitBrowserClient):
+    """Pool-mode BitBrowser client — round-robin sequential, thread-safe.
+
+    Blueprint §2.1: uses a pre-created profile pool and randomises
+    fingerprints per cycle via ``/browser/update/partial``. Avoids the
+    legacy ``create → delete`` flow which is blocked by BitBrowser's
+    Operation Password prompt.
+
+    Inherits :class:`BitBrowserClient` for shared ``_post``/scheme validation
+    helpers; overrides ``launch_profile`` to use the pool-mode endpoint.
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        profile_ids: List[str],
+        acquire_timeout_s: float = 60.0,
+        poll_interval_s: float = 0.5,
+    ):
+        if not profile_ids:
+            raise ValueError(
+                "BITBROWSER_POOL_MODE=1 requires BITBROWSER_PROFILE_IDS "
+                "to be a non-empty CSV list."
+            )
+        super().__init__(endpoint=endpoint, api_key=api_key)
+        # Copy to avoid caller mutation affecting pool order.
+        self._pool: List[str] = list(profile_ids)
+        self._cursor: int = 0
+        self._busy: set = set()
+        self._lock = threading.Lock()
+        self._acquire_timeout_s = acquire_timeout_s
+        self._poll_interval_s = poll_interval_s
+        _log.info(
+            "BitBrowserPoolClient initialised with %d profiles",
+            len(self._pool),
+        )
+
+    def acquire_profile(self) -> str:
+        """Thread-safe round-robin sequential pick.
+
+        Returns a profile id marked as BUSY. Caller MUST call
+        :meth:`release_profile` in a ``finally`` block.
+
+        Raises:
+            RuntimeError: if no profile becomes AVAILABLE within
+                ``acquire_timeout_s``, or if the pool is empty.
+        """
+        deadline = time.time() + self._acquire_timeout_s
+        while True:
+            with self._lock:
+                n = len(self._pool)
+                if n == 0:
+                    raise RuntimeError(
+                        "Profile pool is empty (all profiles may have been "
+                        "evicted due to 404 from BitBrowser)."
+                    )
+                for offset in range(n):
+                    idx = (self._cursor + offset) % n
+                    pid = self._pool[idx]
+                    if pid not in self._busy:
+                        self._busy.add(pid)
+                        self._cursor = (idx + 1) % n
+                        _log.debug(
+                            "acquired profile=%s cursor=%d busy=%d",
+                            pid, self._cursor, len(self._busy),
+                        )
+                        return pid
+            if time.time() > deadline:
+                raise RuntimeError(
+                    f"All {n} profiles BUSY for > "
+                    f"{self._acquire_timeout_s}s; cannot acquire."
+                )
+            time.sleep(self._poll_interval_s)
+
+    def release_profile(self, profile_id: str) -> None:
+        """Return a profile to the pool (called from a ``finally`` block).
+
+        Best-effort closes the browser window (no delete), then always
+        clears the BUSY flag regardless of close errors.
+        """
+        try:
+            self._close_browser(profile_id)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning("close_browser failed for %s: %s", profile_id, exc)
+        finally:
+            with self._lock:
+                self._busy.discard(profile_id)
+                _log.debug(
+                    "released profile=%s busy=%d",
+                    profile_id, len(self._busy),
+                )
+
+    def randomize_fingerprint(self, profile_id: str) -> None:
+        """POST ``/browser/update/partial`` to randomise an existing profile.
+
+        Raises:
+            RuntimeError: if the profile is not found (HTTP 404). The
+                profile is evicted from the pool before the error is raised.
+        """
+        payload = {
+            "ids": [profile_id],
+            "browserFingerPrint": {
+                "batchRandom": True,
+                "batchUpdateFingerPrint": True,
+            },
+        }
+        try:
+            self._post("/browser/update/partial", payload, timeout=10)
+            _log.info("fingerprint randomised for %s", profile_id)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                self._evict_profile(profile_id)
+                raise RuntimeError(
+                    f"Profile {profile_id} not found (404) — "
+                    f"evicted from pool."
+                ) from exc
+            raise
+
+    def launch_profile(self, profile_id: str) -> Dict[str, object]:
+        """POST ``/browser/open`` → ``{"webdriver": ..., ...}``."""
+        data = self._post("/browser/open", {"id": profile_id}, timeout=30)
+        if not isinstance(data, dict):
+            raise RuntimeError("BitBrowser /browser/open returned non-dict")
+        return data
+
+    def _close_browser(self, profile_id: str) -> None:
+        """POST ``/browser/close`` (no delete)."""
+        self._post("/browser/close", {"id": profile_id}, timeout=10)
+
+    def _evict_profile(self, profile_id: str) -> None:
+        """Remove a 404 profile from the pool at runtime."""
+        with self._lock:
+            if profile_id in self._pool:
+                self._pool.remove(profile_id)
+                self._busy.discard(profile_id)
+                if self._cursor >= len(self._pool) and self._pool:
+                    self._cursor = 0
+                _log.error(
+                    "evicted profile %s; pool size=%d",
+                    profile_id, len(self._pool),
+                )

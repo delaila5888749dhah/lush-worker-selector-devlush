@@ -79,6 +79,7 @@ _FALLBACK_PROTECTED_FILES: tuple[str, ...] = (
     "integration/runtime.py",
     "modules/rollout/main.py",
     "modules/cdp/main.py",
+    "modules/cdp/fingerprint.py",
 )
 AUDIT_LOCK_RELATIVE = "spec/audit-lock.md"
 

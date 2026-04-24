@@ -18,6 +18,27 @@ ENABLE_PRODUCTION_TASK_FN=1 python -m app  # production mode
 See `spec/blueprint.md` for the full architectural blueprint and
 `.github/AI_CONTEXT.md` for the Native AI Workflow.
 
+## BitBrowser Pool Mode — Hướng dẫn nhanh cho operator (Blueprint §2.1)
+
+Khi BitBrowser bật "Operation Password", API `create/delete profile` sẽ
+bị chặn. Pool Mode giải quyết bằng cách dùng lại profile đã tạo sẵn:
+
+1. Mở BitBrowser GUI → tạo thủ công **N profile** (khuyến nghị
+   `N ≥ WORKER_COUNT × 2`). Ghi lại từng profile ID.
+2. Mở `.env` và điền:
+   ```
+   BITBROWSER_POOL_MODE=1
+   BITBROWSER_PROFILE_IDS=abc123,def456,ghi789,jkl012,mno345
+   ```
+3. Chạy `python -m app` như bình thường. Bot sẽ:
+   - Chọn profile theo **round-robin tuần tự** (không random),
+   - Gọi `/browser/update/partial` để **random fingerprint** mỗi cycle,
+   - `/browser/open` → làm việc → `/browser/close` (KHÔNG delete).
+4. Quay lại chế độ cũ: đặt `BITBROWSER_POOL_MODE=0` (hoặc bỏ biến này).
+   Hành vi legacy create/delete được giữ nguyên 100%.
+
+Chi tiết vận hành & xử lý sự cố: xem `docs/operations/RUNBOOK.md` §2.4.
+
 ## Production Deployment
 
 ### Auto-update MaxMind .mmdb
