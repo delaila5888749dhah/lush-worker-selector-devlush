@@ -142,9 +142,6 @@ def record_ui_lock_exhausted() -> None:
 
 
 # ── Per-branch FSM-fork counters — public surface (Phase 4 [H3]) ───────────
-_KNOWN_FORK_BRANCHES = frozenset(
-    name.removeprefix("fork_") for name in _fork_counters
-)
 
 
 def record_fork(branch: str) -> None:
