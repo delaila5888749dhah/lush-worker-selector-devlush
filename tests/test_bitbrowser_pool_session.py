@@ -15,6 +15,7 @@ import os
 import threading
 import time
 import unittest
+import unittest.mock as um
 import urllib.error
 from unittest.mock import patch
 
@@ -210,7 +211,6 @@ class TestLegacyBackwardCompat(unittest.TestCase):
     """Non-pool clients keep the legacy create + delete flow."""
 
     def test_legacy_session_still_creates_and_deletes(self):
-        import unittest.mock as um  # noqa: PLC0415
         client = um.Mock(spec=BitBrowserClient)
         client.create_profile.return_value = "legacy-id"
         client.launch_profile.return_value = {"webdriver": "http://127.0.0.1:1234"}
