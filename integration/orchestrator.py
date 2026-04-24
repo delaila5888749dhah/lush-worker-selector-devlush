@@ -1106,12 +1106,18 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     Steps:
       1. Select a billing profile from the pool (or use *_profile* if provided).
       2. Enable the network watchdog for this worker.
-      3. Run the full pre-submit sequence via CDP (preflight_geo → navigate →
-         fill eGift form → add to cart → guest checkout → fill payment/billing).
-      4. Persist the idempotency checkpoint (U-07: mark_submitted BEFORE submit).
-      5. Submit the purchase via CDP (the irreversible action).
-      6. Wait for the checkout total to be confirmed by the watchdog.
-      7. Return (state, total).
+      3. **Phase A (INV-PAYMENT-01)** — Block on ``watchdog.wait_for_total``
+         with a 10s timeout BEFORE any card field is typed.  A timeout
+         raises ``SessionFlaggedError`` and aborts the cycle before any
+         payment data leaves the typing buffer.
+      4. **Phase B** — Run the full pre-submit sequence via CDP
+         (preflight_geo → navigate → fill eGift form → add to cart →
+         guest checkout → fill payment/billing), persist the idempotency
+         checkpoint (U-07: mark_submitted BEFORE submit), then submit.
+      5. **Phase C** — Optional post-submit confirmation total.  A
+         timeout here does NOT raise — the Phase A preflight total is
+         the authoritative value.
+      6. Return (state, total).
 
     Args:
         task: WorkerTask containing card and order information.
@@ -1151,8 +1157,33 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         _notified_workers_this_cycle.discard(worker_id)
     watchdog.enable_network_monitor(worker_id)
     _submitted_before_wait = False
+    total = None
     try:
-        # F-02: Drive the full pre-submit purchase sequence
+        # Phase A (INV-PAYMENT-01) — Block on the pricing watchdog BEFORE any
+        # card field is filled.  The Network.responseReceived listener is
+        # already armed; `_setup_network_total_listener` + `enable_network_monitor`
+        # above ensure that any pricing event fired by the browser (whether
+        # from a prior navigation or from the subsequent fill sequence's
+        # early navigation steps) is captured.  A timeout here raises
+        # SessionFlaggedError *before* run_preflight_and_fill gets a chance
+        # to type card data, matching Blueprint §5 + section5_payment.yaml.
+        try:
+            total = watchdog.wait_for_total(
+                worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
+            )
+        except SessionFlaggedError:
+            _logger.warning(
+                "[trace=%s] Pricing watchdog timeout BEFORE payment fill "
+                "for worker=%s; aborting before any card field is typed.",
+                _get_trace_id(), worker_id,
+            )
+            raise
+        _logger.info(
+            "[trace=%s] Preflight total received for worker=%s: %s",
+            _get_trace_id(), worker_id, total,
+        )
+        # Phase B — Only now fill + submit the payment.  F-02: Drive the full
+        # pre-submit purchase sequence
         # (preflight_geo → navigate → fill eGift form → add to cart → guest checkout
         #  → fill payment/billing).  This replaces the former fill-only call.
         _cdp_call_with_timeout(
@@ -1190,9 +1221,42 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 "FSM transition skipped; fallback will attempt at state read.",
                 _get_trace_id(), worker_id, exc_info=True,
             )
+        # Phase C — Optional post-submit confirmation total.  Re-enable the
+        # network monitor so the listener can notify this new session; a
+        # timeout here does NOT raise (first-notify-wins semantics apply
+        # after submit, and the pre-fill preflight total is already the
+        # authoritative INV-PAYMENT-01 value).  On failure we keep the
+        # preflight total captured in Phase A, log the condition, and mark
+        # the task as unconfirmed so the existing submitted-but-unconfirmed
+        # TTL recovery path (INV-ORCHESTRATOR-04) still triggers.
+        with _network_listener_lock:
+            _notified_workers_this_cycle.discard(worker_id)
+        watchdog.enable_network_monitor(worker_id)
         # Fallback: read total from DOM to unblock watchdog
         _notify_total_from_dom(driver_obj, worker_id)
-        total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
+        try:
+            post_total = watchdog.wait_for_total(
+                worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
+            )
+            total = post_total if post_total is not None else total
+        except SessionFlaggedError:
+            _phase_c_task_id = getattr(task, "task_id", None)
+            _logger.warning(
+                "[trace=%s] Post-submit confirmation total missing for "
+                "worker=%s, task_id=%s; proceeding with preflight total=%s "
+                "(marking unconfirmed — Phase C does not raise).",
+                _get_trace_id(), worker_id, _phase_c_task_id, total,
+            )
+            if _phase_c_task_id is not None:
+                try:
+                    _get_idempotency_store().mark_unconfirmed(
+                        _phase_c_task_id, ttl_seconds=_UNCONFIRMED_TTL_SECONDS,
+                    )
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.error(
+                        "Failed to mark task_id=%s as unconfirmed after Phase C timeout",
+                        _phase_c_task_id, exc_info=True,
+                    )
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
         try:

@@ -58,6 +58,17 @@ class CDPError(Exception):
     """
 
 
+class CDPClickError(CDPError):
+    """Raised when :meth:`bounding_box_click` cannot dispatch a CDP click.
+
+    In strict mode (the default for :class:`~modules.cdp.driver.GivexDriver`),
+    any failure path in ``bounding_box_click`` — rect fetch, zero-size rect,
+    missing persona RNG, or CDP dispatch failure — raises this exception
+    instead of silently falling back to a Selenium-native ``.click()``, which
+    would emit ``isTrusted=False`` mouse events and defeat anti-detect.
+    """
+
+
 class CDPCommandError(SessionFlaggedError):
     """Raised when a CDP command fails in a non-retryable manner.
 

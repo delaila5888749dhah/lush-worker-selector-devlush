@@ -840,41 +840,56 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
         cleanup_worker("post-sub-worker")
 
     def test_post_submission_timeout_logs_distinct_message(self):
-        """SessionFlaggedError after mark_submitted must log 'AFTER payment submission'."""
-        task = _make_task()
-        log_messages = []
+        """Phase 3A — Phase C watchdog timeout (post-submit) must log distinctly.
 
-        def capture_error(fmt, *args, **kwargs):
-            log_messages.append(fmt % args if args else fmt)
+        After Phase 3A Task 2, a post-submit watchdog timeout no longer
+        raises ``SessionFlaggedError`` — it is swallowed and the preflight
+        total stands.  Observability is preserved via a WARNING log that
+        mentions "Post-submit confirmation total missing", so operators can
+        still distinguish post-submit timeouts from pre-submit (Phase A)
+        timeouts which log "BEFORE payment submission" at ERROR level.
+        """
+        task = _make_task()
+        warning_messages = []
+
+        def capture_warning(fmt, *args, **kwargs):
+            warning_messages.append(fmt % args if args else fmt)
 
         with (
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp") as mock_cdp,
             patch("integration.orchestrator.watchdog") as mock_watchdog,
-            patch("integration.orchestrator.fsm"),
+            patch("integration.orchestrator.fsm") as mock_fsm,
             patch("integration.orchestrator._logger") as mock_logger,
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
+            mock_fsm.get_current_state_for_worker.return_value = None
+            # Phase A succeeds (preflight total), Phase C times out.
+            mock_watchdog.wait_for_total.side_effect = [
+                50.0,
+                SessionFlaggedError("post-submit timeout"),
+            ]
 
             # Simulate mark_submitted being called (via idempotency store mock)
             store_mock = MagicMock()
             store_mock.is_duplicate.return_value = False
             store_mock.mark_submitted.return_value = None
             with patch("integration.orchestrator._get_idempotency_store", return_value=store_mock):
-                mock_logger.error.side_effect = capture_error
-                with self.assertRaises(SessionFlaggedError):
-                    run_payment_step(task, worker_id="post-sub-worker")
+                mock_logger.warning.side_effect = capture_warning
+                # Phase C timeout is swallowed — run_payment_step returns normally.
+                run_payment_step(task, worker_id="post-sub-worker")
 
-        post_sub_msgs = [m for m in log_messages if "AFTER payment submission" in m]
+        post_sub_msgs = [m for m in warning_messages if "Post-submit" in m]
         self.assertTrue(
             len(post_sub_msgs) >= 1,
-            f"Expected 'AFTER payment submission' log, got: {log_messages}",
+            f"Expected 'Post-submit' Phase-C warning, got: {warning_messages}",
         )
-        # Verify mark_submitted was actually called before the timeout fired,
+        # Verify mark_submitted was actually called before the Phase-C timeout fired,
         # confirming the submitted checkpoint was reached (idempotency protection is active).
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
+        # Phase C also marks the task unconfirmed so the TTL recovery path fires.
+        store_mock.mark_unconfirmed.assert_called_once()
 
     def test_pre_submission_timeout_logs_before_submission_message(self):
         """SessionFlaggedError from CDP preflight/fill (before mark_submitted) must log 'BEFORE'."""

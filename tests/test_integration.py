@@ -235,7 +235,14 @@ class RunPaymentStepTests(unittest.TestCase):
         self.assertEqual(total, 49.99)
         self.assertEqual(state.name, "success")
 
-    def test_dom_total_fallback_notifies_watchdog_before_wait(self):
+    def test_dom_total_fallback_notifies_watchdog_before_post_submit_wait(self):
+        """Phase C (post-submit): DOM fallback notify must precede the post-submit wait_for_total.
+
+        Phase 3A Task 2 re-ordered run_payment_step into three phases:
+        Phase A blocks on wait_for_total BEFORE card fill (INV-PAYMENT-01);
+        Phase C optionally reads DOM + waits AFTER submit.  This test
+        verifies the in-Phase-C ordering of notify_total → wait_for_total.
+        """
         with (
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp") as mock_cdp,
@@ -250,27 +257,26 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_fsm.get_current_state_for_worker.return_value = State("success")
             state, total = run_payment_step(_make_task())
         driver.execute_cdp_cmd.assert_called_once_with("Network.enable", {})
+        # notify_total is emitted exactly once per cycle (first-notify-wins
+        # guard discarded between Phase A and Phase C).
         mock_watchdog.notify_total.assert_called_once_with("default", 49.99)
-        notify_idx = next(
-            (
-                i for i, item in enumerate(mock_watchdog.mock_calls)
-                if item[0] == "notify_total"
-            ),
-            None,
-        )
-        wait_idx = next(
-            (
-                i for i, item in enumerate(mock_watchdog.mock_calls)
-                if item[0] == "wait_for_total"
-            ),
-            None,
-        )
-        self.assertIsNotNone(notify_idx, "notify_total call should be present")
-        self.assertIsNotNone(wait_idx, "wait_for_total call should be present")
+        # Two wait_for_total calls happen: Phase A (pre-fill) and Phase C
+        # (post-submit).  The Phase-C notify_total must precede the Phase-C
+        # wait_for_total.
+        notify_idxs = [
+            i for i, item in enumerate(mock_watchdog.mock_calls)
+            if item[0] == "notify_total"
+        ]
+        wait_idxs = [
+            i for i, item in enumerate(mock_watchdog.mock_calls)
+            if item[0] == "wait_for_total"
+        ]
+        self.assertEqual(len(notify_idxs), 1, "notify_total should fire once in Phase C")
+        self.assertGreaterEqual(len(wait_idxs), 2, "wait_for_total should fire in Phase A + Phase C")
+        # The single notify_total must precede the LAST wait_for_total (Phase C).
         self.assertLess(
-            notify_idx,
-            wait_idx,
-            "notify_total must be called before wait_for_total",
+            notify_idxs[0], wait_idxs[-1],
+            "Phase-C notify_total must come before Phase-C wait_for_total",
         )
         self.assertEqual(state.name, "success")
         self.assertEqual(total, 49.99)
@@ -478,10 +484,17 @@ class WorkerIdPropagationTests(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 10.0
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(_make_task(), worker_id="worker-42")
-        mock_watchdog.enable_network_monitor.assert_called_once_with("worker-42")
-        mock_watchdog.wait_for_total.assert_called_once_with(
-            "worker-42", timeout=10.0,
-        )
+        # Phase 3A Task 2 — enable_network_monitor is now called in Phase A
+        # (pre-fill) AND Phase C (optional post-submit wait); both must carry
+        # the same worker_id.  wait_for_total is also called twice for the
+        # same reason.
+        for enable_call in mock_watchdog.enable_network_monitor.call_args_list:
+            self.assertEqual(enable_call.args, ("worker-42",))
+        self.assertGreaterEqual(mock_watchdog.enable_network_monitor.call_count, 1)
+        for wait_call in mock_watchdog.wait_for_total.call_args_list:
+            self.assertEqual(wait_call.args[0], "worker-42")
+            self.assertEqual(wait_call.kwargs.get("timeout"), 10.0)
+        self.assertGreaterEqual(mock_watchdog.wait_for_total.call_count, 1)
 
 
 class WatchdogCleanupTests(unittest.TestCase):

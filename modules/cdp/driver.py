@@ -16,6 +16,7 @@ import secrets
 import socket
 import threading
 import time
+import warnings
 import datetime
 import enum
 import importlib
@@ -53,6 +54,7 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
     _type_value = None  # type: ignore[assignment,misc]
 
 from modules.common.exceptions import (
+    CDPClickError,
     CDPCommandError,
     CDPError,
     PageStateError,
@@ -1314,7 +1316,18 @@ class GivexDriver:
         raise PageStateError(f"url_wait:{url_fragment}")
 
     def _cdp_type_field(self, selector: str, value: str) -> None:
-        """Clear *selector* element and type *value* into it.
+        """DEPRECATED: use :meth:`_realistic_type_field` (``field_kind="text"``) instead.
+
+        Retained only for backward-compat with tests that patch it.  The
+        Selenium-native ``send_keys`` fallback emits ``isTrusted=False`` key
+        events that defeat anti-detect and MUST NOT be used on the production
+        hot-path.
+
+        When the ``ENFORCE_CDP_TYPING_STRICT`` environment variable is set to
+        ``"1"`` (production default), calling this helper raises
+        :class:`RuntimeError` rather than silently dispatching Selenium keys.
+        In non-strict mode a :class:`DeprecationWarning` is emitted instead
+        so test suites can still patch this entry point.
 
         Args:
             selector: CSS selector for the input/textarea element.
@@ -1322,7 +1335,19 @@ class GivexDriver:
 
         Raises:
             SelectorTimeoutError: if no matching element is found.
+            RuntimeError: when ``ENFORCE_CDP_TYPING_STRICT=1``.
         """
+        if os.environ.get("ENFORCE_CDP_TYPING_STRICT", "0") == "1":
+            raise RuntimeError(
+                "_cdp_type_field called in strict mode; all text fields must "
+                "route through _realistic_type_field (CDP Input.dispatchKeyEvent)."
+            )
+        warnings.warn(
+            "_cdp_type_field is deprecated; use _realistic_type_field(field_kind='text') "
+            "instead.  Selenium send_keys emits isTrusted=False and defeats anti-detect.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         elements = self.find_elements(selector)
         if not elements:
             raise SelectorTimeoutError(selector, 0)
@@ -1454,19 +1479,22 @@ class GivexDriver:
         time.sleep(click_delay * len(points))
 
     def bounding_box_click(self, selector: str) -> None:
-        """Click using randomized bounding-box coordinates, with safe fallbacks.
+        """Click using randomized bounding-box coordinates.
 
-        Strict mode (the default) suppresses the plain ``.click()`` fallback
-        **only** when CDP dispatch itself fails — not when the element rect or
-        the randomness helper is unavailable.  In those cases a WARNING is
-        emitted so the condition is never silent, and a plain ``.click()``
-        executes as a safe fallback regardless of strict mode.
+        In strict mode (``self._strict=True``, the default), every failure
+        path raises :class:`~modules.common.exceptions.CDPClickError` so a
+        plain Selenium ``.click()`` (which emits ``isTrusted=False`` events
+        and defeats anti-detect) is never invoked.  Non-strict mode retains
+        the legacy ``.click()`` fallback for test/debug contexts.
 
         Args:
             selector: CSS selector for the element to click.
 
         Raises:
             SelectorTimeoutError: if no matching element is found.
+            CDPClickError: in strict mode, when rect fetch fails, the rect
+                is falsy/zero-size, no persona RNG is available, or the
+                CDP dispatch itself fails.
         """
         elements = self.find_elements(selector)
         if not elements:
@@ -1474,13 +1502,18 @@ class GivexDriver:
 
         self._ghost_move_to(selector)
 
+        # Branch 1: rect fetch
         try:
             rect = self._driver.execute_script(
                 "var r=arguments[0].getBoundingClientRect();"
                 "return {left:r.left,top:r.top,width:r.width,height:r.height};",
                 elements[0],
             )
-        except Exception:
+        except Exception as exc:  # pylint: disable=broad-except
+            if self._strict:
+                raise CDPClickError(
+                    f"getBoundingClientRect failed for {selector!r}: {exc}"
+                ) from exc
             _log.warning(
                 "bounding_box_click: getBoundingClientRect raised for selector %r;"
                 " falling back to plain click",
@@ -1490,16 +1523,26 @@ class GivexDriver:
             elements[0].click()
             return
 
-        if not rect:
+        # Branch 2: rect valid
+        if not rect or not rect.get("width") or not rect.get("height"):
+            if self._strict:
+                raise CDPClickError(
+                    f"Element {selector!r} has falsy/zero-size rect: {rect!r}"
+                )
             _log.warning(
-                "bounding_box_click: rect is falsy for selector %r;"
+                "bounding_box_click: rect is falsy/zero-size for selector %r;"
                 " falling back to plain click",
                 selector,
             )
             elements[0].click()
             return
 
+        # Branch 3: persona RNG
         if self._rnd is None:
+            if self._strict:
+                raise CDPClickError(
+                    "bounding_box_click requires persona RNG in strict mode"
+                )
             _log.warning(
                 "bounding_box_click: rnd unavailable for selector %r;"
                 " falling back to plain click",
@@ -1527,13 +1570,16 @@ class GivexDriver:
         center_y = rect["top"] + rect["height"] / 2
         abs_x = max(rect["left"], min(center_x + offset_x, rect["left"] + rect["width"]))
         abs_y = max(rect["top"], min(center_y + offset_y, rect["top"] + rect["height"]))
+
+        # Branch 4: CDP dispatch
         try:
             _dispatch_cdp_click_sequence(self._driver, abs_x, abs_y)
             return
-        except Exception:  # pylint: disable=broad-except
+        except Exception as exc:  # pylint: disable=broad-except
             if self._strict:
-                _log.warning("bounding_box_click: CDP failed (strict mode)")
-                return
+                raise CDPClickError(
+                    f"CDP dispatch failed for {selector!r}: {exc}"
+                ) from exc
             _log.debug("bounding_box_click: CDP failed, .click() fallback", exc_info=True)
         elements[0].click()
 
@@ -1788,7 +1834,7 @@ class GivexDriver:
         found = self._wait_for_element(SEL_GUEST_EMAIL, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_GUEST_EMAIL, 10)
-        self._cdp_type_field(SEL_GUEST_EMAIL, guest_email)
+        self._realistic_type_field(SEL_GUEST_EMAIL, guest_email, field_kind="text")
         self.bounding_box_click(SEL_GUEST_CONTINUE)
         self._wait_for_url(URL_PAYMENT, timeout=15)
 
@@ -1805,14 +1851,16 @@ class GivexDriver:
         self._realistic_type_field(SEL_CARD_CVV, card_info.cvv, field_kind="cvv")
         if billing_profile is None:
             return
-        # Billing section
-        self._cdp_type_field(SEL_BILLING_ADDRESS, billing_profile.address)
+        # Billing section — all text fields route via CDP Input.dispatchKeyEvent
+        # (Phase 3A Task 1).  ZIP and phone use field_kind="amount" for
+        # numeric-safe typing with typo_cap=0.0.
+        self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
-        self._cdp_type_field(SEL_BILLING_CITY, billing_profile.city)
-        self._cdp_type_field(SEL_BILLING_ZIP, billing_profile.zip_code)
+        self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
+        self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
         if billing_profile.phone:
-            self._cdp_type_field(SEL_BILLING_PHONE, billing_profile.phone)
+            self._realistic_type_field(SEL_BILLING_PHONE, billing_profile.phone, field_kind="amount")
 
     def fill_card_fields(self, card_info) -> None:
         """Fill card fields only (no billing); used after VBV reload."""
@@ -1835,13 +1883,13 @@ class GivexDriver:
         .. deprecated::
             Use ``fill_payment_and_billing(card_info, billing_profile)`` instead.
         """
-        self._cdp_type_field(SEL_BILLING_ADDRESS, billing_profile.address)
+        self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
-        self._cdp_type_field(SEL_BILLING_CITY, billing_profile.city)
-        self._cdp_type_field(SEL_BILLING_ZIP, billing_profile.zip_code)
+        self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
+        self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
         if billing_profile.phone:
-            self._cdp_type_field(SEL_BILLING_PHONE, billing_profile.phone)
+            self._realistic_type_field(SEL_BILLING_PHONE, billing_profile.phone, field_kind="amount")
 
     def fill_billing_form(self, billing_profile) -> None:
         """Backward-compatibility alias for ``fill_billing``."""

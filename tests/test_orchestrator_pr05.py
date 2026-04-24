@@ -288,20 +288,28 @@ class ExceptionRoutingTests(unittest.TestCase):
         )
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
 
-    def test_watchdog_timeout_after_submit_logs_after_submission(self):
-        """SessionFlaggedError from watchdog must log 'AFTER payment submission'."""
-        task = _make_task()
-        log_messages = []
+    def test_phase_c_watchdog_timeout_swallowed_after_submission(self):
+        """Phase 3A Task 2 — Phase C (post-submit) timeout is swallowed.
 
-        def capture_error(fmt, *args, **kwargs):
-            log_messages.append(fmt % args if args else fmt)
+        After submit, the post-submit confirmation total is optional: a
+        Phase-C ``SessionFlaggedError`` no longer raises nor logs as an
+        error.  The authoritative Phase-A preflight total stands.  This
+        test replaces the previous "AFTER payment submission logs error"
+        behavior — which only applied to the legacy post-fill ordering
+        (pre-PH3A-01).
+        """
+        task = _make_task()
+        warning_messages = []
+
+        def capture_warning(fmt, *args, **kwargs):
+            warning_messages.append(fmt % args if args else fmt)
 
         store_mock = MagicMock()
         with (
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp") as mock_cdp,
             patch("integration.orchestrator.watchdog") as mock_watchdog,
-            patch("integration.orchestrator.fsm"),
+            patch("integration.orchestrator.fsm") as mock_fsm,
             patch("integration.orchestrator._logger") as mock_logger,
             patch("integration.orchestrator._get_idempotency_store", return_value=store_mock),
         ):
@@ -309,18 +317,26 @@ class ExceptionRoutingTests(unittest.TestCase):
             mock_cdp._get_driver.return_value = MagicMock()
             mock_cdp.run_preflight_and_fill.return_value = None
             mock_cdp.submit_purchase.return_value = None
-            mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
-            mock_logger.error.side_effect = capture_error
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
+            # Phase A succeeds; Phase C times out.
+            mock_watchdog.wait_for_total.side_effect = [
+                50.0,  # Phase A preflight total
+                SessionFlaggedError("post-submit timeout"),
+            ]
+            mock_logger.warning.side_effect = capture_warning
 
-            with self.assertRaises(SessionFlaggedError):
-                run_payment_step(task, worker_id="exc-worker")
+            # Must NOT raise — Phase C is optional.
+            state, total = run_payment_step(task, worker_id="exc-worker")
 
-        post_msgs = [m for m in log_messages if "AFTER payment submission" in m]
-        self.assertTrue(
-            len(post_msgs) >= 1,
-            f"Expected 'AFTER payment submission' log after watchdog timeout, got: {log_messages}",
-        )
+        # mark_submitted was reached because Phase A passed.
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
+        # Preflight total stands as the authoritative value.
+        self.assertEqual(total, 50.0)
+        # A Phase-C warning is emitted about the missing post-submit total.
+        self.assertTrue(
+            any("Post-submit" in m for m in warning_messages),
+            f"Expected Phase-C post-submit warning, got: {warning_messages}",
+        )
 
 
 # ── U-07: Idempotency crash simulation ────────────────────────────────────────

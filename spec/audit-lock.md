@@ -267,6 +267,9 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | BUG-001 | `modules/delay/wrapper.py` | Missing `try/finally` — state stuck on exception |
 | BUG-002 | `modules/watchdog/main.py` | Singleton race + cross-thread blindspot → replaced with `worker_id` registry |
 | BUG-003 | `integration/orchestrator.py` | `cdp.clear_card_fields()` unguarded in `handle_outcome()` |
+| PH3A-01 | `integration/orchestrator.py` | Phase 3A Task 2 — `run_payment_step` now blocks on `watchdog.wait_for_total(timeout=10)` in **Phase A** (pre-fill), raising `SessionFlaggedError` before any card field is typed.  A second best-effort wait in **Phase C** (post-submit) no longer raises — it only refines the total. Matches INV-PAYMENT-01 and `spec/contracts/section5_payment.yaml`. |
+| PH3A-02 | `modules/cdp/driver.py` | Phase 3A Task 1 — `select_guest_checkout`, `fill_payment_and_billing`, and legacy `fill_billing` route all §5 text fields through `_realistic_type_field` (CDP `Input.dispatchKeyEvent`).  `_cdp_type_field` retained as deprecation shim; raises `RuntimeError` when `ENFORCE_CDP_TYPING_STRICT=1`, emits `DeprecationWarning` otherwise. |
+| PH3A-03 | `modules/cdp/driver.py` | Phase 3A Task 3 — `bounding_box_click` now raises `CDPClickError` (new, in `modules/common/exceptions.py`) on **all four** failure branches (rect fetch, zero-size rect, missing persona RNG, CDP dispatch failure) when `self._strict=True` (default).  Non-strict mode retains the `.click()` fallback. |
 
 ---
 

@@ -24,11 +24,16 @@ non-existent worker_id is a no-op.
 
 ### Network Response Timeout (Blueprint §5)
 
-- After filling card data, the orchestrator calls `watchdog.wait_for_total(worker_id, timeout=30)`.
-- If no `Network.responseReceived` event arrives within 30 seconds,
-  `SessionFlaggedError` is raised.
-- The CDP layer signals the watchdog via `watchdog.notify_total(worker_id, value)`
-  from the `Network.responseReceived` callback (see INV-WATCHDOG-02).
+- **Before** filling card data (INV-PAYMENT-01), the orchestrator calls
+  ``watchdog.wait_for_total(worker_id, timeout=10)`` to block until the
+  pricing endpoint has been observed.
+- If no ``Network.responseReceived`` event arrives within 10 seconds,
+  ``SessionFlaggedError`` is raised and the cycle aborts *before* any
+  card field is typed.
+- The CDP layer signals the watchdog via ``watchdog.notify_total(worker_id, value)``
+  from the ``Network.responseReceived`` callback (see INV-WATCHDOG-02).
+- A second, best-effort ``wait_for_total`` after submit confirms the
+  final total; a timeout on this post-submit wait does NOT raise.
 
 ### Page Load Timeout
 
@@ -90,7 +95,7 @@ _cdp_call_with_timeout(fn, *args, timeout=_CDP_CALL_TIMEOUT)
 2. orchestrator calls watchdog.enable_network_monitor(worker_id)
 3. CDP fills card/billing data → triggers network request
 4. CDP Network.responseReceived callback → watchdog.notify_total(worker_id, value)
-5. orchestrator calls watchdog.wait_for_total(worker_id, timeout=30)
+5. orchestrator calls watchdog.wait_for_total(worker_id, timeout=10)
 6. orchestrator calls cdp.unregister_driver(worker_id) on cleanup
 ```
 
