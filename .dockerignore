@@ -1,0 +1,42 @@
+# Dockerignore — keep the runtime image small (issue #226).
+.git
+.github
+.gitignore
+.editorconfig
+.env
+.env.local
+.env.example
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pem
+*.key
+
+# Dev / CI only
+tests
+docs
+spec
+tasks
+scripts
+ci
+Makefile
+pytest.ini
+.pre-commit-config.yaml
+.secrets.baseline
+
+# Caches
+.ruff_cache
+.mypy_cache
+.pytest_cache
+htmlcov
+.coverage
+coverage.xml
+
+# Docs / markdown (except top-level README which is tiny; still skip to save)
+*.md
+
+# Data artifacts
+data/GeoLite2-City.mmdb
+.idempotency_store.json
+billing_pool/*.txt

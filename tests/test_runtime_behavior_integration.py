@@ -10,11 +10,27 @@ class _RuntimeReset(unittest.TestCase):
     """Ensure clean state for every test."""
 
     def setUp(self):
+        self._drain_workers()
         runtime.reset()
         runtime.set_behavior_delay_enabled(True)
 
     def tearDown(self):
+        # Explicitly stop every active worker *before* reset() so that no
+        # lingering worker threads survive into the next test.  `reset()` only
+        # clears the _workers registry; surviving threads would continue the
+        # loop with a stale `worker_id` that can collide with the next test's
+        # re-numbered `worker-1` (counter is reset) and race on its state
+        # transitions (e.g. IDLE/IN_CYCLE flips during CRITICAL_SECTION).
+        self._drain_workers()
         runtime.reset()
+
+    @staticmethod
+    def _drain_workers():
+        for wid in list(runtime.get_active_workers()):
+            try:
+                runtime.stop_worker(wid, timeout=10)
+            except Exception:  # pylint: disable=broad-except
+                pass
 
 
 class TestWrapperApplied(_RuntimeReset):
