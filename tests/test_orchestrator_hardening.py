@@ -394,8 +394,11 @@ class NetworkListenerCallbackTests(unittest.TestCase):
             captured_callback[0]({"response": {}})
         mock_wd.notify_total.assert_not_called()
 
-    def test_cws40_pattern_matches(self):
-        """'cws4.0' substring pattern must trigger the callback."""
+    def test_cws40_pattern_no_longer_matches(self):
+        """P3 optional scope: the broad 'cws4.0' token was dropped from
+        ``_CDP_NETWORK_URL_PATTERNS`` because it false-matched unrelated
+        endpoints.  A bare ``cws4.0`` URL must no longer trigger the callback.
+        """
         driver = MagicMock()
         captured_callback = [None]
 
@@ -408,7 +411,7 @@ class NetworkListenerCallbackTests(unittest.TestCase):
         with patch("integration.orchestrator.watchdog") as mock_wd:
             _setup_network_total_listener(driver, "nl-worker")
             captured_callback[0]({"response": {"url": "https://example.com/cws4.0/submit"}})
-        mock_wd.notify_total.assert_called_once()
+        mock_wd.notify_total.assert_not_called()
 
     def test_add_listener_failure_does_not_raise(self):
         """If add_cdp_listener raises, the error must be caught and logged."""
@@ -840,7 +843,14 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
         cleanup_worker("post-sub-worker")
 
     def test_post_submission_timeout_logs_distinct_message(self):
-        """SessionFlaggedError after mark_submitted must log 'AFTER payment submission'."""
+        """SessionFlaggedError after mark_submitted must log 'AFTER payment submission'.
+
+        After P3-F4-ORDER, ``wait_for_total`` runs BEFORE ``mark_submitted``, so
+        a post-submission flag now arises from ``submit_purchase`` (or any other
+        CDP failure in the post-mark_submitted path).  This preserves the
+        INV-ORCHESTRATOR-04 distinction: errors after the idempotency checkpoint
+        must be labelled distinctly so operators do not retry blindly.
+        """
         task = _make_task()
         log_messages = []
 
@@ -856,7 +866,9 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
+            mock_watchdog.wait_for_total.return_value = 50.0
+            # submit_purchase raises AFTER mark_submitted has been called.
+            mock_cdp.submit_purchase.side_effect = SessionFlaggedError("submit flagged")
 
             # Simulate mark_submitted being called (via idempotency store mock)
             store_mock = MagicMock()
@@ -872,7 +884,7 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
             len(post_sub_msgs) >= 1,
             f"Expected 'AFTER payment submission' log, got: {log_messages}",
         )
-        # Verify mark_submitted was actually called before the timeout fired,
+        # Verify mark_submitted was actually called before the submit failure,
         # confirming the submitted checkpoint was reached (idempotency protection is active).
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
 
@@ -894,7 +906,7 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
             # Raise timeout from preflight/fill (before mark_submitted is reached)
-            mock_cdp.run_preflight_and_fill.side_effect = SessionFlaggedError("fill timeout")
+            mock_cdp.run_preflight_up_to_guest_checkout.side_effect = SessionFlaggedError("fill timeout")
 
             store_mock = MagicMock()
             store_mock.is_duplicate.return_value = False

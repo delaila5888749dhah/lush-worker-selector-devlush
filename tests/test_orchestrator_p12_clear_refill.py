@@ -297,7 +297,7 @@ class TestRunCycleClearRefillWiring(unittest.TestCase):
             mock_cdp._get_driver.return_value = mock_driver
             mock_cdp.detect_page_state.return_value = "success"
             mock_cdp.detect_popup_thank_you.return_value = detect_thank_you_return
-            mock_cdp.run_preflight_and_fill.return_value = None
+            mock_cdp.run_preflight_up_to_guest_checkout.return_value = None
             mock_cdp.submit_purchase.return_value = None
 
             # Watchdog

@@ -148,7 +148,7 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
             )
 
     def test_mark_submitted_called_between_prefill_and_submit(self):
-        """Idempotency checkpoint must be written AFTER prefill and BEFORE submit."""
+        """Idempotency checkpoint must be written AFTER fill and BEFORE submit (P3-F4-ORDER)."""
         stub = _StubGivexDriver(self.worker_id, final_state="success")
         call_order = []
         store_mock = MagicMock()
@@ -176,15 +176,18 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
         ), patch(
             "integration.orchestrator._get_idempotency_store", return_value=store_mock
         ), patch(
-            "integration.orchestrator.cdp.run_preflight_and_fill",
+            "integration.orchestrator.cdp.run_preflight_up_to_guest_checkout",
             side_effect=lambda *_a, **_kw: (call_order.append("prefill"), None)[-1],
+        ), patch(
+            "integration.orchestrator.cdp.fill_payment_and_billing",
+            side_effect=lambda *_a, **_kw: (call_order.append("fill_payment_and_billing"), None)[-1],
         ):
             run_payment_step(task, worker_id=self.worker_id)
 
         self.assertEqual(
             call_order,
-            ["prefill", "mark_submitted", "submit"],
-            f"Expected prefill → mark_submitted → submit, got: {call_order}",
+            ["prefill", "fill_payment_and_billing", "mark_submitted", "submit"],
+            f"Expected prefill → fill → mark_submitted → submit, got: {call_order}",
         )
 
     def test_submit_receives_correct_worker_id(self):
@@ -575,12 +578,17 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
                 run_payment_step(_make_task(task_id="l3-err-preflight"), worker_id=self.worker_id)
 
     def test_error_after_submit_logs_after_payment_submission(self):
-        """Timeout after mark_submitted must log 'AFTER payment submission'."""
-        # Simulate watchdog timeout occurring AFTER mark_submitted.
+        """Error after mark_submitted must log 'AFTER payment submission'.
+
+        After P3-F4-ORDER, wait_for_total runs BEFORE mark_submitted, so the
+        post-submission path is now exercised by ``submit_purchase`` itself
+        raising (or any CDP failure in the post-mark_submitted path).
+        """
+        # Simulate submit_purchase raising AFTER mark_submitted.
         stub = _StubGivexDriver(
             self.worker_id,
             final_state="success",
-            dom_total=None,  # DOM returns None → watchdog not notified
+            error_at="submit_purchase",
         )
         _cdp_main.register_driver(self.worker_id, stub)
         store_mock = MagicMock()
@@ -592,8 +600,6 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
 
         with patch(
             "integration.orchestrator.billing", make_mock_billing()
-        ), patch(
-            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
         ), patch(
             "integration.orchestrator._logger"
         ) as mock_log, patch(

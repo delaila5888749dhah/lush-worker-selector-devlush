@@ -467,7 +467,7 @@ class TestCycleContextBillingLock(unittest.TestCase):
              patch("integration.orchestrator.monitor"):
             mock_billing.select_profile.side_effect = mock_select_profile
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None
+            mock_cdp.run_preflight_up_to_guest_checkout.return_value = None
             mock_cdp.submit_purchase.return_value = None
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = \
@@ -509,7 +509,7 @@ class TestCycleContextBillingLock(unittest.TestCase):
              patch("integration.orchestrator.monitor"):
             mock_billing.select_profile.return_value = fixed_profile
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = capture_preflight_and_fill
+            mock_cdp.run_preflight_up_to_guest_checkout.side_effect = capture_preflight_and_fill
             mock_cdp.submit_purchase.return_value = None
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = \

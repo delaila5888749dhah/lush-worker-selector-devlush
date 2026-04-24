@@ -383,3 +383,51 @@ test_max_worker_count_cap_consistent_between_configure_and_startup` enforces
 this at CI level. Stagger MUST NOT be re-coupled to `_behavior_delay_enabled`
 in `_apply_scale()`; regression test
 `test_stagger_enabled_independent_of_behavior_delay` guards the decoupling.
+
+---
+
+### PHASE-3-P3-F4-ORDER — wait_for_total BEFORE card/billing fill (2026-04-24)
+```
+integration/orchestrator.py — run_payment_step order revised to honour
+  INV-PAYMENT-01 / P3-F4-ORDER.  Before Phase 3, wait_for_total ran AFTER
+  submit_purchase, so anti-fraud flags detected after page-load produced
+  card-typed-then-flagged sessions.  After Phase 3:
+    1. setup network listener + enable_network_monitor
+    2. cdp.run_preflight_up_to_guest_checkout  (NO card/billing fields)
+    3. watchdog.wait_for_total(worker_id, 10)  ← SessionFlaggedError fires
+       BEFORE any Input.dispatchKeyEvent on SEL_CARD_NUMBER/CVV/billing
+    4. cdp.fill_payment_and_billing
+    5. mark_submitted
+    6. cdp.submit_purchase (irreversible)
+
+modules/cdp/main.py — new run_preflight_up_to_guest_checkout(task, profile,
+  worker_id).  The existing run_preflight_and_fill is retained (backward
+  compatible, still used by run_full_cycle / tests).
+
+integration/orchestrator.py — _CDP_NETWORK_URL_PATTERNS narrowed: the broad
+  'cws4.0' substring token was dropped because it false-matched unrelated
+  endpoints.
+
+modules/cdp/driver.py — guest-email + billing address/city/zip/phone now
+  route through _realistic_type_field (CDP Input.dispatchKeyEvent) so every
+  keystroke emits isTrusted=true events (P3-C3/G3).
+
+modules/cdp/driver.py — bounding_box_click now honours self._strict on ALL
+  FOUR fallback branches (rect raised, rect falsy, rnd missing, CDP dispatch
+  fail).  In strict mode each branch raises ClickDispatchError instead of
+  silently falling back to Selenium .click() (which would emit an
+  isTrusted=false mouse event — P3-D3).
+```
+**Rule:** The payment step MUST observe the checkout total before any card
+number / CVV / billing field is typed — this is INV-PAYMENT-01 and the
+primary anti-detection guarantee.  ``_WATCHDOG_TIMEOUT_PAYMENT`` remains
+10 s (Blueprint §5); ``PAYMENT_WATCHDOG_TIMEOUT_S`` env override still
+applies.  The strict ``bounding_box_click`` contract MUST raise
+``ClickDispatchError`` (never silently fall through) so every click on a
+high-value element (guest-continue, add-to-cart, complete-purchase) is
+either a real CDP mouse event or a flagged session.  Regression tests:
+``tests/test_total_watchdog_payment_10s.py``,
+``tests/test_orchestrator_pr05.py::FullSequenceCallOrderTests``,
+``tests/test_bounding_box_strict_fallback.py``,
+``tests/test_billing_fields_cdp_dispatch.py``,
+``tests/test_no_send_keys_in_modules_cdp.py``.

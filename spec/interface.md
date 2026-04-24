@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 7.2
+spec-version: 8.0
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,15 @@ spec-version: 7.2
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v8.0 Breaking Changes (Phase 3):**
+> - Added `ClickDispatchError` exception type to `modules.common.exceptions`
+>   (raised by `GivexDriver.bounding_box_click` in strict mode when a
+>   real-coordinate CDP click cannot be dispatched — P3-D3).
+> - `run_payment_step` now waits for the checkout total BEFORE filling any
+>   card/billing field (INV-PAYMENT-01 / P3-F4-ORDER).  Added
+>   `cdp.run_preflight_up_to_guest_checkout` which runs preflight through
+>   guest-checkout without touching card/billing fields.
 >
 > **v7.2 Additive Changes (Blueprint §2.1):**
 > - Declared `BitBrowserPoolClient` in modules/cdp/fingerprint.py for pool-mode

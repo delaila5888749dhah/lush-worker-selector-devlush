@@ -43,8 +43,8 @@ class TestT09CdpTimeoutBeforeSubmit(E2EBase):
             # Simulate a CDP timeout during the fill phase.  The orchestrator's
             # _cdp_call_with_timeout converts the underlying TimeoutError into
             # a SessionFlaggedError before propagating out of run_payment_step.
-            cdp_mod.run_preflight_and_fill.side_effect = TimeoutError(
-                "CDP call timed out during fill",
+            cdp_mod.run_preflight_up_to_guest_checkout.side_effect = TimeoutError(
+                "CDP call timed out during preflight",
             )
             wd.wait_for_total.return_value = None
 

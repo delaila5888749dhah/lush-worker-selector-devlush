@@ -1,7 +1,10 @@
 # Interface Contract — Core (FSM)
 
-spec-version: 7.0
+spec-version: 8.0
 
+> **v8.0 Breaking Changes:**
+> - Added ClickDispatchError exception type to modules.common.exceptions (raised by GivexDriver.bounding_box_click in strict mode when a real-coordinate CDP click cannot be dispatched — P3-D3)
+>
 > **v7.0 Breaking Changes:**
 > - Added CDPError exception type to modules.common.exceptions (raised by GivexDriver.clear_card_fields_cdp on CDP failure — P1-4)
 >

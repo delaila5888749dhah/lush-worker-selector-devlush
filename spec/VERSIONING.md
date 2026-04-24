@@ -44,16 +44,28 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 7.0 | 2026-04-21 |
-| `spec/integration/interface.md` | 7.1 | 2026-04-23 |
-| `spec/interface.md` (aggregated) | 7.2 | 2026-04-24 |
+| `spec/core/interface.md` | 8.0 | 2026-04-24 |
+| `spec/integration/interface.md` | 8.0 | 2026-04-24 |
+| `spec/interface.md` (aggregated) | 8.0 | 2026-04-24 |
 | `spec/fsm.md` | 1.1 | 2026-04-23 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
 | `spec/deployment.md` | 1.0 | 2026-04-04 |
-| `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
+| `spec/cdp-timeout-contract.md` | 1.2 | 2026-04-24 |
 
 ## Changelog
+
+### v8.0 (2026-04-24) — BREAKING (Phase 3)
+- Added `ClickDispatchError` exception type to `modules.common.exceptions`
+  (inherits `SessionFlaggedError`) — raised by
+  `GivexDriver.bounding_box_click` in strict mode when a real-coordinate CDP
+  click cannot be dispatched (P3-D3).  Attributes: `selector`, `reason`.
+- Added `cdp.run_preflight_up_to_guest_checkout(task, profile, worker_id)`
+  to split the preflight/guest-checkout sequence from card/billing fill so
+  `run_payment_step` can invoke `watchdog.wait_for_total` BEFORE any card
+  field is typed (P3-F4-ORDER / INV-PAYMENT-01).
+- Legacy `cdp.run_preflight_and_fill` retained for backward compatibility
+  (still called by `run_full_cycle` and direct callers).
 
 ### v7.2 (2026-04-24) — ADDITIVE (Blueprint §2.1)
 - `spec/interface.md`: Declared `BitBrowserPoolClient` (pool-mode BitBrowser

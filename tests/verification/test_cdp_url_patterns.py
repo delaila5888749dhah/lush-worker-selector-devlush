@@ -33,10 +33,14 @@ class TestCDPNetworkUrlPatterns(unittest.TestCase):
         self.assertIn("/api/tax", self._patterns(),
                       "'/api/tax' must be in _CDP_NETWORK_URL_PATTERNS")
 
-    def test_cws40_coverage(self):
-        """'cws4.0' is present and covers the Givex base domain path."""
-        self.assertIn("cws4.0", self._patterns(),
-                      "'cws4.0' must be in _CDP_NETWORK_URL_PATTERNS")
+    def test_cws40_no_longer_present(self):
+        """P3 optional scope: 'cws4.0' was intentionally dropped from
+        ``_CDP_NETWORK_URL_PATTERNS`` because the broad token false-matched
+        unrelated endpoints and masked missing total responses.
+        """
+        self.assertNotIn("cws4.0", self._patterns(),
+                         "'cws4.0' must NOT be in _CDP_NETWORK_URL_PATTERNS "
+                         "(dropped in Phase 3 — see P3 optional scope).")
 
     def test_api_checkout_coverage(self):
         """'/api/checkout' is present as redundant coverage for checkout endpoints."""
@@ -45,7 +49,7 @@ class TestCDPNetworkUrlPatterns(unittest.TestCase):
 
     def test_exact_membership(self):
         """Full lock-in: assert exact set to catch any silent additions or removals."""
-        expected = {"/checkout/total", "/api/tax", "/api/checkout", "cws4.0"}
+        expected = {"/checkout/total", "/api/tax", "/api/checkout"}
         self.assertEqual(set(self._patterns()), expected,
                          "_CDP_NETWORK_URL_PATTERNS membership changed — update "
                          "addendum-cdp-url-patterns.md and this test if intentional")

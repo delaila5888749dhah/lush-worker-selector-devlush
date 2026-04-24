@@ -97,7 +97,7 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = lambda *a, **kw: call_order.append("prefill")
+            mock_cdp.run_preflight_up_to_guest_checkout.side_effect = lambda *a, **kw: call_order.append("prefill")
             mock_cdp.submit_purchase.side_effect = lambda *a, **kw: call_order.append("submit")
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = State("success")
@@ -113,7 +113,7 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         )
 
     def test_mark_submitted_called_between_prefill_and_submit(self):
-        """mark_submitted must be called AFTER run_preflight_and_fill and BEFORE submit_purchase."""
+        """New order (P3-F4-ORDER): prefill → wait_for_total → fill_payment_and_billing → mark_submitted → submit."""
         task = _make_task()
         call_order = []
 
@@ -122,8 +122,15 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         def record_prefill(*a, **kw):
             call_order.append("prefill")
 
+        def record_fill(*a, **kw):
+            call_order.append("fill_payment_and_billing")
+
         def record_submit(*a, **kw):
             call_order.append("submit")
+
+        def record_wait(*a, **kw):
+            call_order.append("wait_for_total")
+            return 50.0
 
         store_mock.mark_submitted.side_effect = lambda tid: call_order.append("mark_submitted")
 
@@ -136,20 +143,22 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = record_prefill
+            mock_cdp.run_preflight_up_to_guest_checkout.side_effect = record_prefill
+            mock_cdp.fill_payment_and_billing.side_effect = record_fill
             mock_cdp.submit_purchase.side_effect = record_submit
-            mock_watchdog.wait_for_total.return_value = 50.0
+            mock_watchdog.wait_for_total.side_effect = record_wait
             mock_fsm.get_current_state_for_worker.return_value = State("success")
 
             run_payment_step(task, worker_id="seq-worker")
 
         self.assertEqual(
-            call_order, ["prefill", "mark_submitted", "submit"],
-            f"Expected prefill → mark_submitted → submit, got: {call_order}",
+            call_order,
+            ["prefill", "wait_for_total", "fill_payment_and_billing", "mark_submitted", "submit"],
+            f"Expected prefill → wait_for_total → fill → mark_submitted → submit, got: {call_order}",
         )
 
-    def test_fill_payment_and_billing_not_called_directly(self):
-        """Orchestrator must not call cdp.fill_payment_and_billing directly (F-02 refactor)."""
+    def test_fill_payment_and_billing_called_after_wait_for_total(self):
+        """Orchestrator must call cdp.fill_payment_and_billing AFTER wait_for_total (P3-F4-ORDER)."""
         task = _make_task()
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -164,7 +173,7 @@ class FullSequenceCallOrderTests(unittest.TestCase):
 
             run_payment_step(task, worker_id="seq-worker")
 
-        mock_cdp.fill_payment_and_billing.assert_not_called()
+        mock_cdp.fill_payment_and_billing.assert_called_once()
 
     def test_run_preflight_and_fill_receives_task_and_profile(self):
         """cdp.run_preflight_and_fill must receive the task and profile arguments."""
@@ -183,7 +192,7 @@ class FullSequenceCallOrderTests(unittest.TestCase):
 
             run_payment_step(task, worker_id="seq-worker")
 
-        args, kwargs = mock_cdp.run_preflight_and_fill.call_args
+        args, kwargs = mock_cdp.run_preflight_up_to_guest_checkout.call_args
         self.assertIs(args[0], task)
         self.assertIs(args[1], profile)
         self.assertEqual(kwargs.get("worker_id"), "seq-worker")
@@ -242,7 +251,7 @@ class ExceptionRoutingTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = SessionFlaggedError("geo failed")
+            mock_cdp.run_preflight_up_to_guest_checkout.side_effect = SessionFlaggedError("geo failed")
             mock_logger.error.side_effect = capture_error
 
             with self.assertRaises(SessionFlaggedError):
@@ -274,7 +283,7 @@ class ExceptionRoutingTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None  # succeeds
+            mock_cdp.run_preflight_up_to_guest_checkout.return_value = None  # succeeds
             mock_cdp.submit_purchase.side_effect = SessionFlaggedError("click failed")
             mock_logger.error.side_effect = capture_error
 
@@ -288,8 +297,8 @@ class ExceptionRoutingTests(unittest.TestCase):
         )
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
 
-    def test_watchdog_timeout_after_submit_logs_after_submission(self):
-        """SessionFlaggedError from watchdog must log 'AFTER payment submission'."""
+    def test_watchdog_timeout_before_submit_logs_before_submission(self):
+        """P3-F4-ORDER: wait_for_total runs BEFORE fill/submit → timeout logs 'BEFORE payment submission'."""
         task = _make_task()
         log_messages = []
 
@@ -307,7 +316,7 @@ class ExceptionRoutingTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None
+            mock_cdp.run_preflight_up_to_guest_checkout.return_value = None
             mock_cdp.submit_purchase.return_value = None
             mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
             mock_logger.error.side_effect = capture_error
@@ -315,12 +324,15 @@ class ExceptionRoutingTests(unittest.TestCase):
             with self.assertRaises(SessionFlaggedError):
                 run_payment_step(task, worker_id="exc-worker")
 
-        post_msgs = [m for m in log_messages if "AFTER payment submission" in m]
+        pre_msgs = [m for m in log_messages if "BEFORE payment submission" in m]
         self.assertTrue(
-            len(post_msgs) >= 1,
-            f"Expected 'AFTER payment submission' log after watchdog timeout, got: {log_messages}",
+            len(pre_msgs) >= 1,
+            f"Expected 'BEFORE payment submission' log after watchdog timeout, got: {log_messages}",
         )
-        store_mock.mark_submitted.assert_called_once_with(task.task_id)
+        # Critical: mark_submitted must NOT be called, fill_payment_and_billing must NOT be called.
+        store_mock.mark_submitted.assert_not_called()
+        mock_cdp.fill_payment_and_billing.assert_not_called()
+        mock_cdp.submit_purchase.assert_not_called()
 
 
 # ── U-07: Idempotency crash simulation ────────────────────────────────────────
@@ -393,7 +405,7 @@ class IdempotencyCrashTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None
+            mock_cdp.run_preflight_up_to_guest_checkout.return_value = None
             mock_cdp.submit_purchase.side_effect = submit_side_effect
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = State("success")
@@ -427,7 +439,7 @@ class IdempotencyCrashTests(unittest.TestCase):
 
             run_cycle(task, worker_id="crash-worker")
 
-        mock_cdp.run_preflight_and_fill.assert_not_called()
+        mock_cdp.run_preflight_up_to_guest_checkout.assert_not_called()
         mock_cdp.submit_purchase.assert_not_called()
         mock_billing.select_profile.assert_not_called()
 

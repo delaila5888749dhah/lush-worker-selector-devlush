@@ -1,7 +1,11 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 7.1
+spec-version: 8.0
 
+> **v8.0 Breaking Changes:**
+> - Added ClickDispatchError exception type to modules.common.exceptions (raised by GivexDriver.bounding_box_click in strict mode — P3-D3)
+> - Added cdp.run_preflight_up_to_guest_checkout (splits out the card/billing fill so wait_for_total can gate on payment-page network signal — P3-F4-ORDER)
+>
 > **v7.1 Additive Changes:**
 > - Added monitor UI-lock metric APIs: `record_ui_lock_retry()`, `record_ui_lock_recovered()`, `record_ui_lock_exhausted()`
 >

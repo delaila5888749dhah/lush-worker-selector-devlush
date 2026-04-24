@@ -116,13 +116,16 @@ class CdpBodyPrimaryTests(unittest.TestCase):
         driver.execute_script.assert_not_called()
         mock_wd.notify_total.assert_called_once_with(_WORKER, 0.0)
 
-    def test_cws40_url_pattern_uses_cdp_body(self):
-        """'cws4.0' URL pattern also triggers CDP body primary path."""
+    def test_cws40_url_pattern_no_longer_triggers(self):
+        """P3 optional scope: the broad 'cws4.0' token was dropped from
+        ``_CDP_NETWORK_URL_PATTERNS`` — URLs that only match on it must NOT
+        trigger the CDP body primary path.
+        """
         mock_wd = self._fire(
             {"total": 88.00},
             url="https://example.com/cws4.0/submit",
         )
-        mock_wd.notify_total.assert_called_once_with(_WORKER, 88.00)
+        mock_wd.notify_total.assert_not_called()
 
     def test_api_checkout_url_pattern_uses_cdp_body(self):
         """/api/checkout URL triggers CDP body primary path."""

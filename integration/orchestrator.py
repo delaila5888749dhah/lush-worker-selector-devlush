@@ -250,7 +250,7 @@ _network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
 # Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
 # Protected by _network_listener_lock.
 _notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptable-object
-_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
+_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout")
 
 # NOTE on _active_cdp_requests:
 # This counter reflects orchestration-level tracking only.
@@ -1023,8 +1023,6 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
 
 def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     """Enable CDP Network monitoring and set up total interception."""
-    # "cws4.0" is intentionally substring-matched because this endpoint path
-    # can appear with varying prefixes across environments.
     try:
         driver_obj.execute_cdp_cmd("Network.enable", {})
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
@@ -1106,12 +1104,16 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     Steps:
       1. Select a billing profile from the pool (or use *_profile* if provided).
       2. Enable the network watchdog for this worker.
-      3. Run the full pre-submit sequence via CDP (preflight_geo → navigate →
-         fill eGift form → add to cart → guest checkout → fill payment/billing).
-      4. Persist the idempotency checkpoint (U-07: mark_submitted BEFORE submit).
-      5. Submit the purchase via CDP (the irreversible action).
-      6. Wait for the checkout total to be confirmed by the watchdog.
-      7. Return (state, total).
+      3. Run the pre-payment sequence via CDP (preflight_geo → navigate →
+         fill eGift form → add to cart → guest checkout).  Card + billing
+         fields are **not** filled yet.
+      4. Wait for the checkout total to be confirmed by the watchdog
+         (INV-PAYMENT-01 / P3-F4-ORDER).  On timeout raise
+         ``SessionFlaggedError`` BEFORE any card field is typed.
+      5. Fill payment + billing fields via CDP (``fill_payment_and_billing``).
+      6. Persist the idempotency checkpoint (U-07: mark_submitted BEFORE submit).
+      7. Submit the purchase via CDP (the irreversible action).
+      8. Return (state, total).
 
     Args:
         task: WorkerTask containing card and order information.
@@ -1152,12 +1154,25 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     watchdog.enable_network_monitor(worker_id)
     _submitted_before_wait = False
     try:
-        # F-02: Drive the full pre-submit purchase sequence
-        # (preflight_geo → navigate → fill eGift form → add to cart → guest checkout
-        #  → fill payment/billing).  This replaces the former fill-only call.
+        # P3-F4-ORDER — INV-PAYMENT-01: the Total Watchdog MUST observe the
+        # Network.responseReceived signal BEFORE any card/billing field is
+        # typed.  Run the pre-submit purchase sequence up to (but not
+        # including) ``fill_payment_and_billing``.  If the total never
+        # arrives within _WATCHDOG_TIMEOUT_PAYMENT the session is flagged
+        # before any CDP Input.dispatchKeyEvent is emitted on card fields.
         _cdp_call_with_timeout(
-            cdp.run_preflight_and_fill,
+            cdp.run_preflight_up_to_guest_checkout,
             task,
+            profile,
+            worker_id=worker_id,
+        )
+        # Fallback: read total from DOM to unblock watchdog.
+        _notify_total_from_dom(driver_obj, worker_id)
+        total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
+        # Only after total is confirmed do we fill card + billing fields.
+        _cdp_call_with_timeout(
+            cdp.fill_payment_and_billing,
+            task.primary_card,
             profile,
             worker_id=worker_id,
         )
@@ -1190,9 +1205,6 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 "FSM transition skipped; fallback will attempt at state read.",
                 _get_trace_id(), worker_id, exc_info=True,
             )
-        # Fallback: read total from DOM to unblock watchdog
-        _notify_total_from_dom(driver_obj, worker_id)
-        total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
         try:

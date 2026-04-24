@@ -223,12 +223,28 @@ class ReconcileUnconfirmedTests(_IsolatedStoreTestCase):
 
 
 class WatchdogTimeoutAfterSubmitWiringTests(_IsolatedStoreTestCase):
-    def test_mark_unconfirmed_called_on_watchdog_timeout_after_submit(self) -> None:
+    def test_mark_unconfirmed_called_on_flag_after_submit(self) -> None:
+        """After P3-F4-ORDER, wait_for_total runs BEFORE submit; the
+        "after submission" path now fires when ``submit_purchase`` itself
+        raises (post-mark_submitted).  The mark_unconfirmed wiring must
+        still trigger so the task is tracked for reconciliation."""
         task = _make_task("wd-after-submit")
         fake_store = MagicMock()
 
+        call_counter = {"n": 0}
+
+        def _cdp_side_effect(fn, *a, **kw):
+            # 1st call: run_preflight_up_to_guest_checkout — succeed.
+            # 2nd call: fill_payment_and_billing — succeed.
+            # 3rd call: submit_purchase — raise SessionFlaggedError
+            # (simulates post-submit failure AFTER mark_submitted).
+            call_counter["n"] += 1
+            if call_counter["n"] == 3:
+                raise SessionFlaggedError("submit flagged")
+            return None
+
         with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
-             patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
+             patch.object(orch, "_cdp_call_with_timeout", side_effect=_cdp_side_effect), \
              patch.object(orch.cdp, "_get_driver", return_value=MagicMock()), \
              patch.object(orch, "_setup_network_total_listener"), \
              patch.object(orch, "_notify_total_from_dom"), \
@@ -236,8 +252,7 @@ class WatchdogTimeoutAfterSubmitWiringTests(_IsolatedStoreTestCase):
              patch.object(orch, "_emit_billing_audit_event"), \
              patch.object(orch.watchdog, "enable_network_monitor"), \
              patch.object(orch.watchdog, "reset_session"), \
-             patch.object(orch.watchdog, "wait_for_total",
-                          side_effect=SessionFlaggedError("timeout")):
+             patch.object(orch.watchdog, "wait_for_total", return_value=50.0):
             with self.assertRaises(SessionFlaggedError):
                 orch.run_payment_step(
                     worker_id="w1", task=task, zip_code="12345",
@@ -267,6 +282,35 @@ class WatchdogTimeoutAfterSubmitWiringTests(_IsolatedStoreTestCase):
             with self.assertRaises(SessionFlaggedError):
                 orch.run_payment_step(
                     worker_id="w2", task=task, zip_code="12345",
+                )
+
+        fake_store.mark_submitted.assert_not_called()
+        fake_store.mark_unconfirmed.assert_not_called()
+
+    def test_mark_unconfirmed_NOT_called_when_watchdog_times_out_before_submit(self) -> None:
+        """P3-F4-ORDER: watchdog timeout now happens BEFORE mark_submitted.
+
+        This is the anti-detection ordering (INV-PAYMENT-01).  A timeout on
+        ``wait_for_total`` must NOT mark the task as submitted/unconfirmed
+        because no card/billing fields were typed.
+        """
+        task = _make_task("wd-timeout-before")
+        fake_store = MagicMock()
+
+        with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
+             patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
+             patch.object(orch.cdp, "_get_driver", return_value=MagicMock()), \
+             patch.object(orch, "_setup_network_total_listener"), \
+             patch.object(orch, "_notify_total_from_dom"), \
+             patch.object(orch.billing, "select_profile", return_value=MagicMock()), \
+             patch.object(orch, "_emit_billing_audit_event"), \
+             patch.object(orch.watchdog, "enable_network_monitor"), \
+             patch.object(orch.watchdog, "reset_session"), \
+             patch.object(orch.watchdog, "wait_for_total",
+                          side_effect=SessionFlaggedError("timeout")):
+            with self.assertRaises(SessionFlaggedError):
+                orch.run_payment_step(
+                    worker_id="w3", task=task, zip_code="12345",
                 )
 
         fake_store.mark_submitted.assert_not_called()

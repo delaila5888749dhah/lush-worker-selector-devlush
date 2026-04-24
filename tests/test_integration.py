@@ -190,7 +190,7 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 25.0
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task)
-        mock_cdp.run_preflight_and_fill.assert_called_once_with(
+        mock_cdp.run_preflight_up_to_guest_checkout.assert_called_once_with(
             task, profile, worker_id="default"
         )
         mock_cdp.submit_purchase.assert_called_once_with(worker_id="default")

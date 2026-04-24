@@ -289,6 +289,45 @@ def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
     driver.fill_payment_and_billing(task.primary_card, billing_profile)
 
 
+def run_preflight_up_to_guest_checkout(task, billing_profile, worker_id: str) -> None:
+    """Run pre-payment steps (1–5) without filling card/billing fields.
+
+    Executes the purchase sequence up to and including guest-checkout, but
+    intentionally **omits** ``fill_payment_and_billing``.  This is the
+    anti-detection ordering mandated by INV-PAYMENT-01 (Phase 3 P3-F4-ORDER):
+    the Total Watchdog must observe the ``Network.responseReceived`` event
+    before any card/billing field is typed, so that a silent server-side
+    fraud flag does not result in a card being filled into a browser session
+    that the backend has already rejected.
+
+    Steps executed:
+    1. Geo pre-flight check (``preflight_geo_check``).
+    2. Navigate to eGift page (``navigate_to_egift``).
+    3. Fill the eGift form (``fill_egift_form``).
+    4. Add to cart and click Review & Checkout (``add_to_cart_and_checkout``).
+    5. Select guest checkout (``select_guest_checkout``).
+
+    Args:
+        task: WorkerTask with purchase details.
+        billing_profile: BillingProfile with address and email.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+        ValueError: if ``billing_profile.email`` is ``None``.
+    """
+    if billing_profile.email is None:
+        raise ValueError(
+            "billing_profile.email must not be None for guest checkout"
+        )
+    driver = _get_driver(worker_id)
+    driver.preflight_geo_check()
+    driver.navigate_to_egift()
+    driver.fill_egift_form(task, billing_profile)
+    driver.add_to_cart_and_checkout()
+    driver.select_guest_checkout(billing_profile.email)
+
+
 def run_full_purchase_flow(task, billing_profile, worker_id: str) -> str:
     """Run the complete purchase sequence via the registered driver.
 
