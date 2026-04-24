@@ -565,8 +565,10 @@ class BitBrowserPoolClient(BitBrowserClient):
                 idx = self._pool.index(profile_id)
                 self._pool.remove(profile_id)
                 self._busy.discard(profile_id)
-                # cursor == idx is intentionally left unchanged: after the
-                # removal, the next profile shifts into the same slot.
+                # cursor <= idx is intentionally left unchanged: removing an
+                # entry after the cursor does not affect its position, and
+                # removing the cursor's current slot shifts the next profile
+                # into that same index.
                 if self._cursor > idx:
                     self._cursor -= 1
                 if self._pool and self._cursor >= len(self._pool):

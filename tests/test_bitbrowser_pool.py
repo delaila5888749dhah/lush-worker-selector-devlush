@@ -209,10 +209,7 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
         self.assertNotIn("id2", c._busy)
 
     def test_non_404_httperror_propagates_without_evicting(self):
-        for method_name, expected_exc in (
-            ("launch_profile", urllib.error.HTTPError),
-            ("randomize_fingerprint", urllib.error.HTTPError),
-        ):
+        for method_name in ("launch_profile", "randomize_fingerprint"):
             with self.subTest(method=method_name):
                 c = self._make_client(ids=["a", "b", "c"])
                 with c._lock:
@@ -222,7 +219,7 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
                     "_post",
                     side_effect=self._raise_http_error(500),
                 ):
-                    with self.assertRaises(expected_exc):
+                    with self.assertRaises(urllib.error.HTTPError):
                         getattr(c, method_name)("b")
                 self.assertEqual(c._pool, ["a", "b", "c"])
                 self.assertIn("b", c._busy)
