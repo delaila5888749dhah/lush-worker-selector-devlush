@@ -1620,8 +1620,8 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             state, total = run_payment_step(
                 task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
             )
-            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
-            if action == "complete":
+            outcome = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            if outcome == "complete":
                 success = True
                 _record_autoscaler_success(worker_id)
                 # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
@@ -1630,7 +1630,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                     _get_idempotency_store().mark_completed(task_id)
             else:
                 _record_autoscaler_failure(worker_id)
-            return action, state, total
+            return outcome, state, total
 
         # P0-2 — Retry loop: wrap run_payment_step + handle_outcome so that
         # declined/retry_new_card outcomes are consumed instead of silently dropped.

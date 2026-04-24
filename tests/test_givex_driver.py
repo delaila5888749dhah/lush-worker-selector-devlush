@@ -1762,7 +1762,7 @@ class TestStrictMode(unittest.TestCase):
 
     def test_strict_mode_no_click_fallback_when_cdp_fails(self):
         """In strict mode, .click() must NOT be called when CDP fails — and (P3-D3) a ClickDispatchError is raised."""
-        from modules.common.exceptions import ClickDispatchError
+        from modules.cdp.driver import ClickDispatchError
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -1790,7 +1790,7 @@ class TestStrictMode(unittest.TestCase):
 
     def test_strict_mode_emits_warning_on_cdp_failure(self):
         """Strict mode logs WARNING when CDP interaction is suppressed."""
-        from modules.common.exceptions import ClickDispatchError
+        from modules.cdp.driver import ClickDispatchError
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]

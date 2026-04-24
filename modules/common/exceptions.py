@@ -74,30 +74,3 @@ class CDPCommandError(SessionFlaggedError):
         super().__init__(
             f"CDP command '{command}' failed: {detail}"
         )
-
-
-class ClickDispatchError(SessionFlaggedError):
-    """Raised when a strict-mode ``bounding_box_click`` cannot dispatch a CDP click.
-
-    In strict mode the driver MUST emit a CDP ``Input.dispatchMouseEvent`` with
-    real coordinates so that anti-fraud heuristics observe an ``isTrusted``
-    mouse event.  When the preconditions are missing (no rect, zero-size rect,
-    missing RNG helper, or CDP dispatch itself fails), falling back to the
-    plain Selenium ``.click()`` would emit a synthetic click that anti-fraud
-    systems detect.  Raising :class:`ClickDispatchError` lets the cycle abort
-    cleanly instead of silently producing a detectable click.
-
-    Inherits from :class:`SessionFlaggedError` so the runtime treats it as a
-    flagged session (exits cycle gracefully).
-
-    Attributes:
-        selector: The CSS selector that failed to receive a real-coordinate click.
-        reason: Short description of which fallback branch triggered.
-    """
-    def __init__(self, selector: str, reason: str):
-        self.selector = selector
-        self.reason = reason
-        super().__init__(
-            f"bounding_box_click strict-mode dispatch failed on "
-            f"selector '{selector}': {reason}"
-        )

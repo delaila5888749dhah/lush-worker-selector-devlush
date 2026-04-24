@@ -18,8 +18,7 @@ import random
 import unittest
 from unittest.mock import MagicMock, patch
 
-from modules.cdp.driver import GivexDriver
-from modules.common.exceptions import ClickDispatchError
+from modules.cdp.driver import ClickDispatchError, GivexDriver
 
 
 def _make_driver(rect=None, script_raises=False):

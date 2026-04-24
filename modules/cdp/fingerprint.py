@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 from uuid import uuid4
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -93,7 +93,7 @@ class BitBrowserClient:
             raise ValueError(f"Unsupported URL scheme: {scheme!r}")
         return url
 
-    def _post(self, path: str, payload: Dict[str, object],
+    def _post(self, path: str, payload: Mapping[str, object],
               timeout: int = 10) -> Dict[str, object]:
         """POST JSON with exponential backoff on transient failures.
 
@@ -254,9 +254,8 @@ class BitBrowserSession:
         finally:
             self._released = True
 
-    def __exit__(self, exc_type, exc_value, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_value, exc_tb) -> None:
         self.release_profile()
-        return False
 
 
 def get_bitbrowser_client() -> Optional[BitBrowserClient]:
