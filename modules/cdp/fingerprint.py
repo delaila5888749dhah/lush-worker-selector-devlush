@@ -226,7 +226,8 @@ class BitBrowserSession:
     def __enter__(self) -> Tuple[str, str]:
         if self._pool_mode:
             # Pool-mode flow (Blueprint §2.1):
-            #   acquire_profile → randomize_fingerprint → launch_profile
+            #   acquire_profile → randomize_fingerprint (/browser/update/partial)
+            #   → launch_profile (/browser/open)
             # NEVER calls create_profile / delete_profile.
             profile_id = self._client.acquire_profile()
             try:
@@ -454,7 +455,7 @@ class BitBrowserPoolClient(BitBrowserClient):
                         self._busy.add(pid)
                         self._cursor = (idx + 1) % n
                         _log.debug(
-                            "acquired profile=%s cursor=%d busy=%d",
+                            "event=pool_acquire profile=%s cursor=%d busy=%d",
                             pid, self._cursor, len(self._busy),
                         )
                         return pid
@@ -479,7 +480,7 @@ class BitBrowserPoolClient(BitBrowserClient):
             with self._lock:
                 self._busy.discard(profile_id)
                 _log.debug(
-                    "released profile=%s busy=%d",
+                    "event=pool_release profile=%s busy=%d",
                     profile_id, len(self._busy),
                 )
 
@@ -499,7 +500,7 @@ class BitBrowserPoolClient(BitBrowserClient):
         }
         try:
             self._post("/browser/update/partial", payload, timeout=10)
-            _log.info("fingerprint randomised for %s", profile_id)
+            _log.info("event=fingerprint_randomised profile=%s", profile_id)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 self._evict_profile(profile_id)
