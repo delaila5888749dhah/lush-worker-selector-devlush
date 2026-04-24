@@ -353,7 +353,7 @@ class TestConfigureMaxWorkers(RolloutResetMixin, unittest.TestCase):
         self.assertEqual(workers, 1)
 
     def test_configure_rejects_out_of_range(self):
-        for bad in (0, -1, 51, 100):
+        for bad in (0, -1, 501, 1000):
             with self.subTest(n=bad):
                 with self.assertRaises(ValueError):
                     rollout_module.configure_max_workers(bad)
@@ -414,7 +414,7 @@ class TestSetScaleSteps(RolloutResetMixin, unittest.TestCase):
 
     def test_rejects_exceeds_cap(self):
         with self.assertRaises(ValueError):
-            rollout_module.set_scale_steps((1, 10, 100))
+            rollout_module.set_scale_steps((1, 10, 1000))
 
     def test_rejects_non_int_element(self):
         with self.assertRaises(TypeError):

@@ -356,3 +356,30 @@ modules/cdp/fingerprint.py — _validate_endpoint_scheme() runs in
 against a remote BitBrowser instance MUST use HTTPS or explicitly accept
 risk by leaving `BITBROWSER_ENDPOINT_STRICT` unset. CI MUST NOT bypass this
 warning by setting loopback endpoints in non-loopback test environments.
+
+---
+
+### PHASE-1-BRINGUP — RT-CAP-50-VS-500, RT-STAGGER-FLAG (2026-04-24)
+```
+modules/rollout/main.py — _MAX_MAX_WORKER_COUNT raised 50 → 500 (option a).
+  configure_max_workers() validates count ∈ [1, 500].
+  set_scale_steps() cap raised to 500.
+integration/runtime.py:
+  _validate_startup_config() accepts MAX_WORKER_COUNT / WORKER_COUNT ∈ [1, 500]
+    and emits a WARNING when MAX_WORKER_COUNT > 100.
+  _stagger_enabled is a new module-level flag (default True) gating the
+    12–25s launch gap in _apply_scale() — independent of the behavior-delay
+    flag.  set_stagger_enabled(bool) is the public setter.  reset() flips
+    both _behavior_delay_enabled and _stagger_enabled to False for test
+    hygiene (mirrors pre-existing semantics).
+```
+**Rule:** Blueprint §1 permits `MAX_WORKER_COUNT` up to 500; the runtime cap
+MUST equal `modules.rollout.main._MAX_MAX_WORKER_COUNT` at all three
+enforcement points (`configure_max_workers`, `set_scale_steps`,
+`integration.runtime._validate_startup_config`). Regression test
+`tests/test_phase1_runtime_bringup.py::
+TestMaxWorkerCountCapConsistent::
+test_max_worker_count_cap_consistent_between_configure_and_startup` enforces
+this at CI level. Stagger MUST NOT be re-coupled to `_behavior_delay_enabled`
+in `_apply_scale()`; regression test
+`test_stagger_enabled_independent_of_behavior_delay` guards the decoupling.

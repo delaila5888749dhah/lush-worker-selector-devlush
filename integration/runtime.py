@@ -60,6 +60,11 @@ _consecutive_rollbacks = 0
 _pending_restarts = 0
 _stop_requests = set()
 _behavior_delay_enabled = True
+# RT-STAGGER-FLAG — stagger is decoupled from behavior delay so tests may
+# disable behavior wrapping while still exercising the 12–25s launch gap
+# (Blueprint §1).  Default mirrors _behavior_delay_enabled (True in prod,
+# reset() flips to False for test hygiene).
+_stagger_enabled = True
 _stop_event = threading.Event()
 _MAX_RESTART_BACKOFF = 60
 _restart_delay: float = 0
@@ -84,14 +89,18 @@ _stagger_lock = threading.Lock()
 def _stagger_sleep_before_launch(rng=None) -> float:
     """Sleep between worker launches per Blueprint §1.
 
-    The first launch is immediate (no stagger).  Subsequent launches wait so
-    that the delta since the previous launch falls within
-    ``_STAGGER_RANGE``.  Uses the interruptible ``_stop_event`` so that
-    ``stop()`` can unblock the sleep.
+    Gated solely by ``_stagger_enabled`` (RT-STAGGER-FLAG).  When the flag is
+    off the helper returns immediately.  Otherwise the first launch is
+    immediate (no stagger) and subsequent launches wait so that the delta
+    since the previous launch falls within ``_STAGGER_RANGE``.  Uses the
+    interruptible ``_stop_event`` so that ``stop()`` can unblock the sleep.
 
     Returns the number of seconds slept (0.0 when no sleep was required).
     """
     global _last_worker_launch_ts
+    with _lock:
+        if not _stagger_enabled:
+            return 0.0
     rng = rng or random
     with _stagger_lock:
         now = time.monotonic()
@@ -486,14 +495,15 @@ def _apply_scale(target_count, task_fn):
     if target_count > current_count:
         with _lock:
             restarted = min(_pending_restarts, target_count - current_count); _pending_restarts -= restarted
-            stagger_enabled = _behavior_delay_enabled
+            stagger_enabled = _stagger_enabled
         for i in range(target_count - current_count):
             # C1 — Blueprint §1: stagger launches 12–25s apart.  The first
             # launch in the process lifetime is not delayed (stagger is a
             # gap-between-launches contract).  Sleep is interruptible by
-            # _stop_event so shutdown preempts it.  Only active in production
-            # mode (_behavior_delay_enabled == True); tests disable it via
-            # set_behavior_delay_enabled(False) to keep runs fast.
+            # _stop_event so shutdown preempts it.  Gated by the independent
+            # _stagger_enabled flag (RT-STAGGER-FLAG) — tests disable it via
+            # set_stagger_enabled(False) to keep runs fast without having to
+            # also disable behavior wrapping.
             if stagger_enabled:
                 _stagger_sleep_before_launch()
                 if _stop_event.is_set():
@@ -636,8 +646,8 @@ def _validate_startup_config() -> None:
             worker_count = int(raw)
         except ValueError as exc:
             raise ConfigError(f"WORKER_COUNT={raw!r} is not a valid integer") from exc
-        if worker_count < 1 or worker_count > 50:
-            raise ConfigError(f"WORKER_COUNT={worker_count} out of range [1, 50]")
+        if worker_count < 1 or worker_count > 500:
+            raise ConfigError(f"WORKER_COUNT={worker_count} out of range [1, 500]")
 
     max_raw = os.environ.get("MAX_WORKER_COUNT", "")
     max_worker_count: int | None = None
@@ -648,9 +658,19 @@ def _validate_startup_config() -> None:
             raise ConfigError(
                 f"MAX_WORKER_COUNT={max_raw!r} is not a valid integer"
             ) from exc
-        if max_worker_count < 1 or max_worker_count > 50:
+        if max_worker_count < 1 or max_worker_count > 500:
             raise ConfigError(
-                f"MAX_WORKER_COUNT={max_worker_count} out of range [1, 50]"
+                f"MAX_WORKER_COUNT={max_worker_count} out of range [1, 500]"
+            )
+        # RT-CAP-50-VS-500 (option a): cap is 500, but anything >100 is a
+        # high-concurrency regime the operator must have intentionally opted
+        # into — emit a WARNING at startup so it shows up in logs.
+        if max_worker_count > 100:
+            _logger.warning(
+                "MAX_WORKER_COUNT=%d exceeds 100 — high-concurrency regime; "
+                "ensure billing pool, proxy pool, and BitBrowser profile pool "
+                "are sized accordingly (Blueprint §1, §2.1).",
+                max_worker_count,
             )
         if worker_count is not None and worker_count > max_worker_count:
             raise ConfigError(
@@ -705,11 +725,10 @@ def probe_cdp_listener_support(driver_obj: object) -> None:
     that mis-configured Selenium flavors are caught at driver bring-up time
     rather than silently at the first network-watchdog attach.
 
-    Note: this helper is exported as a public function.  It is **not** called
-    anywhere inside ``runtime.py`` today because no driver is constructed here
-    (F-01 is not yet fixed).  PR-04 (F-01) is responsible for invoking this
-    probe immediately after the driver object is created during ``task_fn``
-    bring-up.  Add the call there — do not wire it here before F-01 lands.
+    Called from ``integration/worker_task.py`` immediately after the
+    seleniumwire driver is constructed so the probe fires once per cycle
+    before any CDP listener is registered.  Keep this helper as the single
+    source of truth for the check; callers should not re-implement it.
     """
     if not (hasattr(driver_obj, "add_cdp_listener")
             and callable(getattr(driver_obj, "add_cdp_listener", None))):
@@ -980,6 +999,18 @@ def set_behavior_delay_enabled(enabled):
     global _behavior_delay_enabled
     with _lock:
         _behavior_delay_enabled = bool(enabled)
+def set_stagger_enabled(enabled: bool) -> None:
+    """Enable or disable the 12–25s stagger between worker launches.
+
+    Independent from :func:`set_behavior_delay_enabled` (RT-STAGGER-FLAG):
+    tests disabling behavior wrapping must still be able to exercise the
+    stagger gap, and vice-versa.  Default is ``True`` in production and
+    ``False`` after :func:`reset` (same test-hygiene semantics as the
+    behavior-delay flag).
+    """
+    global _stagger_enabled
+    with _lock:
+        _stagger_enabled = bool(enabled)
 def get_trace_id():
     """Return the current trace_id, or None if not started."""
     with _trace_lock: return _trace_id
@@ -996,7 +1027,7 @@ def reset():
     Raises RuntimeError if called while the runtime is actively running
     in production mode (behavior delay enabled). Call stop() first.
     """
-    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until, _log_sink_error_count, _last_worker_launch_ts
+    global _state, _loop_thread, _workers, _worker_states, _worker_counter, _consecutive_rollbacks, _pending_restarts, _trace_id, _behavior_delay_enabled, _stagger_enabled, _loop_error_count, _restart_delay, _consecutive_billing_failures, _billing_throttled_until, _log_sink_error_count, _last_worker_launch_ts
     with _lock:
         if _state == "RUNNING" and _behavior_delay_enabled:
             raise RuntimeError(
@@ -1008,6 +1039,7 @@ def reset():
         _state = "INIT"; _loop_thread = None; _workers = {}; _worker_states = {}; _worker_counter = 0
         _consecutive_rollbacks = 0; _pending_restarts = 0; _stop_requests.clear()
         _behavior_delay_enabled = False
+        _stagger_enabled = False
         _loop_error_count = 0; _restart_delay = 0
         _consecutive_billing_failures = 0; _billing_throttled_until = 0.0
         _log_sink_error_count = 0
