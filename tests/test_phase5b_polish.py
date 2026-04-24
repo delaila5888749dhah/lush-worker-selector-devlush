@@ -316,7 +316,11 @@ class TestGreetingDeterminism(unittest.TestCase):
 
 _N_ITERATIONS = 200
 def _baseline_task(worker_id):
-    """Simulate real work — pure CPU, no intentional behavior delay."""
+    """Simulate real work — pure CPU, no intentional behavior delay.
+
+    Intentional sleep injected by the behavior layer is excluded from §8.6's
+    overhead measurement here because the test targets wrapper bookkeeping cost.
+    """
     # ~50 µs of busy work so the baseline is non-trivially measurable.
     total = 0
     for i in range(1000):

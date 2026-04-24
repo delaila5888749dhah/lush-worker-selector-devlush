@@ -72,9 +72,9 @@ class TemporalModel:
         # Spec §10 defines DAY as 06:00–21:59, so the inclusive integer end
         # hour becomes an exclusive ``end + 1`` boundary when ``local_hour``
         # includes fractional offsets such as UTC+5.5 or UTC-3.5.
-        end_exclusive = (end + 1) % 24
+        end_exclusive = end + 1 if start <= end else (end + 1) % 24
         if start <= end:
-            in_day = start <= local_hour < end + 1
+            in_day = start <= local_hour < end_exclusive
         else:  # wrap-around through midnight
             in_day = local_hour >= start or local_hour < end_exclusive
         return "DAY" if in_day else "NIGHT"
