@@ -15,6 +15,7 @@ Ten checkpoints:
 import os
 import threading
 import time
+import urllib.error
 import unittest
 from unittest.mock import patch
 
@@ -162,6 +163,19 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
             profile_ids=ids,
         )
 
+    @staticmethod
+    def _raise_http_error(code):
+        def _side_effect(path, payload, timeout=30):
+            raise urllib.error.HTTPError(
+                url="http://x" + path,
+                code=code,
+                msg=f"HTTP {code}",
+                hdrs=None,
+                fp=None,
+            )
+
+        return _side_effect
+
     # Task 1 ─ 404 eviction on /browser/open ──────────────────
     def test_runtime_404_on_browser_open_evicts_profile(self):
         c = self._make_client()
@@ -169,15 +183,9 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
         with c._lock:
             c._busy.add("id3")
 
-        def raise_404(path, payload, timeout=30):
-            import urllib.error
-            raise urllib.error.HTTPError(
-                url="http://x" + path, code=404, msg="Not Found",
-                hdrs=None, fp=None,
-            )
-
-        with patch.object(BitBrowserPoolClient, "_post", side_effect=raise_404):
-            import urllib.error
+        with patch.object(
+            BitBrowserPoolClient, "_post", side_effect=self._raise_http_error(404)
+        ):
             with self.assertRaises(urllib.error.HTTPError):
                 c.launch_profile("id3")
         self.assertNotIn("id3", c._pool)
@@ -192,18 +200,32 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
         with c._lock:
             c._busy.add("id2")
 
-        def raise_404(path, payload, timeout=10):
-            import urllib.error
-            raise urllib.error.HTTPError(
-                url="http://x" + path, code=404, msg="Not Found",
-                hdrs=None, fp=None,
-            )
-
-        with patch.object(BitBrowserPoolClient, "_post", side_effect=raise_404):
+        with patch.object(
+            BitBrowserPoolClient, "_post", side_effect=self._raise_http_error(404)
+        ):
             with self.assertRaises(RuntimeError):
                 c.randomize_fingerprint("id2")
         self.assertNotIn("id2", c._pool)
         self.assertNotIn("id2", c._busy)
+
+    def test_non_404_httperror_propagates_without_evicting(self):
+        for method_name, expected_exc in (
+            ("launch_profile", urllib.error.HTTPError),
+            ("randomize_fingerprint", urllib.error.HTTPError),
+        ):
+            with self.subTest(method=method_name):
+                c = self._make_client(ids=["a", "b", "c"])
+                with c._lock:
+                    c._busy.add("b")
+                with patch.object(
+                    BitBrowserPoolClient,
+                    "_post",
+                    side_effect=self._raise_http_error(500),
+                ):
+                    with self.assertRaises(expected_exc):
+                        getattr(c, method_name)("b")
+                self.assertEqual(c._pool, ["a", "b", "c"])
+                self.assertIn("b", c._busy)
 
     # Task 2 ─ raise when pool < WORKER_COUNT ─────────────────
     def test_pool_size_less_than_worker_count_raises(self):
@@ -247,9 +269,38 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
             if saved is not None:
                 os.environ["WORKER_COUNT"] = saved
         self.assertEqual(client._pool, ["a", "b"])
-        # Expect exactly one "Duplicate ... a" warning (one duplicate).
-        dup_msgs = [m for m in cm.output if "Duplicate" in m and "a" in m]
+        # Expect exactly one duplicate warning for the repeated "a" entry.
+        dup_msgs = [
+            m for m in cm.output
+            if "Duplicate BitBrowser profile ID ignored: a" in m
+        ]
         self.assertEqual(len(dup_msgs), 1, f"got {cm.output}")
+
+    def test_worker_count_env_unset_skips_guards(self):
+        saved = os.environ.pop("WORKER_COUNT", None)
+        try:
+            with patch("modules.cdp.fingerprint._log.warning") as m_warning:
+                client = BitBrowserPoolClient(
+                    endpoint="http://127.0.0.1:54345",
+                    api_key="k",
+                    profile_ids=["a"],
+                )
+        finally:
+            if saved is not None:
+                os.environ["WORKER_COUNT"] = saved
+        self.assertEqual(client._pool, ["a"])
+        m_warning.assert_not_called()
+
+    def test_worker_count_empty_string_skips_guards(self):
+        with patch.dict(os.environ, {"WORKER_COUNT": ""}, clear=False):
+            with patch("modules.cdp.fingerprint._log.warning") as m_warning:
+                client = BitBrowserPoolClient(
+                    endpoint="http://127.0.0.1:54345",
+                    api_key="k",
+                    profile_ids=["a"],
+                )
+        self.assertEqual(client._pool, ["a"])
+        m_warning.assert_not_called()
 
     # Task 4 ─ cursor rewind after eviction ───────────────────
     def test_evict_rewinds_cursor_correctly(self):
@@ -262,6 +313,41 @@ class TestPoolPhase3BCompletion(unittest.TestCase):
         self.assertEqual(c._cursor, 1)
         pid = c.acquire_profile()
         self.assertEqual(pid, "c")
+
+    def test_evict_keeps_cursor_when_equal_idx(self):
+        c = self._make_client(ids=["a", "b", "c"])
+        c._cursor = 1
+        c._evict_profile("b")
+        self.assertEqual(c._pool, ["a", "c"])
+        self.assertEqual(c._cursor, 1)
+        self.assertEqual(c.acquire_profile(), "c")
+
+    def test_evict_keeps_cursor_when_less_than_idx(self):
+        c = self._make_client(ids=["a", "b", "c"])
+        c._cursor = 0
+        c._evict_profile("c")
+        self.assertEqual(c._pool, ["a", "b"])
+        self.assertEqual(c._cursor, 0)
+        self.assertEqual(c.acquire_profile(), "a")
+
+    def test_evict_last_slot_wraps_cursor_to_zero(self):
+        c = self._make_client(ids=["a", "b", "c"])
+        c._cursor = 2
+        c._evict_profile("c")
+        self.assertEqual(c._pool, ["a", "b"])
+        self.assertEqual(c._cursor, 0)
+        self.assertEqual(c.acquire_profile(), "a")
+
+    def test_evict_when_pool_becomes_empty(self):
+        c = self._make_client(ids=["only"])
+        with c._lock:
+            c._busy.add("only")
+        c._evict_profile("only")
+        self.assertEqual(c._pool, [])
+        self.assertNotIn("only", c._busy)
+        with self.assertRaises(RuntimeError) as ctx:
+            c.acquire_profile()
+        self.assertIn("Profile pool is empty", str(ctx.exception))
 
     # Regression ─ POOL_MODE=0 unaffected ─────────────────────
     def test_legacy_pool_mode_0_unaffected(self):

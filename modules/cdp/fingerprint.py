@@ -418,7 +418,7 @@ class BitBrowserPoolClient(BitBrowserClient):
         # < WORKER_COUNT is a hard error (not enough profiles to cover every
         # worker); < 2×WORKER_COUNT warns that acquire_profile may serialise.
         try:
-            worker_count = int(os.environ.get("WORKER_COUNT", "0") or 0)
+            worker_count = int(os.environ.get("WORKER_COUNT", "0") or "0")
         except ValueError:
             worker_count = 0
         if worker_count > 0:
@@ -565,6 +565,8 @@ class BitBrowserPoolClient(BitBrowserClient):
                 idx = self._pool.index(profile_id)
                 self._pool.remove(profile_id)
                 self._busy.discard(profile_id)
+                # cursor == idx is intentionally left unchanged: after the
+                # removal, the next profile shifts into the same slot.
                 if self._cursor > idx:
                     self._cursor -= 1
                 if self._pool and self._cursor >= len(self._pool):

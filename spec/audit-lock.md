@@ -320,6 +320,8 @@ modules/cdp/fingerprint.py — BitBrowserPoolClient
     • dedupes profile_ids, emits WARNING per duplicate
     • raises RuntimeError when len(pool) < WORKER_COUNT
     • emits WARNING when len(pool) < 2 × WORKER_COUNT
+    • migration note: deployments with pool < WORKER_COUNT now fail fast
+      at startup until BITBROWSER_PROFILE_IDS is expanded
   get_bitbrowser_client() factory branches on BITBROWSER_POOL_MODE:
     "1"/"true"/"yes" → BitBrowserPoolClient (requires BITBROWSER_PROFILE_IDS;
                        dedupe + size guards enforced by __init__)
