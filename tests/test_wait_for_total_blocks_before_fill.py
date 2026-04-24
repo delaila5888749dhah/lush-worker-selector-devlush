@@ -11,7 +11,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from integration.orchestrator import run_payment_step
+import integration.orchestrator as orch
 from modules.common.exceptions import SessionFlaggedError
 from modules.common.types import CardInfo, WorkerTask
 from modules.fsm.main import State
@@ -113,7 +113,7 @@ class WaitForTotalOrderingTests(unittest.TestCase):
                 SessionFlaggedError("post-submit timeout"),
             ]
 
-            state, total = run_payment_step(task, worker_id="phc-worker")
+            state, total = orch.run_payment_step(task, worker_id="phc-worker")
 
         self.assertEqual(total, 99.0)
         self.assertEqual(state.name, "success")
@@ -135,7 +135,6 @@ class CDPTimeoutContractDocTests(unittest.TestCase):
     def test_payment_watchdog_timeout_default_is_10s(self):
         """The orchestrator's compiled-in payment watchdog timeout is 10s."""
         import os
-        import integration.orchestrator as orch
         # Baseline: with no operator override, default is 10s (see
         # _load_payment_watchdog_timeout).  Skip if a CI override is active.
         if os.environ.get("PAYMENT_WATCHDOG_TIMEOUT_S"):
