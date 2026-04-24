@@ -403,8 +403,16 @@ _GREETINGS = [
     "Thank you for being you",
 ]
 
-def _random_greeting() -> str:
-    """Return a random greeting message for the eGift form."""
+def _random_greeting(rnd=None) -> str:
+    """Return a greeting message for the eGift form.
+
+    When *rnd* (a ``random.Random``-compatible RNG) is provided, the choice
+    is deterministic per the bound persona seed (Blueprint §8 consistency
+    principle — Phase 5B Task 4).  Otherwise falls back to ``secrets.choice``
+    for no-persona contexts (e.g. tests that import the function directly).
+    """
+    if rnd is not None:
+        return rnd.choice(_GREETINGS)
     return secrets.choice(_GREETINGS)
 
 
@@ -1720,7 +1728,7 @@ class GivexDriver:
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         self._realistic_type_field(
-            SEL_GREETING_MSG, _random_greeting(), field_kind="text",
+            SEL_GREETING_MSG, _random_greeting(self._rnd), field_kind="text",
         )
         self._realistic_type_field(
             SEL_AMOUNT_INPUT, str(task.amount),

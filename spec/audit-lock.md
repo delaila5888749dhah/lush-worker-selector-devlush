@@ -60,12 +60,23 @@ modules/delay/temporal.py — apply_temporal_modifier():
   base_delay <= 0          → returns 0.0 immediately (no-op guard)
   any action_type, NIGHT   → return value ∈ [0.0, MAX_*_DELAY]
   any action_type, DAY     → return value ∈ [0.0, MAX_*_DELAY]
+  utc_offset_hours=None    → reads from ambient ContextVar populated by
+                              integration/worker_task.py after MaxMind
+                              lookup (Phase 5B Task 1)
+  action_type in (typing,  → multiplied by apply_gradual_drift() envelope
+    thinking) and            when ENABLE_GRADUAL_DRIFT env flag is set
+    ENABLE_GRADUAL_DRIFT     (Blueprint §10, Phase 5B Task 3)
+
+modules/delay/temporal.py — apply_gradual_drift():
+  AR(1) multiplier drifts slowly around 1.0, hard-clamped to ±30%:
+    _drift_multiplier ∈ [0.70, 1.30]
+  reset_drift() zeros state; wrapper.py calls this at each cycle boundary.
 
 modules/delay/temporal.py — apply_micro_variation():
   result = max(0.0, base_delay * uniform(0.90, 1.10))
   → result is always non-negative
 ```
-**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator.
+**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator. `apply_gradual_drift` is an AR(1) envelope strictly bounded to ±30%; the final `min(modified, MAX_*)` clamp still applies after drift so hard caps are never violated.
 
 ---
 ```

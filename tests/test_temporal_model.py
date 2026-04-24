@@ -3,6 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from modules.delay import temporal as _temporal_mod
 from modules.delay.main import (
     PersonaProfile, MAX_TYPING_DELAY, MAX_HESITATION_DELAY, MAX_STEP_DELAY,
     TemporalModel, DAY_START, DAY_END,
@@ -42,7 +43,8 @@ class TestTemporalModifier(_TemporalSetup):
 
     def test_day_no_penalty(self):
         base = 1.0
-        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+        with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+             patch.object(TemporalModel, "get_time_state", return_value="DAY"):
             modified = self.tm.apply_temporal_modifier(base, "typing")
         self.assertEqual(modified, base)
 
@@ -218,7 +220,8 @@ class TestNightPenaltyRange(unittest.TestCase):
             persona = PersonaProfile(seed)
             tm = TemporalModel(persona)
             base = 1.0
-            with patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
+            with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+                 patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
                 modified = tm.apply_temporal_modifier(base, "typing")
             penalty = modified / base - 1.0
             self.assertGreaterEqual(penalty, NIGHT_SPEED_PENALTY_RANGE[0] - 1e-9,
@@ -232,7 +235,8 @@ class TestNightPenaltyRange(unittest.TestCase):
             persona = PersonaProfile(seed)
             tm = TemporalModel(persona)
             base = 1.0
-            with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+            with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+                 patch.object(TemporalModel, "get_time_state", return_value="DAY"):
                 modified = tm.apply_temporal_modifier(base, "typing")
             self.assertEqual(modified, base,
                 f"seed={seed}: DAY typing must not apply any penalty")
@@ -259,7 +263,8 @@ class TestNightHesitationPenaltyRange(unittest.TestCase):
             persona = PersonaProfile(seed)
             tm = TemporalModel(persona)
             base = 3.0
-            with patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
+            with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+                 patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
                 modified = tm.apply_temporal_modifier(base, "thinking")
             if modified >= MAX_HESITATION_DELAY - 1e-9:
                 continue  # clamped — skip ratio check
@@ -275,7 +280,8 @@ class TestNightHesitationPenaltyRange(unittest.TestCase):
             persona = PersonaProfile(seed)
             tm = TemporalModel(persona)
             base = 3.0
-            with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+            with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+                 patch.object(TemporalModel, "get_time_state", return_value="DAY"):
                 modified = tm.apply_temporal_modifier(base, "thinking")
             self.assertEqual(modified, base,
                 f"seed={seed}: DAY thinking must not apply any penalty")
@@ -356,7 +362,8 @@ class TestDayNightExplicitPatch(unittest.TestCase):
         self.tm = TemporalModel(self.persona)
 
     def test_day_typing_no_penalty(self):
-        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+        with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+             patch.object(TemporalModel, "get_time_state", return_value="DAY"):
             result = self.tm.apply_temporal_modifier(1.0, "typing")
         self.assertEqual(result, 1.0)
 
@@ -371,7 +378,8 @@ class TestDayNightExplicitPatch(unittest.TestCase):
         self.assertLessEqual(result, MAX_TYPING_DELAY)
 
     def test_day_thinking_no_penalty(self):
-        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+        with patch.object(_temporal_mod, "ENABLE_GRADUAL_DRIFT", False), \
+             patch.object(TemporalModel, "get_time_state", return_value="DAY"):
             result = self.tm.apply_temporal_modifier(3.0, "thinking")
         self.assertEqual(result, 3.0)
 

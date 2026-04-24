@@ -8,6 +8,7 @@ within ``modules.delay``; no imports from outside that package.
 Deterministic via random.Random(seed) from PersonaProfile.
 """
 
+import contextvars
 import random
 import threading
 import time
@@ -16,8 +17,40 @@ from modules.delay.config import (
     MAX_TYPING_DELAY, MAX_HESITATION_DELAY, MAX_STEP_DELAY,
     DAY_START, DAY_END, NIGHT_SPEED_PENALTY_RANGE,
     NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE,
+    ENABLE_GRADUAL_DRIFT,
 )
 from modules.delay.persona import PersonaProfile
+
+
+# Phase 5B Task 1 — ambient UTC offset propagated via ContextVar so that
+# per-cycle MaxMind-derived timezones reach ``apply_temporal_modifier``
+# without threading the value through every call site signature.
+_utc_offset_var: "contextvars.ContextVar[float]" = contextvars.ContextVar(
+    "utc_offset_hours", default=0.0
+)
+
+
+def set_utc_offset(offset: float) -> "contextvars.Token":
+    """Set the ambient UTC offset (in hours) for the current context.
+
+    Returns the ``Token`` returned by :meth:`ContextVar.set` so callers may
+    restore the previous value via :func:`reset_utc_offset` if desired.
+    """
+    try:
+        value = float(offset)
+    except (TypeError, ValueError):
+        value = 0.0
+    return _utc_offset_var.set(value)
+
+
+def get_utc_offset() -> float:
+    """Return the ambient UTC offset for the current context, or 0.0."""
+    return _utc_offset_var.get()
+
+
+def reset_utc_offset(token: "contextvars.Token") -> None:
+    """Restore a previous ambient UTC offset via the token from :func:`set_utc_offset`."""
+    _utc_offset_var.reset(token)
 
 
 class TemporalModel:
@@ -28,8 +61,12 @@ class TemporalModel:
         # seed+1: intentional offset; worker seeds are CRC32-derived (non-adjacent).
         self._rnd = random.Random(persona._seed + 1)
         self._rnd_lock = threading.Lock()
+        # Gradual-drift state (Blueprint §10). AR(1) envelope around 1.0,
+        # protected by ``_rnd_lock`` since it shares the same RNG.
+        self._drift_multiplier: float = 1.0
+        self._drift_step_count: int = 0
 
-    def get_time_state(self, utc_offset_hours: int = 0) -> str:
+    def get_time_state(self, utc_offset_hours: float = 0) -> str:
         """Return ``"DAY"`` or ``"NIGHT"`` based on the persona's active
         hours (Blueprint §10), with midnight wrap-around support.
 
@@ -39,7 +76,9 @@ class TemporalModel:
         exposes no ``active_hours`` attribute, falls back to the global
         ``DAY_START..DAY_END`` constants.
         """
-        local_hour = (time.gmtime().tm_hour + utc_offset_hours) % 24
+        # Accept float offsets (e.g. India UTC+5.5); truncate toward zero to
+        # the hour granularity used by the simple DAY/NIGHT window.
+        local_hour = (time.gmtime().tm_hour + int(utc_offset_hours)) % 24
         start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
         if start <= end:
             in_day = start <= local_hour <= end
@@ -48,7 +87,10 @@ class TemporalModel:
         return "DAY" if in_day else "NIGHT"
 
     def apply_temporal_modifier(
-        self, base_delay: float, action_type: str, utc_offset_hours: int = 0
+        self,
+        base_delay: float,
+        action_type: str,
+        utc_offset_hours: "float | None" = None,
     ) -> float:
         """Apply day/night scaling to *base_delay*, clamped by action type.
 
@@ -57,9 +99,15 @@ class TemporalModel:
         NIGHT mode applies different penalties per action type:
         - typing: slowed by ``night_penalty_factor`` (15–30%, Blueprint §10)
         - thinking: increased by ``NIGHT_HESITATION_INCREASE_RANGE`` (20–40%)
+
+        When ``utc_offset_hours`` is ``None`` (default), the offset is read
+        from the ambient :func:`get_utc_offset` ContextVar — populated by
+        ``integration/worker_task.py`` after MaxMind lookup (Phase 5B Task 1).
         """
         if base_delay <= 0:
             return 0.0
+        if utc_offset_hours is None:
+            utc_offset_hours = get_utc_offset()
         if self.get_time_state(utc_offset_hours) == "NIGHT":
             if action_type == "thinking":
                 with self._rnd_lock:
@@ -69,11 +117,55 @@ class TemporalModel:
                 modified = base_delay * (1.0 + self._persona.night_penalty_factor)
         else:
             modified = base_delay
+        # Gradual drift (Blueprint §10 — slow-varying envelope). Only applied
+        # to typing/thinking so operational steps (e.g. click) remain stable.
+        if ENABLE_GRADUAL_DRIFT and action_type in ("typing", "thinking"):
+            modified = self.apply_gradual_drift(modified)
         if action_type == "typing":
             return max(0.0, min(modified, MAX_TYPING_DELAY))
         if action_type == "thinking":
             return max(0.0, min(modified, MAX_HESITATION_DELAY))
         return max(0.0, min(modified, MAX_STEP_DELAY))
+
+    def apply_gradual_drift(
+        self,
+        base_delay: float,
+        *,
+        drift_rate: float = 0.02,
+        drift_cap: float = 0.30,
+    ) -> float:
+        """AR(1) drift: multiplier random-walks slowly around 1.0, capped ±``drift_cap``.
+
+        Blueprint §10 "Temporal Variation" mechanism #3 — a slow-varying
+        envelope on top of the i.i.d. micro-variation / fatigue signals.
+
+        Parameters
+        ----------
+        drift_rate : float
+            Per-step std-dev of the Gaussian increment.
+        drift_cap : float
+            Maximum absolute deviation from 1.0 (default ±30%).
+        """
+        with self._rnd_lock:
+            self._drift_step_count += 1
+            # AR(1) toward 1.0 with Gaussian innovation.
+            step = self._rnd.gauss(0.0, drift_rate)
+            self._drift_multiplier = (
+                0.98 * self._drift_multiplier + 0.02 * 1.0 + step
+            )
+            # Clamp envelope to ±drift_cap around 1.0.
+            self._drift_multiplier = max(
+                1.0 - drift_cap,
+                min(1.0 + drift_cap, self._drift_multiplier),
+            )
+            multiplier = self._drift_multiplier
+        return base_delay * multiplier
+
+    def reset_drift(self) -> None:
+        """Reset drift state (call on new cycle)."""
+        with self._rnd_lock:
+            self._drift_multiplier = 1.0
+            self._drift_step_count = 0
 
     def apply_fatigue(self, base_delay: float, cycle_count: int) -> float:
         """Increase delay after fatigue threshold cycles, clamped to hard limit."""
@@ -97,7 +189,7 @@ class TemporalModel:
             "micro_var_range": (0.90, 1.10),
         }
 
-    def get_night_typo_increase(self, utc_offset_hours: int = 0) -> float:
+    def get_night_typo_increase(self, utc_offset_hours: float = 0) -> float:
         """Return extra typo probability during NIGHT, 0.0 during DAY.
 
         Blueprint §10: NIGHT increases typo rate by 1–2% absolute (random in range).

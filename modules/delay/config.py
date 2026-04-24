@@ -30,6 +30,18 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         raise ValueError(f"Invalid DELAY_{name}={raw!r}: expected int")
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var (accepts 1/0/true/false/yes/no, case-insensitive)."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Gradual behavior drift (Blueprint §10). See TemporalModel.apply_gradual_drift.
+ENABLE_GRADUAL_DRIFT: bool = _env_bool("ENABLE_GRADUAL_DRIFT", default=True)
+
 MIN_TYPING_DELAY: float = _env_float("MIN_TYPING_DELAY", 0.6)
 MAX_TYPING_DELAY: float = _env_float("MAX_TYPING_DELAY", 1.8)
 MIN_THINKING_DELAY: float = _env_float("MIN_THINKING_DELAY", 3.0)

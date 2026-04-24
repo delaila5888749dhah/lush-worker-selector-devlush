@@ -26,9 +26,14 @@ import zlib
 from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
-from modules.cdp.driver import _get_current_ip_best_effort, maxmind_lookup_zip
+from modules.cdp.driver import (
+    _get_current_ip_best_effort,
+    _lookup_maxmind_utc_offset,
+    maxmind_lookup_zip,
+)
 from modules.cdp.fingerprint import BitBrowserSession, get_bitbrowser_client
 from modules.delay.persona import PersonaProfile
+from modules.delay.temporal import set_utc_offset as _set_ambient_utc_offset
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -131,14 +136,25 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 # The proxy IP is extracted from the PROXY_SERVER env var or
                 # the driver's proxy attribute — no external HTTP calls.
                 zip_code: Optional[str] = None
+                utc_offset_hours: float = 0.0
                 try:
                     detected_ip = _get_current_ip_best_effort()
                     if detected_ip:
                         zip_code = maxmind_lookup_zip(detected_ip)
+                        # Phase 5B Task 1 — pull timezone offset so the
+                        # Tầng 2 behavior layer (TemporalModel) can compute
+                        # local DAY/NIGHT for the proxy instead of UTC.
+                        looked_up = _lookup_maxmind_utc_offset(detected_ip)
+                        if looked_up is not None:
+                            utc_offset_hours = float(looked_up)
                 except Exception as exc:  # pylint: disable=broad-except
                     _log.debug(
                         "worker=%s zip derivation error: %s", worker_id, exc
                     )
+
+                # Propagate the offset to the behavior layer via ContextVar
+                # so wrapped task_fn delays reflect local time-of-day.
+                _set_ambient_utc_offset(utc_offset_hours)
 
                 if zip_code:
                     _log.info(
@@ -162,6 +178,7 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                             cycle_id=uuid.uuid4().hex,
                             worker_id=worker_id,
                             zip_code=zip_code,
+                            utc_offset_hours=utc_offset_hours,
                         )
                         orchestrator_module = importlib.import_module(
                             "integration.orchestrator"

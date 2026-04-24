@@ -94,3 +94,4 @@ class CycleContext:
     card_attempts: int = 0
     task: Optional[WorkerTask] = None
     swap_count: int = 0
+    utc_offset_hours: float = 0.0

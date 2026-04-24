@@ -274,7 +274,8 @@ class TestWrapThreadsFatigueCycleCount(unittest.TestCase):
         wrapped = wrap(_dummy_task, persona)
         observed = []
 
-        def _recorder(engine, temporal, action_type, stop_event=None, cycle_count=0):
+        def _recorder(engine, temporal, action_type, stop_event=None,
+                      cycle_count=0, **kwargs):
             observed.append((action_type, cycle_count))
             return 0.0
 
