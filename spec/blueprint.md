@@ -51,6 +51,66 @@ Ví dụ: nguyenvana@yahoo.com|100|4111111111111111|07|27|123
 
 · Pre-flight Geo Check: Điều hướng tab duy nhất vào lumtest.com/myip.json. Đọc JSON trả về để xác nhận country: "US". Nếu mạng lag báo lỗi no such window, hệ thống thử lại tối đa 2 lần với khoảng cách 2 giây, kết hợp lệnh switch_to.window để bám sát tab.
 
+§2.1 BITBROWSER PROFILE POOL — CHỌN TUẦN TỰ (BỔ SUNG §2)
+
+Bổ sung cơ chế quản lý Profile BitBrowser thay cho cách create → delete
+mặc định (cách cũ bị chặn bởi Operation Password của BitBrowser).
+
+── Nguyên tắc ───────────────────────────────────────────────────
+Operator tạo sẵn N profile trong BitBrowser GUI (N ≥ WORKER_COUNT × 2).
+Mỗi cycle bot:
+  1. Chọn 1 profile ID theo thứ tự (round-robin, KHÔNG random)
+  2. Gọi /browser/update/partial random lại fingerprint
+  3. /browser/open → nhận WebDriver URL → Selenium + CDP attach
+  4. Thực hiện §3–§6 như blueprint gốc
+  5. /browser/close (KHÔNG delete) → trả về pool
+
+── Cấu hình (.env) ──────────────────────────────────────────────
+BITBROWSER_POOL_MODE=1
+BITBROWSER_PROFILE_IDS=abc123,def456,ghi789,jkl012,mno345
+
+── Thuật toán chọn profile — ROUND-ROBIN TUẦN TỰ ────────────────
+Con trỏ toàn cục (global cursor) + set BUSY, dùng chung cho mọi
+worker, thread-safe bằng threading.Lock.
+
+pool   = ["abc", "def", "ghi", "jkl", "mno"]
+cursor = 0
+
+Cycle 1 → pool[0]="abc"  cursor=1
+Cycle 2 → pool[1]="def"  cursor=2
+Cycle 3 → pool[2]="ghi"  cursor=3
+Cycle 4 → pool[3]="jkl"  cursor=4
+Cycle 5 → pool[4]="mno"  cursor=0  (wrap-around)
+Cycle 6 → pool[0]="abc"  cursor=1
+...
+
+Quy tắc:
+· Profile đang mở → đánh dấu BUSY → skip khi cursor chỉ vào
+· Cursor nhảy tiếp đến profile AVAILABLE đầu tiên
+· Tất cả BUSY → chờ 0.5s poll, timeout 60s → raise
+
+── Vòng đời 1 cycle (thay §2 blueprint gốc) ────────────────────
+1. acquire_profile_sequential()    → profile_id
+2. POST /browser/update/partial    → random fingerprint
+3. POST /browser/open              → webdriver_url
+4. Selenium + CDP attach
+5. Thực hiện §3 → §6 blueprint gốc
+6. POST /browser/close             → đóng, KHÔNG delete
+7. release_profile(profile_id)     → trả pool
+
+── Ràng buộc an toàn ───────────────────────────────────────────
+· len(POOL) ≥ WORKER_COUNT (khuyến nghị × 2)
+· POOL_MODE=1 + IDs rỗng → abort startup rõ ràng
+· Profile 404 từ API → log ERROR, loại runtime, tiếp tục
+· release_profile() luôn trong try/finally
+
+── Tương thích ngược ────────────────────────────────────────────
+POOL_MODE=0 (default) → giữ nguyên hành vi create/delete cũ.
+FSM §6, Anti-detect §9, Behavior §8 KHÔNG đổi.
+
+── Sync Matrix (bổ sung §11) ────────────────────────────────────
+· Spec §2.1 (Profile Pool) ↔ Blueprint §2.1 — Status: ✓ ĐỒNG BỘ
+
 3. Xâm nhập & Cách ly Phiên (00:20 - 00:30)
 
 · Khởi tạo & Điều hướng
@@ -615,6 +675,11 @@ Ma trận đối chiếu giữa Spec Phase 10 và Blueprint (1-to-1 structural a
 · Spec §10.8 (Phase 9 Alignment) ↔ Blueprint §8.8 (Đồng Bộ Với Phase 9):
   - Spec: respect SAFE_POINT, respect CRITICAL_SECTION
   - Blueprint: SAFE_POINT (§8.4), CRITICAL_SECTION (§8.3), phạm vi cho phép
+  - Status: ✓ ĐỒNG BỘ
+
+· Spec §2.1 (Profile Pool) ↔ Blueprint §2.1 (BitBrowser Profile Pool — Round-Robin):
+  - Spec: Operator tạo sẵn N profile; round-robin tuần tự, thread-safe; random fingerprint qua /browser/update/partial; không create/delete
+  - Blueprint: acquire_profile_sequential → update/partial → open → §3–§6 → close (không delete) → release
   - Status: ✓ ĐỒNG BỘ
 
 · Kết luận: Zero mismatch. Blueprint §8.1–§8.8 khớp chính xác 1-to-1 với Spec §10.1–§10.8. Cấu trúc đồng bộ hoàn toàn, sẵn sàng cho audit.

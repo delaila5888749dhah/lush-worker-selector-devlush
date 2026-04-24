@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 7.1
+spec-version: 7.2
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,11 @@ spec-version: 7.1
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v7.2 Additive Changes (Blueprint §2.1):**
+> - Declared `BitBrowserPoolClient` in modules/cdp/fingerprint.py for pool-mode
+>   profile management (round-robin sequential, thread-safe). Activated via
+>   `BITBROWSER_POOL_MODE=1`. Legacy `BitBrowserClient` behaviour unchanged.
 >
 > **v7.1 Additive Changes:**
 > - Added monitor UI-lock metric APIs: `record_ui_lock_retry()`, `record_ui_lock_recovered()`, `record_ui_lock_exhausted()`
@@ -173,6 +178,29 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
+
+### Class: BitBrowserPoolClient (Blueprint §2.1)
+
+Location: `modules/cdp/fingerprint.py`.
+Activated when `BITBROWSER_POOL_MODE=1` and `BITBROWSER_PROFILE_IDS` is a
+non-empty CSV. Round-robin sequential, thread-safe profile lease manager.
+
+Notes:
+  - `acquire_profile()` → `str`: picks the next AVAILABLE profile id from the
+    pool starting at the shared cursor; marks it BUSY. Raises `RuntimeError`
+    if no profile becomes available within `acquire_timeout_s` (default 60s).
+  - `release_profile(profile_id)`: best-effort closes the browser window
+    (POST `/browser/close`, no delete) and always clears the BUSY flag.
+  - `randomize_fingerprint(profile_id)`: POST `/browser/update/partial` with
+    `{"ids": [profile_id], "browserFingerPrint": {"batchRandom": True,
+    "batchUpdateFingerPrint": True}}`. On HTTP 404 the profile is evicted
+    from the pool and `RuntimeError` is raised.
+  - `launch_profile(profile_id)` → `dict`: POST `/browser/open` → response
+    dict containing `webdriver` URL for Selenium + CDP attach.
+  - Constructor raises `ValueError` if `profile_ids` is empty.
+  - Factory `get_bitbrowser_client()` returns `BitBrowserPoolClient` when
+    pool mode is on, else the legacy `BitBrowserClient` (behaviour unchanged
+    when `BITBROWSER_POOL_MODE=0`).
 
 ## Module: monitor
 

@@ -44,6 +44,34 @@ Set the following variables before starting:
 | `IDEMPOTENCY_STORE_PATH` | no | `.idempotency_store.json` | File path for the local idempotency store. |
 | `CDP_CALL_TIMEOUT_SECONDS` | no | `10.0` | Timeout (seconds) for synchronous CDP command calls. |
 | `CDP_EXECUTOR_MAX_WORKERS` | no | `8` | Thread-pool size for the CDP command executor. |
+| `BITBROWSER_POOL_MODE` | no | `0` | `1` = bật pool mode (round-robin trên profile có sẵn, tránh Operation Password). `0` giữ hành vi legacy create/delete. Xem §2.4 và Blueprint §2.1. |
+| `BITBROWSER_PROFILE_IDS` | khi `POOL_MODE=1` | — | CSV profile IDs (không khoảng trắng), ví dụ `abc123,def456,ghi789`. Bắt buộc khi `BITBROWSER_POOL_MODE=1`; rỗng → startup abort rõ ràng. |
+
+### 2.4 BitBrowser Pool Mode Setup (Blueprint §2.1)
+
+Khi `BITBROWSER_POOL_MODE=1`, bot sử dụng pool profile có sẵn thay vì
+create/delete mỗi cycle (cách cũ bị Operation Password của BitBrowser chặn).
+
+Bước vận hành:
+
+1. Mở BitBrowser GUI → tạo thủ công `N ≥ WORKER_COUNT × 2` profile. Ghi lại
+   từng profile ID.
+2. Điền `.env`:
+   ```
+   BITBROWSER_POOL_MODE=1
+   BITBROWSER_PROFILE_IDS=abc123,def456,ghi789,jkl012,mno345
+   ```
+3. Khởi động `python -m app`. Mỗi cycle sẽ:
+   - `acquire_profile()` theo round-robin (skip profile đang BUSY),
+   - POST `/browser/update/partial` random lại fingerprint,
+   - POST `/browser/open` nhận `webdriver` URL → Selenium + CDP attach,
+   - Kết thúc: `/browser/close` (KHÔNG delete) + trả profile về pool.
+4. Nếu API trả 404 cho 1 profile → log ERROR, evict runtime khỏi pool, tiếp tục.
+5. Nếu mọi profile BUSY > 60s → `RuntimeError` (scale thêm profile hoặc
+   giảm `WORKER_COUNT`).
+
+Rollback: đặt `BITBROWSER_POOL_MODE=0` → quay về legacy create/delete flow
+(hành vi không đổi, hoàn toàn backward-compatible).
 
 ### 2.3 Verify deployment
 

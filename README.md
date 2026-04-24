@@ -79,47 +79,28 @@ cp .env.example .env
 
 ### Bước 2: Mở file `.env` bằng Notepad (hoặc editor bất kỳ) và điền vào các ô sau:
 
-```bash
-# ============================
-# 🔴 BẮT BUỘC ĐIỀN ĐỂ CHẠY THẬT
-# ============================
+## BitBrowser Pool Mode — Hướng dẫn nhanh cho operator (Blueprint §2.1)
 
-# [1] Bật chế độ chạy thật. Để = 0 là chạy thử (không làm gì).
-ENABLE_PRODUCTION_TASK_FN=1
+Khi BitBrowser bật "Operation Password", API `create/delete profile` sẽ
+bị chặn. Pool Mode giải quyết bằng cách dùng lại profile đã tạo sẵn:
 
-# [2] BitBrowser — lấy API key trong phần mềm BitBrowser đang cài trên máy
-BITBROWSER_API_KEY=dán_key_bitbrowser_vào_đây
-BITBROWSER_ENDPOINT=http://127.0.0.1:54345
 1. Mở BitBrowser GUI → tạo thủ công **N profile** (khuyến nghị
    `N ≥ WORKER_COUNT × 2`). Ghi lại từng profile ID.
 2. Mở `.env` và điền:
    ```
-BITBROWSER_POOL_MODE=1
-BITBROWSER_PROFILE_IDS=abc123,def456,ghi789,jkl012,mno345
+   BITBROWSER_POOL_MODE=1
+   BITBROWSER_PROFILE_IDS=abc123,def456,ghi789,jkl012,mno345
+   ```
+3. Chạy `python -m app` như bình thường. Bot sẽ:
+   - Chọn profile theo **round-robin tuần tự** (không random),
+   - Gọi `/browser/update/partial` để **random fingerprint** mỗi cycle,
+   - `/browser/open` → làm việc → `/browser/close` (KHÔNG delete).
+4. Quay lại chế độ cũ: đặt `BITBROWSER_POOL_MODE=0` (hoặc bỏ biến này).
+   Hành vi legacy create/delete được giữ nguyên 100%.
 
-# [3] MaxMind — lấy license key sau khi đăng ký tài khoản free
-MAXMIND_LICENSE_KEY=dán_key_maxmind_vào_đây
-GEOIP_DB_PATH=data/GeoLite2-City.mmdb
+Chi tiết vận hành & xử lý sự cố: xem `docs/operations/RUNBOOK.md` §2.4.
 
-# ============================
-# 🟡 NÊN ĐIỀN (để nhận thông báo)
-# ============================
-
-# [4] Telegram — chat với @BotFather để tạo bot
-TELEGRAM_ENABLED=1
-TELEGRAM_BOT_TOKEN=dán_token_telegram_vào_đây
-TELEGRAM_CHAT_ID=dán_chat_id_vào_đây
-
-# ============================
-# 🟢 TÙY CHỌN (có thể để nguyên mặc định)
-# ============================
-
-TASK_INPUT_FILE=tasks/input.txt
-BILLING_POOL_DIR=billing_pool
-MAX_WORKER_COUNT=10
-WORKER_COUNT=1
-REDIS_URL=                           # Để trống = dùng file, không cần Redis
-```
+## Production Deployment
 
 ### 📑 Bảng giải thích đầy đủ các biến
 
