@@ -20,7 +20,7 @@ from modules.cdp.driver import (
     SEL_GUEST_HEADING,
 )
 from modules.common.exceptions import SelectorTimeoutError
-from modules.common.types import BillingProfile, CardInfo, WorkerTask
+from modules.common.types import BillingProfile, CardInfo
 
 
 def _mk_driver():
