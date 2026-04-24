@@ -16,7 +16,6 @@ from unittest.mock import MagicMock, patch
 from modules.cdp.driver import (
     GivexDriver,
     SEL_GUEST_EMAIL,
-    SEL_GUEST_HEADING,
 )
 from modules.common.types import BillingProfile, CardInfo
 
