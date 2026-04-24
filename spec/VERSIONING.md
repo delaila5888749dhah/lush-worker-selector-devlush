@@ -46,7 +46,7 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 |------|---------|----------|
 | `spec/core/interface.md` | 7.0 | 2026-04-21 |
 | `spec/integration/interface.md` | 7.1 | 2026-04-23 |
-| `spec/interface.md` (aggregated) | 7.1 | 2026-04-23 |
+| `spec/interface.md` (aggregated) | 7.2 | 2026-04-24 |
 | `spec/fsm.md` | 1.1 | 2026-04-23 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -54,6 +54,12 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v7.2 (2026-04-24) — ADDITIVE (Blueprint §2.1)
+- `spec/interface.md`: Declared `BitBrowserPoolClient` (pool-mode BitBrowser
+  profile manager — round-robin sequential, thread-safe) under `Module: cdp`.
+  Activated via `BITBROWSER_POOL_MODE=1` + `BITBROWSER_PROFILE_IDS` CSV.
+  Legacy `BitBrowserClient` behaviour unchanged (backward-compatible).
 
 ### v7.1 (2026-04-23) — ADDITIVE
 - `spec/integration/interface.md`: Added `monitor.record_ui_lock_retry()`, `monitor.record_ui_lock_recovered()`, and `monitor.record_ui_lock_exhausted()` for UI-lock recovery observability.
