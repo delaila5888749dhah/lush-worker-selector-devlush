@@ -139,6 +139,17 @@ class ParseLineSkipMalformedTests(unittest.TestCase):
         finally:
             logging.getLogger("integration.task_loader").setLevel(logging.NOTSET)
 
+    def test_malformed_short_line_log_does_not_echo_raw_line(self):
+        short_line = "bad@example.com|100|4111111111111111"
+        path = self._write(short_line + "\n")
+        loader = FileTaskLoader(file_path=path)
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            task = loader.get_task("w1")
+        self.assertIsNone(task)
+        full_log = "\n".join(cm.output)
+        self.assertNotIn(short_line, full_log)
+        self.assertIn("malformed line", full_log)
+
 
 if __name__ == "__main__":
     unittest.main()

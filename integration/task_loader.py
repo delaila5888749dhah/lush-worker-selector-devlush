@@ -83,7 +83,10 @@ class FileTaskLoader:
     def _parse_line(self, line: str, line_no: int = 0) -> Optional[WorkerTask]:
         parts = line.split("|")
         if len(parts) < _PREFIX + _CARD_BLOCK:
-            _logger.warning("FileTaskLoader: malformed line %d: %r", line_no, line)
+            _logger.warning(
+                "FileTaskLoader: malformed line %d (expected at least %d fields, got %d)",
+                line_no, _PREFIX + _CARD_BLOCK, len(parts),
+            )
             return None
         recipient = parts[0].strip()
         try:

@@ -86,12 +86,24 @@ class PoolReloadTests(unittest.TestCase):
         billing_main.load_billing_pool()
         # Touch legacy deque via select_profile (no worker_id).
         billing_main.select_profile(None)
-        self.assertTrue(len(billing_main._profiles) > 0)
+        self.assertGreater(len(billing_main._profiles), 0)
 
         self._write_profiles("added.txt", _PROFILE_LINES[3:5])
         billing_main.request_pool_reload()
         # After reload, legacy deque has been rebuilt via eager load.
         self.assertEqual(len(billing_main._profiles), 5)
+
+    def test_reload_clears_reload_requested_flag_after_eager_reload(self):
+        self._write_profiles("seed.txt", _PROFILE_LINES[:3])
+        billing_main.load_billing_pool()
+
+        self._write_profiles("added.txt", _PROFILE_LINES[3:5])
+        billing_main.request_pool_reload()
+
+        self.assertFalse(
+            billing_main._reload_requested,
+            "eager reload should leave no pending legacy invalidation flag",
+        )
 
 
 if __name__ == "__main__":

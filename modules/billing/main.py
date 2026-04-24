@@ -167,22 +167,36 @@ def request_pool_reload() -> None:
     workers pick up the new files immediately.  Thread-safe.
     """
     global _profiles, _reload_requested, _MASTER_POOL, _MASTER_POOL_LOADED
-    # Flag the legacy path to invalidate its cache on the next select.
+    # Set the legacy invalidation flag first so any in-flight legacy caller
+    # sees a conservative "reload pending" signal until the eager reload has
+    # completed and the caches are fresh again.
     with _RELOAD_FLAG_LOCK:
         _reload_requested = True
-    # Clear per-worker shuffled caches first (outer lock).
+    # Clear per-worker shuffled caches first (outer lock), then the shared
+    # master pool, matching the get_worker_state() -> _ensure_master_pool_loaded()
+    # lock acquisition order (_WORKER_STATES_LOCK -> _MASTER_POOL_LOCK).
     with _WORKER_STATES_LOCK:
         _WORKER_STATES.clear()
-    # Clear master pool + legacy deque under their own locks.
-    with _MASTER_POOL_LOCK:
-        _logger.info("Billing pool reload requested; clearing caches")
-        _MASTER_POOL = []
-        _MASTER_POOL_LOADED = False
-    with _lock:
-        _profiles.clear()
-    # Eagerly re-read from disk so subsequent select_profile() calls see the
-    # fresh content without a lazy-load roundtrip.
-    load_billing_pool()
+        with _MASTER_POOL_LOCK:
+            _logger.info("Billing pool reload requested; clearing caches")
+            _MASTER_POOL = []
+            _MASTER_POOL_LOADED = False
+    # Clear the legacy deque under the same load-serialization lock used by
+    # the cold-start path so cache invalidation cannot race with a concurrent
+    # lazy load that repopulates _profiles from stale disk state.
+    with _LOAD_LOCK:
+        with _lock:
+            _profiles.clear()
+    try:
+        # Eagerly re-read from disk so subsequent select_profile() calls see
+        # the fresh content without a lazy-load roundtrip.
+        load_billing_pool()
+    finally:
+        # The eager reload has completed (or failed), so clear the legacy
+        # invalidation flag to avoid an unnecessary second cache flush on the
+        # next select_profile() call.
+        with _RELOAD_FLAG_LOCK:
+            _reload_requested = False
 
 
 def _normalize_zip(zip_code: str | int | None) -> str:

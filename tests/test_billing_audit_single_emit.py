@@ -148,16 +148,18 @@ class BillingAuditCycleSwapRetryTests(unittest.TestCase):
 
 
 class BillingAuditGrepAcceptanceTests(unittest.TestCase):
-    """Acceptance: the audit-emit call-site appears inside the
-    ``if _profile is None`` branch of ``run_payment_step`` (one site there) and
-    one additional site in ``run_cycle`` at the actual select_profile() call."""
+    """Acceptance: billing audit emit is centralized in one helper call-site."""
 
     def test_audit_call_sites_are_gated(self):
         import inspect
-        src = inspect.getsource(orchestrator.run_payment_step)
-        # Emit must live under the "else" of "if _profile is not None".
-        # Concretely: count occurrences — must be exactly 1 inside this fn.
-        self.assertEqual(src.count("_emit_billing_audit_event("), 1)
+        helper_src = inspect.getsource(orchestrator._select_profile_with_audit)
+        run_payment_src = inspect.getsource(orchestrator.run_payment_step)
+        run_cycle_src = inspect.getsource(orchestrator.run_cycle)
+        # Exactly one audited emit site exists in the helper.
+        self.assertEqual(helper_src.count("_emit_billing_audit_event("), 1)
+        # Callers reuse the helper instead of calling the emit directly.
+        self.assertNotIn("_emit_billing_audit_event(", run_payment_src)
+        self.assertNotIn("_emit_billing_audit_event(", run_cycle_src)
 
 
 if __name__ == "__main__":

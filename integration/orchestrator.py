@@ -968,6 +968,32 @@ def _emit_billing_audit_event(
         )
 
 
+def _select_profile_with_audit(
+    zip_code: str | int | None,
+    worker_id: str,
+    task_id: str | None,
+    *,
+    include_worker_id: bool,
+):
+    """Select a billing profile and emit the audit event exactly once.
+
+    This helper is the single call-site for ``_emit_billing_audit_event`` so
+    both ``run_cycle`` and direct ``run_payment_step(..., _profile=None)``
+    paths share the same "select -> emit" contract without duplicating logic.
+    """
+    if include_worker_id:
+        profile = billing.select_profile(zip_code, worker_id=worker_id)
+    else:
+        profile = billing.select_profile(zip_code)
+    _emit_billing_audit_event(
+        profile=profile,
+        worker_id=worker_id,
+        task_id=task_id,
+        zip_code=zip_code,
+    )
+    return profile
+
+
 def _validated_notify_total(worker_id: str, value: float) -> bool:
     """Validate *value* is finite and do a first-notify-wins call to watchdog.
 
@@ -1142,13 +1168,11 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         # billing.select_profile() trả về thành công..." — one audit event
         # per actual select_profile() call, not per run_payment_step() call.
     else:
-        profile = billing.select_profile(zip_code)
-        # Emit audit event AFTER successful selection — never before.
-        _emit_billing_audit_event(
-            profile=profile,
+        profile = _select_profile_with_audit(
+            zip_code,
             worker_id=worker_id,
             task_id=getattr(task, "task_id", None),
-            zip_code=zip_code,
+            include_worker_id=False,
         )
     driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
     if driver_obj is None:
@@ -1603,18 +1627,11 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
     if ctx.billing_profile is None:
         # Prefer zip_code from ctx if set, otherwise use the argument.
         effective_zip = ctx.zip_code if ctx.zip_code is not None else zip_code
-        ctx.billing_profile = billing.select_profile(
+        ctx.billing_profile = _select_profile_with_audit(
             effective_zip,
             worker_id=worker_id,
-        )
-        # Emit audit event exactly once per cycle — at the actual
-        # billing.select_profile() call-site.  Swap-card retries reuse
-        # ctx.billing_profile and must NOT re-emit (Blueprint §12 line 693).
-        _emit_billing_audit_event(
-            profile=ctx.billing_profile,
-            worker_id=worker_id,
             task_id=task_id,
-            zip_code=effective_zip,
+            include_worker_id=True,
         )
 
     try:
