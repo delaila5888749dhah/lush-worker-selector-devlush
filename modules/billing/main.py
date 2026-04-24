@@ -156,15 +156,33 @@ def _reset_state() -> None:
 
 
 def request_pool_reload() -> None:
-    """Signal that the profile cache should be invalidated on the next
-    select_profile() call. Thread-safe and idempotent.
+    """Trigger a full reload of the billing pool from disk.
 
-    Call this after adding new profiles to BILLING_POOL_DIR so that
-    workers pick up the new files after a circuit-breaker pause expires.
+    Clears *all* in-memory caches — ``_MASTER_POOL`` (used by the per-worker
+    sharded selection path), ``_WORKER_STATES`` (so each worker re-shuffles
+    from a fresh master on next access), and the legacy global deque — then
+    eagerly re-reads the pool directory.
+
+    Call this after adding new profiles to ``BILLING_POOL_DIR`` so that
+    workers pick up the new files immediately.  Thread-safe.
     """
-    global _reload_requested
+    global _profiles, _reload_requested, _MASTER_POOL, _MASTER_POOL_LOADED
+    # Flag the legacy path to invalidate its cache on the next select.
     with _RELOAD_FLAG_LOCK:
         _reload_requested = True
+    # Clear per-worker shuffled caches first (outer lock).
+    with _WORKER_STATES_LOCK:
+        _WORKER_STATES.clear()
+    # Clear master pool + legacy deque under their own locks.
+    with _MASTER_POOL_LOCK:
+        _logger.info("Billing pool reload requested; clearing caches")
+        _MASTER_POOL = []
+        _MASTER_POOL_LOADED = False
+    with _lock:
+        _profiles.clear()
+    # Eagerly re-read from disk so subsequent select_profile() calls see the
+    # fresh content without a lazy-load roundtrip.
+    load_billing_pool()
 
 
 def _normalize_zip(zip_code: str | int | None) -> str:
