@@ -1,17 +1,17 @@
 # Blueprint Coverage Report
 
-Generated: 2026-04-23T16:33:14+00:00
+Generated: 2026-04-24T03:48:07+00:00
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
 | Total contracts | 97 |
-| Passed | 97 |
-| Failed | 0 |
+| Passed | 96 |
+| Failed | 1 |
 | Errors | 0 |
 | Skipped / Pending | 0 |
-| Coverage | 100% |
+| Coverage | 99% |
 
 ## Per-Section Summary
 
@@ -24,7 +24,7 @@ Generated: 2026-04-23T16:33:14+00:00
 | §5 | Bơm Dữ Liệu Thanh Toán | 12 | 12 | 0 |
 | §6 | Gatekeeper & Xử Lý Ngoại Lệ | 16 | 16 | 0 |
 | §7 | Rút Lui & Xoay Vòng | 3 | 3 | 0 |
-| §8 | Phase 10 Behavior Layer | 12 | 12 | 0 |
+| §8 | Phase 10 Behavior Layer | 12 | 11 | 1 |
 | §9 | Anti-Detect Layer 2 Tầng | 7 | 7 | 0 |
 | §10 | Day/Night Behavior Simulation | 7 | 7 | 0 |
 | §12 | Billing Selection Audit Event | 6 | 6 | 0 |
@@ -123,7 +123,7 @@ Generated: 2026-04-23T16:33:14+00:00
 | INV-BEHAVIOR-06 | MAJOR | 8 | Seeded reproducibility (§8.6): `rnd = random.Random(seed)` — each worker has its… | PASS | block_merge |
 | INV-DELAY-03 | CRITICAL | 8 | Wrapper try/finally cleanup (§8.1/8.7): `modules/delay/wrapper.py::_wrapped()` a… | PASS | block_merge |
 | INV-BEHAVIOR-07 | CRITICAL | 8 | Non-interference (§8.7): behavior layer does not change outcome — FSM flow is un… | PASS | block_merge |
-| INV-BEHAVIOR-08 | MAJOR | 8 | Phase 9 alignment (§8.8): behavior layer respects SAFE_POINT (§8.4) and CRITICAL… | PASS | block_merge |
+| INV-BEHAVIOR-08 | MAJOR | 8 | Phase 9 alignment (§8.8): behavior layer respects SAFE_POINT (§8.4) and CRITICAL… | FAIL | block_merge |
 | INV-BEHAVIOR-09 | MAJOR | 8 | Performance constraint (§8.6): behavior layer overhead ≤ 15% versus a baseline c… | PASS | block_merge |
 | INV-ANTIDETECT-01 | CRITICAL | 9 | Tầng 1 proxy: static SOCKS5/HTTP proxy is mapped 1-to-1 with each BitBrowser pro… | PASS | warn |
 | INV-ANTIDETECT-02 | CRITICAL | 9 | Tầng 1 CDP input: all keyboard and mouse input is dispatched via `Input.dispatch… | PASS | block_merge |
@@ -133,3 +133,12 @@ Generated: 2026-04-23T16:33:14+00:00
 | INV-ANTIDETECT-06 | MAJOR | 9 | Tầng 2 burst typing + hesitation: the biometric burst pattern combines fast grou… | PASS | block_merge |
 | INV-ANTIDETECT-07 | MAJOR | 9 | Tầng 2 non-interference: biometric/temporal layer NEVER breaks Tầng 1 (environme… | PASS | block_merge |
 | INV-META-01 | CRITICAL | 99 | Pull requests modifying any file listed in spec/audit-lock.md "CHANGE POLICY (Po… | PASS | block_merge |
+
+## Failed Contracts Requiring Attention
+
+### INV-BEHAVIOR-08 (FAIL)
+
+- **Priority:** MAJOR
+- **Severity:** block_merge
+- **Rule:** Phase 9 alignment (§8.8): behavior layer respects SAFE_POINT (§8.4) and CRITICAL_SECTION (§8.3) boundaries and does not operate outside the permitted scope.
+- **Detail:** tests/test_runtime_behavior_integration.py::TestCriticalSectionRespected::test_critical_section_no_delay [FAIL]: tests/test_runtime_behavior_integration.py::TestCriticalSectionRespected::test_critical_section_no_delay [FAIL]: AssertionError: 'worker-1' not found in []
