@@ -186,6 +186,34 @@ class TestRandomGreeting(unittest.TestCase):
     def test_random_greeting_returns_member(self):
         self.assertIn(drv._random_greeting(), drv._GREETINGS)
 
+    def test_greeting_deterministic_per_persona_seed(self):
+        """Two RNGs with the same persona seed must produce the same greeting sequence."""
+        import random
+        rnd_a = random.Random(42)
+        rnd_b = random.Random(42)
+        seq_a = [drv._random_greeting(rnd_a) for _ in range(10)]
+        seq_b = [drv._random_greeting(rnd_b) for _ in range(10)]
+        self.assertEqual(seq_a, seq_b)
+
+    def test_greeting_no_persona_falls_back_to_secrets(self):
+        """When no RNG is supplied, _random_greeting falls back to secrets.choice."""
+        from unittest.mock import patch
+        with patch("modules.cdp.driver.secrets.choice",
+                   return_value="Happy Birthday!") as mock_choice:
+            result = drv._random_greeting()
+        mock_choice.assert_called_once_with(drv._GREETINGS)
+        self.assertEqual(result, "Happy Birthday!")
+
+    def test_greeting_stability_across_cycles(self):
+        """Repeated draws from a seeded RNG cover the greeting set roughly uniformly."""
+        import random
+        rnd = random.Random(99)
+        seen = {drv._random_greeting(rnd) for _ in range(500)}
+        # With 500 draws over ~13 greetings, we expect to see at least half
+        # the distinct messages.  (Loose bound — guards against accidental
+        # constant returns or off-by-one.)
+        self.assertGreaterEqual(len(seen), max(2, len(drv._GREETINGS) // 2))
+
 
 class TestFillEgiftForm(unittest.TestCase):
     """fill_egift_form types the correct value into each eGift field."""
@@ -1086,6 +1114,47 @@ class TestMaxMindGeoLookup(unittest.TestCase):
             mock_datetime.now.return_value = fixed_now
             offset = drv._lookup_maxmind_utc_offset("8.8.8.8")  # pylint: disable=protected-access
         self.assertEqual(offset, -5)
+
+    def test_lookup_maxmind_utc_offset_preserves_fractional_hours(self):
+        """Half-hour timezones must not be truncated to whole hours."""
+        fake_record = MagicMock()
+        fake_record.location.time_zone = "Asia/Kolkata"
+        fixed_now = datetime.datetime(
+            2026,
+            1,
+            15,
+            12,
+            0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)),
+        )
+
+        class FakeReader:
+            """Fake geoip2 Reader for test isolation."""
+
+            def __init__(self, _path):
+                self._path = _path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            @staticmethod
+            def city(_ip):
+                return fake_record
+
+        fake_database_module = types.SimpleNamespace(Reader=FakeReader)
+        fake_geoip2_module = types.SimpleNamespace(database=fake_database_module)
+        with patch("modules.cdp.driver.os.path.exists", return_value=True), \
+             patch("modules.cdp.driver.datetime.datetime") as mock_datetime, \
+             patch.dict(
+                 "sys.modules",
+                 {"geoip2": fake_geoip2_module, "geoip2.database": fake_database_module},
+             ):
+            mock_datetime.now.return_value = fixed_now
+            offset = drv._lookup_maxmind_utc_offset("8.8.8.8")  # pylint: disable=protected-access
+        self.assertEqual(offset, 5.5)
 
     def test_lookup_maxmind_utc_offset_returns_none_when_db_missing(self):
         """GEOIP_DB_PATH not set and file absent returns None gracefully."""

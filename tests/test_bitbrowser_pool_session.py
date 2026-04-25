@@ -311,15 +311,15 @@ class TestPoolClientFactoryWarnings(unittest.TestCase):
             {
                 "BITBROWSER_API_KEY": "k",
                 "BITBROWSER_POOL_MODE": "1",
-                "BITBROWSER_PROFILE_IDS": "a,b",
-                "WORKER_COUNT": "4",
+                "BITBROWSER_PROFILE_IDS": "a,b,c",
+                "WORKER_COUNT": "2",
             },
             clear=False,
         ):
             with self.assertLogs("modules.cdp.fingerprint", level="WARNING") as cm:
                 client = get_bitbrowser_client()
         self.assertIsInstance(client, BitBrowserPoolClient)
-        # len(pool)=2 < WORKER_COUNT*2=8 ⇒ warning must mention pool size.
+        # len(pool)=3 ≥ WORKER_COUNT=2 (no raise) but < 2×WORKER_COUNT=4 ⇒ warn.
         self.assertTrue(
             any(
                 "pool" in msg.lower() and ("worker" in msg.lower() or "2x" in msg.lower())

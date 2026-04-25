@@ -41,16 +41,22 @@ _in_critical_section = True                    → is_critical_context() = True
 
 ### INV-DELAY-03 — Wrapper try/finally Cleanup (Fixed: BUG-001)
 ```
-modules/delay/wrapper.py — _wrapped() always calls engine.reset_step_accumulator()
-and sm.reset() in a finally block, even when task_fn() raises an exception.
+modules/delay/wrapper.py — _wrapped() always calls engine.reset_step_accumulator(),
+temporal.reset_drift(), and sm.reset() in a finally block, even when task_fn()
+raises an exception.
 
 Both injection points are protected:
   - Injection point 1 (typing): inject_step_delay() is inside the try block so
     cleanup runs on exception or interruption from the delay call itself.
-  - Injection point 2 (thinking): wrapped in its own try/finally so accumulator
-    and SM are reset even if the post-success thinking delay raises.
+  - Injection point 2 (thinking): wrapped in its own try/finally so accumulator,
+    drift envelope, and SM are reset even if the post-success thinking delay
+    raises.
 ```
-**Rule:** The `BehaviorStateMachine` for a worker must always return to `IDLE` after each cycle invocation. The `try/finally` pattern in `wrap()` is the enforcing mechanism for both injection points.
+**Rule:** The `BehaviorStateMachine` for a worker must always return to `IDLE`
+after each cycle invocation. The `try/finally` pattern in `wrap()` is the
+enforcing mechanism for both injection points. The gradual drift envelope
+(Phase 5B Task 3) is also reset at every cycle boundary so each new cycle starts
+from a neutral multiplier of 1.0.
 
 ---
 
@@ -60,12 +66,26 @@ modules/delay/temporal.py — apply_temporal_modifier():
   base_delay <= 0          → returns 0.0 immediately (no-op guard)
   any action_type, NIGHT   → return value ∈ [0.0, MAX_*_DELAY]
   any action_type, DAY     → return value ∈ [0.0, MAX_*_DELAY]
+  action_type ∈ {"typing","thinking"} and ENABLE_GRADUAL_DRIFT
+                           → AR(1) gradual drift multiplier applied
+                             (clamped to [0.70, 1.30] of base, Blueprint §10)
 
 modules/delay/temporal.py — apply_micro_variation():
   result = max(0.0, base_delay * uniform(0.90, 1.10))
   → result is always non-negative
 ```
-**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator.
+
+modules/delay/temporal.py — apply_gradual_drift():
+  AR(1): new = 0.98 * old + 0.02 * 1.0 + N(0, 0.02), clamped to ±30%.
+  reset_drift() restores multiplier=1.0, step_count=0.
+
+**Rule:** Temporal modifier output must be non-negative and bounded by the
+relevant MAX constant for the action type. `apply_temporal_modifier` guards
+against non-positive inputs and clamps all outputs to `[0.0, MAX]`.
+`apply_micro_variation` clamps its result to 0.0 minimum to prevent any
+negative value propagating to the accumulator. `apply_gradual_drift` keeps
+the slow-varying envelope inside ±30% so realistic cycle-to-cycle pacing
+never breaches the per-action MAX clamp.
 
 ---
 ```
@@ -281,7 +301,7 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | ME-002 | MEDIUM | `integration/runtime.py` | Timezone-less log timestamps replaced with `datetime.now(timezone.utc).isoformat(timespec="seconds")`. |
 | ME-003 | MEDIUM | `modules/billing/main.py` | `_find_matching_index()` missing lock contract docstring added — documents that caller must hold `_lock`. |
 | ME-004 | MEDIUM | `integration/orchestrator.py` | `_FSM_STATES` duplicate eliminated — now imported directly from `modules.fsm.main.ALLOWED_STATES` to prevent drift (see INV-FSM-01). |
-| AF-001 | MEDIUM | `integration/orchestrator.py` | Phase 3A Task 2 — `run_payment_step` split into Phase A (preflight `wait_for_total` BEFORE fill, raises on timeout per INV-PAYMENT-01) / Phase B (fill + `mark_submitted` + `submit_purchase`) / Phase C (post-submit `wait_for_total`, swallows timeout → marks task unconfirmed). Reconciles `spec/contracts/section5_payment.yaml` ordering. |
+| PH4-H3  | MEDIUM | `integration/orchestrator.py` | `handle_outcome()` will record per-branch fork counters via `monitor.record_fork()` for success / declined / vbv_cancelled / vbv_3ds / ui_lock / abort_cycle (Phase 4 audit [H3]). Sink added in this PR; orchestrator wiring in follow-up PR. Observability only — no FSM behaviour change. |
 
 ### Phase 6 — Data Layer Audit (2026-04-24)
 
@@ -320,13 +340,24 @@ modules/cdp/fingerprint.py — BitBrowserPoolClient
   acquire_profile() → str (sequential, thread-safe)
   release_profile(profile_id) → None (best-effort close, always clears BUSY)
   randomize_fingerprint(profile_id) → POST /browser/update/partial
+    HTTPError 404 → _evict_profile(profile_id) → raise RuntimeError
   launch_profile(profile_id) → dict (POST /browser/open)
-  _evict_profile(profile_id) → pool removal on 404
+    HTTPError 404 → _evict_profile(profile_id) → re-raise HTTPError
+  _evict_profile(profile_id) → pool removal on 404; rewinds cursor
+    (decrements when cursor was strictly past the removed index, else
+    clamps back to 0 when the cursor would fall off the end)
+  __init__ validation:
+    • strips + filters empty/whitespace-only profile IDs before dedupe
+    • dedupes profile_ids, emits WARNING per duplicate
+    • raises ValueError when the sanitised pool is empty
+    • raises RuntimeError when len(pool) < WORKER_COUNT
+    • emits WARNING when len(pool) < 2 × WORKER_COUNT
+    • migration note: deployments with pool < WORKER_COUNT now fail fast
+      at startup until BITBROWSER_PROFILE_IDS is expanded
   get_bitbrowser_client() factory branches on BITBROWSER_POOL_MODE:
-    "1"/"true"/"yes" → BitBrowserPoolClient (requires BITBROWSER_PROFILE_IDS)
+    "1"/"true"/"yes" → BitBrowserPoolClient (requires BITBROWSER_PROFILE_IDS;
+                       dedupe + size guards enforced by __init__)
     otherwise        → legacy BitBrowserClient (unchanged behaviour)
-  get_bitbrowser_client() dedupes BITBROWSER_PROFILE_IDS (warns) and warns
-    when len(pool) < 2 × WORKER_COUNT.
 
 modules/cdp/fingerprint.py — BitBrowserSession (INV-POOL-INT, Phase 2)
   __init__: detects pool capability via isinstance(client, BitBrowserPoolClient)

@@ -250,7 +250,25 @@ _network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
 # Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
 # Protected by _network_listener_lock.
 _notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptable-object
+# CDP Network.responseReceived URL filter (Phase 3 audit [F2]).
+# Listed in priority of specificity.  A substring match against the request
+# URL is sufficient to trigger the pricing-total notification path.
+#
+# NOTE: ``cws4.0`` is retained as a **broad fallback** only — it matches
+# every XHR served from the Givex payment domain (including static assets
+# and telemetry), so when it is the sole matching pattern we emit a
+# WARNING so inflated callback rates surface in observability.
+#
+# TODO(phase-4-[F2]): after live DevTools inspection of the Givex checkout
+# page, replace ``cws4.0`` with the exact pricing endpoint path (e.g.
+# ``/cws4.0/lushusa/api/checkout/`` or similar) and drop the fallback
+# warning branch.  See docs/audit/addendum-cdp-url-patterns.md.
 _CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
+# Narrower "precise" subset — any one of these uniquely identifies a
+# pricing endpoint.  If a URL matches only the broad ``cws4.0`` fallback
+# but none of these, the response listener logs a WARNING so operators
+# can see that the broad pattern is driving the notify call.
+_CDP_NETWORK_URL_PATTERNS_PRECISE = ("/checkout/total", "/api/tax", "/api/checkout")
 
 # NOTE on _active_cdp_requests:
 # This counter reflects orchestration-level tracking only.
@@ -1071,6 +1089,16 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                     url = str(response.get("url", ""))
                     if not any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
                         return
+                    # Phase 4 audit [F2]: warn when only the broad ``cws4.0``
+                    # fallback matches so inflated callback rates surface in
+                    # observability.  Remove once the precise pricing
+                    # endpoint is confirmed (see _CDP_NETWORK_URL_PATTERNS).
+                    if not any(p in url for p in _CDP_NETWORK_URL_PATTERNS_PRECISE):
+                        _logger.warning(
+                            "[trace=%s] CDP URL matched only broad cws4.0 fallback "
+                            "(non-precise); worker=%s url=%s",
+                            _get_trace_id(), worker_id, url,
+                        )
 
                     request_id = params.get("requestId")
                     body_parsed = False
@@ -1509,6 +1537,19 @@ def refill_after_vbv_reload(driver, ctx, new_card) -> None:
         _logger.warning("refill_after_vbv_reload failed: %s", _sanitize_error(exc))
 
 
+def _record_fork_safe(branch: str) -> None:
+    """Increment the monitor fork counter for *branch*, never propagating errors.
+
+    Observability must never destabilise the FSM — any exception raised by
+    the monitor sink (e.g. lock contention issue, import-time bug) is
+    swallowed after a DEBUG log (Phase 4 audit [H3]).
+    """
+    try:
+        monitor.record_fork(branch)
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.debug("monitor.record_fork(%s) failed", branch, exc_info=True)
+
+
 def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     """Determine the next action based on the current FSM state.
 
@@ -1531,12 +1572,14 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        _record_fork_safe("success")
         return "complete"
     if state.name in ("declined", "vbv_cancelled"):
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        _record_fork_safe(state.name)
         try:
             _alerting.send_alert(
                 f"Card declined: worker={worker_id} state={state.name}"
@@ -1547,6 +1590,7 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             return "retry_new_card" if order_queue else "retry"
         next_card = _ctx_next_swap_card(ctx)
         if next_card is None:
+            _record_fork_safe("abort_cycle")
             return "abort_cycle"
         ctx.swap_count += 1
         if state.name == "vbv_cancelled":
@@ -1574,12 +1618,14 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        _record_fork_safe("ui_lock")
         return "retry"
     if state.name == "vbv_3ds":
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
         )
+        _record_fork_safe("vbv_3ds")
         try:
             driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
             result = driver.handle_vbv_challenge()

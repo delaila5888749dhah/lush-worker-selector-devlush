@@ -38,6 +38,22 @@ _ui_lock_exhausted_count = 0
 # is added, preserving the spec/interface.md contract — A4).
 _vbv_detections = 0
 
+# Per-branch FSM outcome counters — one for each Blueprint §6 fork branch.
+# Incremented by :func:`record_fork` which is called from
+# ``integration.orchestrator.handle_outcome`` after each branch decision.
+# Exposed via :func:`get_fork_metrics` and merged into :func:`get_metrics`
+# (Phase 4 audit [H3]).  Protected by a dedicated lock so that fork metric
+# updates never serialize behind the main ``_lock``.
+_fork_counters: dict[str, int] = {
+    "fork_success": 0,
+    "fork_declined": 0,
+    "fork_vbv_3ds": 0,
+    "fork_vbv_cancelled": 0,
+    "fork_ui_lock": 0,
+    "fork_abort_cycle": 0,
+}
+_fork_counters_lock = threading.Lock()
+
 # Snapshot of metrics from the previous rollout step (used for delta checks)
 _baseline_success_rate = None
 
@@ -125,6 +141,30 @@ def record_ui_lock_exhausted() -> None:
     global _ui_lock_exhausted_count
     with _lock:
         _ui_lock_exhausted_count += 1
+
+
+def record_fork(branch: str) -> None:
+    """Increment the counter for an FSM fork branch outcome.
+
+    Args:
+        branch: One of ``success``, ``declined``, ``vbv_3ds``,
+            ``vbv_cancelled``, ``ui_lock`` or ``abort_cycle``.  Unknown
+            branches are logged as warnings and not counted so typos surface
+            in observability instead of silently inflating a neighbouring
+            counter (Phase 4 audit [H3]).
+    """
+    key = f"fork_{branch}"
+    with _fork_counters_lock:
+        if key in _fork_counters:
+            _fork_counters[key] += 1
+        else:
+            _logger.warning("record_fork: unknown branch: %s", branch)
+
+
+def get_fork_metrics() -> dict:
+    """Return a snapshot of all per-branch FSM fork counters."""
+    with _fork_counters_lock:
+        return dict(_fork_counters)
 
 
 def get_success_rate():
@@ -256,7 +296,7 @@ def get_metrics():
         cutoff = time.time() - 3600
         restarts_hour = sum(1 for ts in _restart_timestamps if ts >= cutoff)
         baseline = _baseline_success_rate
-        return {
+        metrics = {
             "success_count": success_count,
             "error_count": error_count,
             "success_rate": success_rate,
@@ -271,6 +311,10 @@ def get_metrics():
             "ui_lock_exhausted_count": _ui_lock_exhausted_count,
             "vbv_detections": _vbv_detections,
         }
+    # Merge per-branch fork counters under a separate lock so fork metric
+    # updates never contend with the main metrics lock (Phase 4 audit [H3]).
+    metrics.update(get_fork_metrics())
+    return metrics
 
 
 def check_rollback_needed():
@@ -334,6 +378,9 @@ def reset():
         _ui_lock_retry_count = 0
         _ui_lock_recovered_count = 0
         _ui_lock_exhausted_count = 0
+    with _fork_counters_lock:
+        for key in _fork_counters:
+            _fork_counters[key] = 0
 
 
 class TransientMonitor:

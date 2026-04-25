@@ -305,7 +305,33 @@ SEL_CONFIRMATION_EL = ".order-confirmation, .confirmation-message"
 SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
-SEL_VBV_CANCEL_BTN  = "button[id*='cancel'], a[id*='cancel'], button[id*='return'], a[id*='return']"
+# VBV/3DS cancel button selectors in priority order (Phase 4 audit [D6]).
+# Evaluated one-by-one via :meth:`GivexDriver._find_vbv_cancel_button`; first
+# match wins so higher-priority selectors (explicit Cancel / Return-to-Merchant)
+# are preferred over generic close / X-icon fallbacks.  CSS comma-lists return
+# the first DOM-order match and cannot express priority — hence the tuple.
+SEL_VBV_CANCEL_BUTTONS = (
+    # Priority 1: explicit Cancel
+    "button[id*='cancel' i]",
+    "a[id*='cancel' i]",
+    "button[aria-label*='cancel' i]",
+    # Priority 2: Return to Merchant
+    "button[id*='return' i]",
+    "a[id*='return' i]",
+    "button[aria-label*='return' i]",
+    # Priority 3: generic Close / X
+    "button[aria-label*='close' i]",
+    "button.close",
+    ".modal-close",
+    "[role='button'][aria-label*='close' i]",
+    # Priority 4: icon-based X / dismiss
+    "button > svg[class*='close']",
+    "[class*='icon-close']",
+    "[data-dismiss='modal']",
+)
+# Backward-compat alias — legacy code still reads a comma-joined CSS string.
+# New code should prefer :data:`SEL_VBV_CANCEL_BUTTONS` + the helper.
+SEL_VBV_CANCEL_BTN  = ", ".join(SEL_VBV_CANCEL_BUTTONS)
 SEL_POPUP_CLOSE_BTN = "button.modal-close, button[aria-label='Close'], .modal button[type='button']"
 SEL_POPUP_SOMETHING_WRONG = ".modal, .popup, .dialog, .alert, .error-modal"
 # P1-1: XPath text-match for "Something went wrong" popup — avoids false
@@ -405,12 +431,26 @@ _GREETINGS = [
     "Thank you for being you",
 ]
 
-def _random_greeting() -> str:
-    """Return a random greeting message for the eGift form."""
+def _random_greeting(rnd=None) -> str:
+    """Return a greeting message for the eGift form.
+
+    When *rnd* is provided (typically the persona-seeded
+    ``random.Random`` from a :class:`GivexDriver`), the choice is
+    deterministic per persona seed — preserving Blueprint §8 consistency.
+    Falls back to ``secrets.choice`` for callers that have no persona
+    RNG (tests, ad-hoc usage); the cryptographic fallback never crashes.
+    """
+    if rnd is not None:
+        try:
+            return rnd.choice(_GREETINGS)
+        except Exception as exc:  # pylint: disable=broad-except
+            # Defensive fallback: anything goes wrong with the persona
+            # RNG, fall back to secrets so the form fill never fails.
+            _log.debug("_random_greeting: persona RNG failed (%s); using secrets fallback", exc)
     return secrets.choice(_GREETINGS)
 
 
-def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
+def _lookup_maxmind_utc_offset(ip_addr: str) -> float | None:
     """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb.
 
     Uses the module-level singleton reader when available (initialised via
@@ -439,7 +479,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
                     offset = now.utcoffset()
                     if offset is None:
                         return None
-                    return int(offset.total_seconds() // 3600)
+                    return offset.total_seconds() / 3600.0
         except Exception as exc:  # pylint: disable=broad-except
             _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
         return None
@@ -453,7 +493,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
             offset = now.utcoffset()
             if offset is None:
                 return None
-            return int(offset.total_seconds() // 3600)
+            return offset.total_seconds() / 3600.0
     except Exception as exc:  # pylint: disable=broad-except
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None
@@ -690,11 +730,15 @@ def handle_ui_lock_focus_shift(driver) -> bool:
     """Focus-Shift Retry per Blueprint §6 Ngã rẽ 1.
 
     Steps:
-      1. Click ``SEL_NEUTRAL_DIV`` (``body``) to shift focus away from the
-         locked submit button.
-      2. Wait 0.5s to let any animation settle.
-      3. Re-locate ``SEL_COMPLETE_PURCHASE`` and click it once via
-         ``ActionChains.click``.
+      1. Click ``SEL_NEUTRAL_DIV`` (``body``) via CDP to shift focus away
+         from the locked submit button.
+      2. Wait 0.5s to let any onBlur animation settle.
+      3. Re-click ``SEL_COMPLETE_PURCHASE`` via CDP.
+
+    Both clicks are dispatched through :meth:`GivexDriver.bounding_box_click`
+    (CDP ``Input.dispatchMouseEvent`` with ``isTrusted=True``) instead of
+    Selenium ``ActionChains`` — the latter emits ``isTrusted=False`` and is
+    an anti-bot fingerprint (Phase 4 audit [B2]).
 
     This helper executes **exactly once** per invocation and never retries
     internally — the caller is responsible for enforcing the one-retry-per-
@@ -702,21 +746,35 @@ def handle_ui_lock_focus_shift(driver) -> bool:
     ``False`` on any exception (already logged).
 
     Args:
-        driver: Selenium-compatible driver.
+        driver: A :class:`GivexDriver` or any object exposing a
+            ``bounding_box_click(selector)`` method.  A raw Selenium driver
+            is also accepted for backward compatibility; in that case the
+            call is rejected with a warning because only CDP clicks are
+            permitted in the Fork-1 retry path.
     """
-    if _ActionChains is None:  # pragma: no cover - selenium always present in prod
-        _log.warning("handle_ui_lock_focus_shift: ActionChains unavailable")
+    bbox_click = getattr(driver, "bounding_box_click", None)
+    if not callable(bbox_click):  # pragma: no cover - defensive
+        _log.warning(
+            "handle_ui_lock_focus_shift: driver has no bounding_box_click; "
+            "Fork-1 retry requires a GivexDriver-compatible wrapper"
+        )
         return False
+    # Step 1: click neutral region (body) via CDP to shift focus.
     try:
-        neutral = driver.find_element("css selector", SEL_NEUTRAL_DIV)
-        _ActionChains(driver).move_to_element(neutral).click().perform()
-        time.sleep(0.5)
-        btn = driver.find_element("css selector", SEL_COMPLETE_PURCHASE)
-        _ActionChains(driver).move_to_element(btn).click().perform()
-        return True
+        bbox_click(SEL_NEUTRAL_DIV)
     except Exception as exc:  # pylint: disable=broad-except
-        _log.warning("focus_shift_retry failed: %s", exc)
+        _log.warning("UI lock neutral-click failed: %s", exc)
         return False
+
+    time.sleep(0.5)  # settle onBlur
+
+    # Step 2: re-click Complete Purchase via CDP (not ActionChains).
+    try:
+        bbox_click(SEL_COMPLETE_PURCHASE)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("UI lock re-click failed: %s", exc)
+        return False
+    return True
 
 
 def vbv_dynamic_wait(rng: _random.Random | None = None) -> float:
@@ -1214,6 +1272,28 @@ class GivexDriver:
             else None
         )
 
+    def _find_vbv_cancel_button(self):
+        """Locate a VBV/3DS cancel button using priority-ordered selectors.
+
+        Iterates :data:`SEL_VBV_CANCEL_BUTTONS` in order and returns the first
+        selector whose ``find_elements`` query is non-empty.  Returns
+        ``(element, selector)`` on success, or ``(None, None)`` when no
+        candidate matches (Phase 4 audit [D6]).
+
+        Note: this queries the *current* document/frame context — the caller
+        is responsible for having switched into the VBV iframe beforehand if
+        the cancel button lives there.
+        """
+        for sel in SEL_VBV_CANCEL_BUTTONS:
+            try:
+                elements = self.find_elements(sel)
+            except Exception:  # pylint: disable=broad-except
+                continue
+            if elements:
+                _log.debug("VBV cancel matched selector: %s", sel)
+                return elements[0], sel
+        return None, None
+
     def handle_vbv_challenge(self) -> str:
         """Cancel VBV/3DS iframe challenge (Blueprint §6 Fork 3).
 
@@ -1225,7 +1305,23 @@ class GivexDriver:
         """
         try:
             vbv_dynamic_wait(rng=self._get_rng())
-            cdp_click_iframe_element(self, SEL_VBV_IFRAME, SEL_VBV_CANCEL_BTN, rng=self._get_rng())
+            # Phase 4 audit [D6]: iterate SEL_VBV_CANCEL_BUTTONS in priority
+            # order (Cancel → Return → Close → X-icon).  First selector whose
+            # CDP click succeeds wins; remaining selectors are not attempted.
+            last_exc: Exception | None = None
+            for sel in SEL_VBV_CANCEL_BUTTONS:
+                try:
+                    cdp_click_iframe_element(
+                        self, SEL_VBV_IFRAME, sel, rng=self._get_rng(),
+                    )
+                    _log.debug("VBV cancel clicked via selector: %s", sel)
+                    break
+                except (NoSuchElementException, StaleElementReferenceException) as exc:
+                    last_exc = exc
+                    continue
+            else:
+                if last_exc is not None:
+                    raise last_exc
             handle_something_wrong_popup(self)
             return "cancelled"
         except (NoSuchElementException, StaleElementReferenceException) as exc:
@@ -1781,7 +1877,7 @@ class GivexDriver:
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         self._realistic_type_field(
-            SEL_GREETING_MSG, _random_greeting(), field_kind="text",
+            SEL_GREETING_MSG, _random_greeting(self._rnd), field_kind="text",
         )
         self._realistic_type_field(
             SEL_AMOUNT_INPUT, str(task.amount),

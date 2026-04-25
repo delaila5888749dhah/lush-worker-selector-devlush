@@ -494,6 +494,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
         worker_id="worker-1",
         mock_ip="1.2.3.4",
         mock_zip="10001",
+        mock_offset=-8.0,
         task=None,
     ):
         """Run task_fn with a mock task_source and return the mock run_cycle."""
@@ -525,39 +526,56 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
                 "integration.worker_task.maxmind_lookup_zip",
                 return_value=mock_zip,
             ),
+            patch(
+                "integration.worker_task._lookup_maxmind_utc_offset",
+                return_value=mock_offset,
+            ),
+            patch("integration.worker_task.set_utc_offset") as mock_set_utc_offset,
             patch("integration.orchestrator.run_cycle", return_value=("complete", None, None)) as mock_run_cycle,
         ):
             from integration.worker_task import make_task_fn
             make_task_fn(task_source=mock_task_source)(worker_id)
-        return mock_run_cycle, mock_task_source, mock_cdp
+        return mock_run_cycle, mock_task_source, mock_cdp, mock_set_utc_offset
 
     def test_run_cycle_called_with_resolved_zip(self):
         """run_cycle receives the zip resolved by MaxMind."""
-        mock_run_cycle, _, _ = self._run(mock_zip="10001")
+        mock_run_cycle, _, _, _ = self._run(mock_zip="10001")
         mock_run_cycle.assert_called_once()
         _, kwargs = mock_run_cycle.call_args
         self.assertEqual(kwargs.get("zip_code"), "10001")
 
     def test_run_cycle_called_with_none_zip_when_maxmind_unavailable(self):
         """run_cycle receives zip_code=None when MaxMind cannot resolve a zip."""
-        mock_run_cycle, _, _ = self._run(mock_zip=None)
+        mock_run_cycle, _, _, _ = self._run(mock_zip=None)
         mock_run_cycle.assert_called_once()
         _, kwargs = mock_run_cycle.call_args
         self.assertIsNone(kwargs.get("zip_code"))
 
     def test_run_cycle_called_with_none_zip_when_ip_unavailable(self):
         """run_cycle receives zip_code=None when the public IP cannot be detected."""
-        mock_run_cycle, _, _ = self._run(mock_ip=None, mock_zip=None)
+        mock_run_cycle, _, _, _ = self._run(mock_ip=None, mock_zip=None)
         mock_run_cycle.assert_called_once()
         _, kwargs = mock_run_cycle.call_args
         self.assertIsNone(kwargs.get("zip_code"))
 
     def test_run_cycle_receives_correct_worker_id(self):
         """run_cycle is called with the same worker_id as task_fn."""
-        mock_run_cycle, _, _ = self._run(worker_id="worker-42", mock_zip="90210")
+        mock_run_cycle, _, _, _ = self._run(worker_id="worker-42", mock_zip="90210")
         mock_run_cycle.assert_called_once()
         _, kwargs = mock_run_cycle.call_args
         self.assertEqual(kwargs.get("worker_id"), "worker-42")
+
+    def test_run_cycle_ctx_receives_fractional_utc_offset(self):
+        """CycleContext carries the exact MaxMind offset through to run_cycle."""
+        mock_run_cycle, _, _, _ = self._run(mock_offset=5.5)
+        _, kwargs = mock_run_cycle.call_args
+        self.assertEqual(kwargs["ctx"].utc_offset_hours, 5.5)
+
+    def test_set_utc_offset_called_with_fractional_value(self):
+        """Temporal ContextVar receives the exact MaxMind offset."""
+        mock_run_cycle, _, _, mock_set_utc_offset = self._run(mock_offset=-3.5)
+        mock_set_utc_offset.assert_called_once_with(-3.5)
+        mock_run_cycle.assert_called_once()
 
     def test_run_cycle_not_called_when_task_source_returns_none(self):
         """run_cycle is skipped if task_source returns None (no pending task)."""
@@ -661,7 +679,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
 
     def test_task_source_called_with_worker_id(self):
         """task_source is invoked with the worker_id to retrieve the task."""
-        _, mock_task_source, _ = self._run(worker_id="worker-99")
+        _, mock_task_source, _, _ = self._run(worker_id="worker-99")
         mock_task_source.assert_called_once_with("worker-99")
 
     def test_maxmind_lookup_zip_receives_detected_ip_address(self):

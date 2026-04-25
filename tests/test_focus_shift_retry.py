@@ -1,4 +1,12 @@
-"""Tests for handle_ui_lock_focus_shift (C6 — Blueprint §6 Ngã rẽ 1)."""
+"""Tests for handle_ui_lock_focus_shift (Phase 4 audit [B2] — CDP path).
+
+The focus-shift retry now dispatches both clicks (neutral div + re-click on
+Complete Purchase) through ``GivexDriver.bounding_box_click`` so that the
+events carry ``isTrusted=True`` and do not reveal a Selenium fingerprint.
+The legacy ActionChains path has been removed from the Fork-1 region.
+"""
+import pathlib
+import re
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -10,95 +18,74 @@ from modules.cdp.driver import (
 )
 
 
-class _FakeActionChains:
-    """Recording stand-in for selenium's ActionChains."""
-
-    instances = []
-
-    def __init__(self, driver):
-        self.driver = driver
-        self.calls = []
-        _FakeActionChains.instances.append(self)
-
-    def move_by_offset(self, x, y):
-        self.calls.append(("move_by_offset", x, y))
-        return self
-
-    def move_to_element(self, el):
-        self.calls.append(("move_to_element", el))
-        return self
-
-    def click(self):
-        self.calls.append(("click",))
-        return self
-
-    def perform(self):
-        self.calls.append(("perform",))
-        return self
-
-
-class TestFocusShiftRetry(unittest.TestCase):
+class TestFocusShiftRetryCdp(unittest.TestCase):
     def setUp(self):
-        _FakeActionChains.instances = []
-        self._patcher = patch.object(drv, "_ActionChains", _FakeActionChains)
-        self._patcher.start()
         self._sleep_patcher = patch.object(drv.time, "sleep")
         self.mock_sleep = self._sleep_patcher.start()
 
     def tearDown(self):
-        self._patcher.stop()
         self._sleep_patcher.stop()
 
-    def test_neutral_click_then_recompute_bbox_then_click(self):
-        driver = MagicMock()
-        neutral_el = MagicMock(name="neutral_body")
-        btn = MagicMock(name="complete_purchase_btn")
-        driver.find_element.side_effect = lambda by, sel: (
-            neutral_el if sel == SEL_NEUTRAL_DIV else btn
-        )
-
-        result = handle_ui_lock_focus_shift(driver)
+    def test_handle_ui_lock_focus_shift_uses_bounding_box_click(self):
+        """Both clicks go through bounding_box_click (CDP); no ActionChains."""
+        givex = MagicMock(name="givex_driver")
+        result = handle_ui_lock_focus_shift(givex)
 
         self.assertTrue(result)
-        # Two ActionChains instances: one for neutral, one for retry click.
-        self.assertEqual(len(_FakeActionChains.instances), 2)
-        neutral_chain = _FakeActionChains.instances[0]
-        retry_chain = _FakeActionChains.instances[1]
-        self.assertEqual(neutral_chain.calls[0], ("move_to_element", neutral_el))
-        self.assertEqual(neutral_chain.calls[1], ("click",))
-        self.assertEqual(neutral_chain.calls[-1], ("perform",))
-        # 0.5s wait between the two clicks.
+        # Exactly two CDP clicks: neutral div, then Complete Purchase.
+        self.assertEqual(givex.bounding_box_click.call_count, 2)
+        givex.bounding_box_click.assert_any_call(SEL_NEUTRAL_DIV)
+        givex.bounding_box_click.assert_any_call(SEL_COMPLETE_PURCHASE)
+        # 0.5s settle wait between the two clicks.
         self.mock_sleep.assert_called_once_with(0.5)
-        # Two find_element calls: neutral div + purchase button.
-        self.assertEqual(driver.find_element.call_count, 2)
-        driver.find_element.assert_any_call("css selector", SEL_NEUTRAL_DIV)
-        driver.find_element.assert_any_call("css selector", SEL_COMPLETE_PURCHASE)
-        # Retry click targeted the re-located element.
-        self.assertEqual(retry_chain.calls[0], ("move_to_element", btn))
-        self.assertEqual(retry_chain.calls[1], ("click",))
-        self.assertEqual(retry_chain.calls[-1], ("perform",))
 
-    def test_returns_false_on_exception(self):
-        driver = MagicMock()
-        driver.find_element.side_effect = RuntimeError("element gone")
-        result = handle_ui_lock_focus_shift(driver)
-        self.assertFalse(result)
+    def test_returns_false_when_neutral_click_raises(self):
+        givex = MagicMock(name="givex_driver")
+        givex.bounding_box_click.side_effect = [RuntimeError("rect missing"), None]
+        self.assertFalse(handle_ui_lock_focus_shift(givex))
+        # Only the neutral click was attempted — helper never retries itself.
+        self.assertEqual(givex.bounding_box_click.call_count, 1)
 
-    def test_returns_false_when_action_chains_raises(self):
-        driver = MagicMock()
-        # Patch ActionChains to raise on first instantiation.
-        with patch.object(drv, "_ActionChains", side_effect=RuntimeError("no chains")):
-            self.assertFalse(handle_ui_lock_focus_shift(driver))
+    def test_returns_false_when_purchase_click_raises(self):
+        givex = MagicMock(name="givex_driver")
+        givex.bounding_box_click.side_effect = [None, RuntimeError("cdp fail")]
+        self.assertFalse(handle_ui_lock_focus_shift(givex))
+        self.assertEqual(givex.bounding_box_click.call_count, 2)
 
-    def test_only_one_retry_per_invocation(self):
-        """handle_ui_lock_focus_shift must never loop / retry internally."""
-        driver = MagicMock()
-        driver.find_element.return_value = MagicMock()
-        handle_ui_lock_focus_shift(driver)
-        # Exactly two find_element calls (neutral div + purchase btn)
-        # and exactly two ActionChains instances.
-        self.assertEqual(driver.find_element.call_count, 2)
-        self.assertEqual(len(_FakeActionChains.instances), 2)
+    def test_returns_false_when_driver_missing_bounding_box_click(self):
+        plain_driver = MagicMock(spec=[])  # no bounding_box_click attribute
+        self.assertFalse(handle_ui_lock_focus_shift(plain_driver))
+
+
+class TestHandleUiLockGrepNoActionChains(unittest.TestCase):
+    """Static assertion: no ActionChains references in the Fork-1 region."""
+
+    def test_handle_ui_lock_grep_no_actionchains_in_driver(self):
+        """grep_no_actionchains_in_driver for the Fork-1 handler region.
+
+        Acceptance: zero ``ActionChains`` references in executable code within
+        the Fork-1 region; mentions inside docstrings / comments are allowed
+        (see #259 acceptance: "0 hits hoặc chỉ trong comments").
+        """
+        path = pathlib.Path(drv.__file__)
+        source = path.read_text(encoding="utf-8")
+        match = re.search(
+            r"^def handle_ui_lock_focus_shift\b.*?(?=^def |\Z)",
+            source,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "handle_ui_lock_focus_shift not found")
+        region = match.group(0)
+        # Strip triple-quoted docstring then strip ``# …`` line comments.
+        region_no_doc = re.sub(r'"""[\s\S]*?"""', "", region)
+        code_lines = []
+        for line in region_no_doc.splitlines():
+            # Drop line comments while preserving any leading code.
+            code = line.split("#", 1)[0]
+            code_lines.append(code)
+        executable = "\n".join(code_lines)
+        self.assertNotIn("ActionChains", executable)
+        self.assertNotIn("_ActionChains", executable)
 
 
 if __name__ == "__main__":
