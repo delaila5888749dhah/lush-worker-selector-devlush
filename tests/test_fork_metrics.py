@@ -50,6 +50,17 @@ class TestMonitorForkCounters(unittest.TestCase):
             "fork_vbv_cancelled", "fork_ui_lock", "fork_abort_cycle",
         ):
             self.assertIn(key, metrics, f"{key} missing from get_metrics() output")
+            self.assertEqual(metrics[key], 0)
+
+    def test_reset_clears_fork_counters(self):
+        """monitor.reset() must restore fork counters to their initial zero state."""
+        monitor.record_fork("success")
+        monitor.record_fork("ui_lock")
+        monitor.reset()
+
+        snapshot = monitor.get_fork_metrics()
+        self.assertEqual(len(snapshot), 6)
+        self.assertTrue(all(v == 0 for v in snapshot.values()))
 
     def test_record_fork_unknown_branch_is_logged_not_counted(self):
         with self.assertLogs(monitor._logger, level="WARNING"):
@@ -57,6 +68,7 @@ class TestMonitorForkCounters(unittest.TestCase):
         snapshot = monitor.get_fork_metrics()
         # Unknown branches must not silently inflate any existing counter.
         self.assertNotIn("fork_bogus_branch", snapshot)
+        self.assertEqual(len(snapshot), 6)
         self.assertTrue(all(v == 0 for v in snapshot.values()))
 
 
