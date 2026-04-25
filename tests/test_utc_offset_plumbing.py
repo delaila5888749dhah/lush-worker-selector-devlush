@@ -67,13 +67,20 @@ class TestDelayVariesWithUtcOffset(unittest.TestCase):
     def test_delay_varies_with_utc_offset(self):
         tm = TemporalModel(self.persona)
         base = 1.0
-        with patch(
+        # Disable gradual drift in this test so the DAY-path delay is
+        # exactly `base` (the AR(1) drift envelope adds ~±2% noise on
+        # every typing/thinking call — see test_gradual_drift.py for
+        # dedicated drift-on-DAY coverage). This isolates the day/night
+        # branch under test.
+        with patch("modules.delay.temporal.ENABLE_GRADUAL_DRIFT", False), \
+                patch(
             "modules.delay.temporal.time.gmtime", return_value=_frozen_gmt(22)
         ):
             night_delay = tm.apply_temporal_modifier(base, "typing", utc_offset_hours=0)
         # Fresh model so RNG state matches; exercise DAY path next.
         tm2 = TemporalModel(self.persona)
-        with patch(
+        with patch("modules.delay.temporal.ENABLE_GRADUAL_DRIFT", False), \
+                patch(
             "modules.delay.temporal.time.gmtime", return_value=_frozen_gmt(22)
         ):
             day_delay = tm2.apply_temporal_modifier(base, "typing", utc_offset_hours=-8)
