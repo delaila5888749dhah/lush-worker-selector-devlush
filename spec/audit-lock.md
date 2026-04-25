@@ -281,6 +281,7 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | ME-002 | MEDIUM | `integration/runtime.py` | Timezone-less log timestamps replaced with `datetime.now(timezone.utc).isoformat(timespec="seconds")`. |
 | ME-003 | MEDIUM | `modules/billing/main.py` | `_find_matching_index()` missing lock contract docstring added — documents that caller must hold `_lock`. |
 | ME-004 | MEDIUM | `integration/orchestrator.py` | `_FSM_STATES` duplicate eliminated — now imported directly from `modules.fsm.main.ALLOWED_STATES` to prevent drift (see INV-FSM-01). |
+| PH4-H3  | MEDIUM | `integration/orchestrator.py` | `handle_outcome()` will record per-branch fork counters via `monitor.record_fork()` for success / declined / vbv_cancelled / vbv_3ds / ui_lock / abort_cycle (Phase 4 audit [H3]). Sink added in this PR; orchestrator wiring in follow-up PR. Observability only — no FSM behaviour change. |
 
 ### Phase 6 — Data Layer Audit (2026-04-24)
 
