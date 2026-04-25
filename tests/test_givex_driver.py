@@ -186,6 +186,34 @@ class TestRandomGreeting(unittest.TestCase):
     def test_random_greeting_returns_member(self):
         self.assertIn(drv._random_greeting(), drv._GREETINGS)
 
+    def test_greeting_deterministic_per_persona_seed(self):
+        """Two RNGs with the same persona seed must produce the same greeting sequence."""
+        import random
+        rnd_a = random.Random(42)
+        rnd_b = random.Random(42)
+        seq_a = [drv._random_greeting(rnd_a) for _ in range(10)]
+        seq_b = [drv._random_greeting(rnd_b) for _ in range(10)]
+        self.assertEqual(seq_a, seq_b)
+
+    def test_greeting_no_persona_falls_back_to_secrets(self):
+        """When no RNG is supplied, _random_greeting falls back to secrets.choice."""
+        from unittest.mock import patch
+        with patch("modules.cdp.driver.secrets.choice",
+                   return_value="Happy Birthday!") as mock_choice:
+            result = drv._random_greeting()
+        mock_choice.assert_called_once_with(drv._GREETINGS)
+        self.assertEqual(result, "Happy Birthday!")
+
+    def test_greeting_stability_across_cycles(self):
+        """Repeated draws from a seeded RNG cover the greeting set roughly uniformly."""
+        import random
+        rnd = random.Random(99)
+        seen = {drv._random_greeting(rnd) for _ in range(500)}
+        # With 500 draws over ~13 greetings, we expect to see at least half
+        # the distinct messages.  (Loose bound — guards against accidental
+        # constant returns or off-by-one.)
+        self.assertGreaterEqual(len(seen), max(2, len(drv._GREETINGS) // 2))
+
 
 class TestFillEgiftForm(unittest.TestCase):
     """fill_egift_form types the correct value into each eGift field."""
