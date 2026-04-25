@@ -415,10 +415,10 @@ def _random_greeting(rnd=None) -> str:
     if rnd is not None:
         try:
             return rnd.choice(_GREETINGS)
-        except Exception:  # pylint: disable=broad-except
+        except Exception as exc:  # pylint: disable=broad-except
             # Defensive fallback: anything goes wrong with the persona
             # RNG, fall back to secrets so the form fill never fails.
-            pass
+            _log.debug("_random_greeting: persona RNG failed (%s); using secrets fallback", exc)
     return secrets.choice(_GREETINGS)
 
 
