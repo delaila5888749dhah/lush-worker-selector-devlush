@@ -67,6 +67,64 @@ def _dispatch(drv, el, ch, strict):
         )
         return False
 
+
+# Named-key dispatch map for ``dispatch_key`` (DOM ``code`` + Windows VK).
+# Used by callers that need to send non-character keys via CDP — e.g. the
+# dropdown navigator in :func:`modules.cdp.driver._cdp_select_option`.
+_NAMED_KEYS: Dict[str, Dict[str, int | str]] = {
+    "ArrowDown": {"code": "ArrowDown", "vk": 40},
+    "ArrowUp": {"code": "ArrowUp", "vk": 38},
+    "ArrowLeft": {"code": "ArrowLeft", "vk": 37},
+    "ArrowRight": {"code": "ArrowRight", "vk": 39},
+    "Enter": {"code": "Enter", "vk": 13},
+    "Escape": {"code": "Escape", "vk": 27},
+    "Tab": {"code": "Tab", "vk": 9},
+    "Space": {"code": "Space", "vk": 32},
+    "Backspace": {"code": "Backspace", "vk": 8},
+}
+
+
+def dispatch_key(driver, key_name: str) -> bool:
+    """Dispatch a single named key (e.g. ``ArrowDown``, ``Enter``) via CDP.
+
+    Emits a ``keyDown`` + ``keyUp`` ``Input.dispatchKeyEvent`` pair with
+    the proper DOM ``code`` and Windows virtual-key code so the resulting
+    events are ``isTrusted=True`` — matching real user input and avoiding
+    the synthetic-event fingerprint that anti-fraud heuristics flag.
+
+    Args:
+        driver: Selenium WebDriver supporting ``execute_cdp_cmd``.
+        key_name: The key name (e.g. ``"ArrowDown"``, ``"Enter"``).
+
+    Returns:
+        ``True`` when both ``keyDown`` and ``keyUp`` dispatched
+        successfully, ``False`` on CDP failure (logged at WARNING).
+
+    Raises:
+        ValueError: if *key_name* is not a recognised named key.
+    """
+    spec = _NAMED_KEYS.get(key_name)
+    if spec is None:
+        raise ValueError(f"dispatch_key: unsupported key name {key_name!r}")
+    code = spec["code"]
+    vk = spec["vk"]
+    try:
+        for t in ("keyDown", "keyUp"):
+            driver.execute_cdp_cmd("Input.dispatchKeyEvent", {
+                "type": t,
+                "key": key_name,
+                "code": code,
+                "windowsVirtualKeyCode": vk,
+                "modifiers": 0,
+                "isKeypad": False,
+            })
+        return True
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning(
+            "dispatch_key: CDP dispatch failed for key %r: %s", key_name, exc,
+        )
+        return False
+
 def type_value(driver, element, value, rnd, *, typo_rate=0.0, delays=None,
                strict=False, field_kind="text", engine=None):
     eff = min(typo_rate, _FIELD_TYPO_CAP.get(field_kind, _MAX_TYPO_RATE), _MAX_TYPO_RATE)

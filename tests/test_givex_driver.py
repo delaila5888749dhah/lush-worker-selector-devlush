@@ -930,6 +930,60 @@ class TestNavigateToEgift(unittest.TestCase):
         btn_el.click.assert_called_once()
 
 
+class TestClearBrowserStateCdp(unittest.TestCase):
+    """_clear_browser_state must also issue CDP-level cookie/cache wipes
+    so cross-origin cookies (e.g. wwws-usa2.givex.com vs lushusa.com)
+    are cleaned — audit finding [B3] / Blueprint §7."""
+
+    def _cdp_methods(self, selenium):
+        return [
+            c.args[0] for c in selenium.execute_cdp_cmd.call_args_list
+            if c.args
+        ]
+
+    def test_clear_browser_state_invokes_cdp_clear_cookies(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd._clear_browser_state()
+        self.assertIn("Network.clearBrowserCookies", self._cdp_methods(selenium))
+
+    def test_clear_browser_state_invokes_cdp_clear_cache(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd._clear_browser_state()
+        self.assertIn("Network.clearBrowserCache", self._cdp_methods(selenium))
+
+    def test_clear_browser_state_calls_cdp_after_delete_all_cookies(self):
+        """CDP cookie wipe runs *after* Selenium delete_all_cookies (B3 belt-and-braces)."""
+        selenium = _make_driver()
+        order = []
+        selenium.delete_all_cookies.side_effect = lambda: order.append("selenium")
+
+        def _record_cdp(method, _params):
+            if method == "Network.clearBrowserCookies":
+                order.append("cdp_cookies")
+            elif method == "Network.clearBrowserCache":
+                order.append("cdp_cache")
+
+        selenium.execute_cdp_cmd.side_effect = _record_cdp
+        gd = GivexDriver(selenium)
+        gd._clear_browser_state()
+
+        self.assertEqual(order, ["selenium", "cdp_cookies", "cdp_cache"])
+
+    def test_clear_browser_state_cdp_failure_does_not_crash(self):
+        """CDP failure logs a warning/debug but never propagates."""
+        selenium = _make_driver()
+        selenium.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
+        gd = GivexDriver(selenium)
+        # Must not raise.
+        gd._clear_browser_state()
+        # Both CDP attempts were made even though they failed.
+        cdp_methods = self._cdp_methods(selenium)
+        self.assertIn("Network.clearBrowserCookies", cdp_methods)
+        self.assertIn("Network.clearBrowserCache", cdp_methods)
+
+
 class TestPreflightGeoCheck(unittest.TestCase):
     """preflight_geo_check uses URL_GEO_CHECK constant."""
 

@@ -26,11 +26,6 @@ import urllib.error
 import warnings
 
 try:
-    from selenium.webdriver.support.ui import Select  # type: ignore[import]
-except ImportError:  # pragma: no cover - tests mock _cdp_select_option
-    Select = None  # type: ignore[assignment,misc]
-
-try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
     from selenium.webdriver.common.by import By  # type: ignore[import]
     from selenium.webdriver.support.ui import WebDriverWait  # type: ignore[import]
@@ -1488,22 +1483,75 @@ class GivexDriver:
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """Select the option matching *value* in a ``<select>`` element.
 
+        Implementation strategy (audit finding [G2]):
+          1. ``bounding_box_click`` opens/focuses the dropdown — produces an
+             ``isTrusted=True`` mouse event indistinguishable from a user.
+          2. A read-only ``execute_script`` query locates the target option
+             index relative to the currently-selected one.
+          3. ``ArrowDown`` / ``ArrowUp`` named-key events advance the
+             highlight via CDP (``Input.dispatchKeyEvent`` with proper DOM
+             ``code`` / virtual-key code → ``isTrusted=True``).
+          4. ``Enter`` confirms the selection.
+
+        This deliberately avoids ``Select.select_by_value`` (Selenium
+        helper) because its ``change`` event fires with ``isTrusted=False``
+        — a fingerprint that anti-fraud heuristics flag.
+
         Args:
-            selector: CSS selector for the select element.
-            value: The option value to select.
+            selector: CSS selector for the ``<select>`` element.
+            value: The option ``value`` attribute to select.
 
         Raises:
             SelectorTimeoutError: if no matching element is found.
-            RuntimeError: if the selenium ``Select`` helper is unavailable.
+            ValueError: if no option with *value* exists in the select.
         """
-        if Select is None:
-            raise RuntimeError(
-                "selenium is not installed; cannot use _cdp_select_option"
-            )
         elements = self.find_elements(selector)
         if not elements:
             raise SelectorTimeoutError(selector, 0)
-        Select(elements[0]).select_by_value(value)
+
+        # Step 1 — open/focus the dropdown via a real CDP mouse click.
+        self.bounding_box_click(selector)
+
+        # Step 2 — locate target index relative to currently-selected option.
+        js = (
+            "const sel = document.querySelector(arguments[0]);"
+            "if (!sel) return [-1, -1];"
+            "const opts = Array.from(sel.options);"
+            "const currentIdx = sel.selectedIndex;"
+            "const targetIdx = opts.findIndex(o => o.value === arguments[1]);"
+            "return [currentIdx, targetIdx];"
+        )
+        result = self._driver.execute_script(js, selector, value)
+        try:
+            current_idx, target_idx = int(result[0]), int(result[1])
+        except (TypeError, ValueError, IndexError) as exc:
+            raise ValueError(
+                f"_cdp_select_option: unexpected option-index result "
+                f"{result!r} for selector {selector!r}"
+            ) from exc
+        if target_idx < 0:
+            raise ValueError(
+                f"Option value={value!r} not found in {selector}"
+            )
+
+        # Step 3 — keyboard-navigate from current to target.
+        from modules.cdp.keyboard import dispatch_key  # local import: avoid cycle
+        if current_idx < 0:
+            # No prior selection — ArrowDown lands on the first option (index 0),
+            # so we still need ``target_idx`` ArrowDowns after that initial step.
+            steps = target_idx + 1
+            key = "ArrowDown"
+        else:
+            delta = target_idx - current_idx
+            steps = abs(delta)
+            key = "ArrowDown" if delta >= 0 else "ArrowUp"
+        for _ in range(steps):
+            dispatch_key(self._driver, key)
+            jitter = self._rnd.uniform(0.0, 0.05) if self._rnd is not None else 0.0
+            time.sleep(0.05 + jitter)
+
+        # Step 4 — confirm the selection.
+        dispatch_key(self._driver, "Enter")
 
     def _smooth_scroll_to(self, selector: str) -> None:
         """Scroll an element into view with a smooth pass and micro-correction."""
@@ -1826,7 +1874,16 @@ class GivexDriver:
         ) from last_exc
 
     def _clear_browser_state(self) -> None:
-        """Clear localStorage, sessionStorage, and cookies (Blueprint §3 Hard-Reset)."""
+        """Clear localStorage, sessionStorage, and cookies (Blueprint §3 Hard-Reset).
+
+        In addition to the Selenium ``delete_all_cookies`` call (which only
+        wipes cookies of the *current* browsing context), this method also
+        issues CDP-level ``Network.clearBrowserCookies`` and
+        ``Network.clearBrowserCache`` commands.  These wipe cookies/cache
+        across *all* origins (e.g. ``wwws-usa2.givex.com`` vs
+        ``lushusa.com``), closing the cross-origin gap surfaced by audit
+        finding [B3] (Blueprint §7 end-of-cycle hard-reset).
+        """
         try:
             self._driver.execute_script(
                 "window.localStorage.clear(); "
@@ -1839,6 +1896,23 @@ class GivexDriver:
         except Exception:
             _log.debug(
                 "_clear_browser_state: delete_all_cookies skipped",
+                exc_info=True,
+            )
+        # Belt-and-braces: CDP-level wipe covers cross-origin cookies that
+        # ``delete_all_cookies`` (current-context only) would miss.
+        try:
+            self._driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning(
+                "_clear_browser_state: CDP Network.clearBrowserCookies failed: %s",
+                exc,
+            )
+        # Also clear the HTTP cache to match Blueprint §7 hard-reset.
+        try:
+            self._driver.execute_cdp_cmd("Network.clearBrowserCache", {})
+        except Exception:
+            _log.debug(
+                "_clear_browser_state: CDP Network.clearBrowserCache skipped",
                 exc_info=True,
             )
         _log.debug("_clear_browser_state: browser state cleared for new cycle")
