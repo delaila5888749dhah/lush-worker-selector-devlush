@@ -378,6 +378,9 @@ def reset():
         _ui_lock_retry_count = 0
         _ui_lock_recovered_count = 0
         _ui_lock_exhausted_count = 0
+    with _fork_counters_lock:
+        for key in _fork_counters:
+            _fork_counters[key] = 0
 
 
 class TransientMonitor:
