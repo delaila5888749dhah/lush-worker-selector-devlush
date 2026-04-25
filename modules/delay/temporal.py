@@ -27,7 +27,7 @@ from modules.delay.persona import PersonaProfile
 # integration.worker_task sets this value right after the MaxMind lookup so
 # that all temporal computations performed inside the same execution context
 # (worker thread) see the proxy-derived UTC offset.
-_utc_offset_var: "contextvars.ContextVar[float]" = contextvars.ContextVar(
+_utc_offset_var: contextvars.ContextVar[float] = contextvars.ContextVar(
     "delay_utc_offset_hours", default=0.0
 )
 
@@ -91,7 +91,7 @@ class TemporalModel:
         self,
         base_delay: float,
         action_type: str,
-        utc_offset_hours: "float | None" = None,
+        utc_offset_hours: float | None = None,
     ) -> float:
         """Apply day/night scaling to *base_delay*, clamped by action type.
 
@@ -190,7 +190,7 @@ class TemporalModel:
             "micro_var_range": (0.90, 1.10),
         }
 
-    def get_night_typo_increase(self, utc_offset_hours: "float | None" = None) -> float:
+    def get_night_typo_increase(self, utc_offset_hours: float | None = None) -> float:
         """Return extra typo probability during NIGHT, 0.0 during DAY.
 
         Blueprint §10: NIGHT increases typo rate by 1–2% absolute (random in range).
