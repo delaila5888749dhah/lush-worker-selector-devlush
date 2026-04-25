@@ -136,10 +136,18 @@ class TemporalModel:
         of std-dev *drift_rate*. The multiplier is clamped to
         ``[1 - drift_cap, 1 + drift_cap]`` so the envelope never exceeds
         ±30% by default.
+
+        Lock ordering is ``_drift_lock`` (outer) → ``_rnd_lock`` (inner)
+        so each ``(old, step, new)`` triple is serialized: under
+        concurrent callers the AR(1) sequence remains a single
+        well-ordered random walk. ``_drift_lock`` is only acquired here
+        and in :meth:`reset_drift`, so this nested ordering cannot
+        deadlock with other call sites (which never hold
+        ``_drift_lock``).
         """
-        with self._rnd_lock:
-            step = self._rnd.gauss(0.0, drift_rate)
         with self._drift_lock:
+            with self._rnd_lock:
+                step = self._rnd.gauss(0.0, drift_rate)
             self._drift_step_count += 1
             new_mult = (
                 self._DRIFT_AR_COEF * self._drift_multiplier

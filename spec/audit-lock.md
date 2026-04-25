@@ -66,8 +66,6 @@ modules/delay/temporal.py — apply_temporal_modifier():
   base_delay <= 0          → returns 0.0 immediately (no-op guard)
   any action_type, NIGHT   → return value ∈ [0.0, MAX_*_DELAY]
   any action_type, DAY     → return value ∈ [0.0, MAX_*_DELAY]
-  utc_offset_hours=None    → reads value from contextvars (set by
-                             integration.worker_task.set_utc_offset())
   action_type ∈ {"typing","thinking"} and ENABLE_GRADUAL_DRIFT
                            → AR(1) gradual drift multiplier applied
                              (clamped to [0.70, 1.30] of base, Blueprint §10)
