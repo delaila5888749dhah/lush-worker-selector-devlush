@@ -932,11 +932,14 @@ def _make_profile_id(profile: "billing.BillingProfile") -> str:
     Uses SHA-256 hash of 'first_name|last_name|zip_code' to produce
     a non-reversible profile fingerprint. No raw PII is included in logs.
 
+    Privacy: one-way hash; used only as grouping key in audit logs.
+    No raw PII leaves this function.
+
     Returns:
-        First 16 hex characters of SHA-256 hash (64-bit prefix for log correlation).
+        Full 64-character lowercase SHA-256 hex digest (Blueprint §12 line 703).
     """
     raw = f"{profile.first_name}|{profile.last_name}|{profile.zip_code}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _emit_billing_audit_event(
@@ -981,6 +984,32 @@ def _emit_billing_audit_event(
             worker_id,
             exc,
         )
+
+
+def _select_profile_with_audit(
+    zip_code: str | int | None,
+    worker_id: str,
+    task_id: str | None,
+    *,
+    include_worker_id: bool,
+):
+    """Select a billing profile and emit the audit event exactly once.
+
+    This helper is the single call-site for ``_emit_billing_audit_event`` so
+    both ``run_cycle`` and direct ``run_payment_step(..., _profile=None)``
+    paths share the same "select -> emit" contract without duplicating logic.
+    """
+    if include_worker_id:
+        profile = billing.select_profile(zip_code, worker_id=worker_id)
+    else:
+        profile = billing.select_profile(zip_code)
+    _emit_billing_audit_event(
+        profile=profile,
+        worker_id=worker_id,
+        task_id=task_id,
+        zip_code=zip_code,
+    )
+    return profile
 
 
 def _validated_notify_total(worker_id: str, value: float) -> bool:
@@ -1161,15 +1190,18 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     """
     if _profile is not None:
         profile = _profile
+        # Audit event already emitted on the initial selection earlier in the
+        # cycle; do NOT re-emit when the same profile is reused on a retry /
+        # swap-card iteration.  Blueprint §12 line 693: "Mỗi lần
+        # billing.select_profile() trả về thành công..." — one audit event
+        # per actual select_profile() call, not per run_payment_step() call.
     else:
-        profile = billing.select_profile(zip_code)
-    # Emit audit event AFTER successful selection — never before.
-    _emit_billing_audit_event(
-        profile=profile,
-        worker_id=worker_id,
-        task_id=getattr(task, "task_id", None),
-        zip_code=zip_code,
-    )
+        profile = _select_profile_with_audit(
+            zip_code,
+            worker_id=worker_id,
+            task_id=getattr(task, "task_id", None),
+            include_worker_id=False,
+        )
     driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
     if driver_obj is None:
         raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
@@ -1641,9 +1673,11 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
     if ctx.billing_profile is None:
         # Prefer zip_code from ctx if set, otherwise use the argument.
         effective_zip = ctx.zip_code if ctx.zip_code is not None else zip_code
-        ctx.billing_profile = billing.select_profile(
+        ctx.billing_profile = _select_profile_with_audit(
             effective_zip,
             worker_id=worker_id,
+            task_id=task_id,
+            include_worker_id=True,
         )
 
     try:

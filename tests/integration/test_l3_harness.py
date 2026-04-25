@@ -33,6 +33,7 @@ Test categories
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 import unittest
@@ -322,6 +323,45 @@ class TestL3OrchestratorScenarios(_IntegrationBase, unittest.TestCase):
             _cdp_main.unregister_driver(self.worker_id)
             cleanup_worker(self.worker_id)
 
+        self.assertEqual(
+            len(audit_events), 1,
+            f"Expected exactly 1 billing_selection audit event, got {len(audit_events)}",
+        )
+
+    def test_single_audit_event_per_cycle_with_retry_path(self):
+        """Decline + swap retries must still emit exactly one billing_selection event."""
+        task = _make_task(task_id="l3-audit-event-retry")
+        # Three distinct swap cards → four total attempts in the retry loop.
+        task = dataclasses.replace(
+            task,
+            order_queue=(
+                dataclasses.replace(task.primary_card, cvv="124"),
+                dataclasses.replace(task.primary_card, cvv="125"),
+                dataclasses.replace(task.primary_card, cvv="126"),
+            ),
+        )
+        stub = _StubGivexDriver(self.worker_id, final_state="declined")
+        _cdp_main.register_driver(self.worker_id, stub)
+        audit_events = []
+
+        def capture_audit(fmt, *args, **_kwargs):
+            msg = fmt % args if args else fmt
+            if "billing_selection" in msg:
+                audit_events.append(msg)
+
+        try:
+            with patch(
+                "integration.orchestrator.billing", make_mock_billing()
+            ), patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit:
+                mock_audit.info.side_effect = capture_audit
+                action, state, _total = run_cycle(task, worker_id=self.worker_id)
+        finally:
+            _cdp_main.unregister_driver(self.worker_id)
+            cleanup_worker(self.worker_id)
+
+        self.assertEqual(_action_name(action), "abort_cycle")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.name, "declined")
         self.assertEqual(
             len(audit_events), 1,
             f"Expected exactly 1 billing_selection audit event, got {len(audit_events)}",

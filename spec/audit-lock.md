@@ -285,6 +285,15 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | PH4-H3  | MEDIUM | `integration/orchestrator.py` | `handle_outcome()` will record per-branch fork counters via `monitor.record_fork()` for success / declined / vbv_cancelled / vbv_3ds / ui_lock / abort_cycle (Phase 4 audit [H3]). Sink added in this PR; orchestrator wiring in follow-up PR. Observability only — no FSM behaviour change. |
 | PH4-F2  | LOW    | `integration/orchestrator.py` | `_CDP_NETWORK_URL_PATTERNS` retained with `cws4.0` fallback pending live DevTools inspection; a new `_CDP_NETWORK_URL_PATTERNS_PRECISE` subset is used to emit a WARNING when only the broad fallback matches (Phase 4 audit [F2]). |
 
+### Phase 6 — Data Layer Audit (2026-04-24)
+
+| ID | Severity | File | Description |
+|---|---|---|---|
+| P6-I1 | HIGH | `integration/orchestrator.py` | `_emit_billing_audit_event` gated inside the `if _profile is None` branch of `run_payment_step`, and a single emit added at the actual `billing.select_profile()` call-site in `run_cycle`. Guarantees exactly one `billing_selection` audit event per cycle even when swap-card retries reuse `ctx.billing_profile` (Blueprint §12 line 693). |
+| P6-I4 | MEDIUM | `integration/orchestrator.py` | `_make_profile_id` returns the full 64-character SHA-256 hex digest (Blueprint §12 line 703); previous implementation truncated to 16 chars. |
+| P6-A2 | MEDIUM | `integration/task_loader.py` | `_make_card` now validates card number (15-16 digits), expiry month (01-12), expiry year (YY or YYYY) and CVV (3-4 digits) via regex. `_parse_line` wraps `_make_card` in try/except and logs a privacy-safe skip message (line number, never raw PAN). |
+| P6-D3 | MEDIUM | `modules/billing/main.py` | `request_pool_reload()` now clears `_MASTER_POOL`, `_MASTER_POOL_LOADED`, `_WORKER_STATES`, and the legacy deque, then eagerly re-reads the pool directory. Per-worker sharded selection path now picks up new profiles after reload. |
+
 ---
 
 ## CHANGE POLICY (Post-Audit)
