@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import unittest
 from typing import Optional, Sequence
 from unittest.mock import MagicMock
@@ -21,6 +22,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import modules.cdp.main as _cdp_main  # noqa: E402  pylint: disable=wrong-import-position
+import modules.watchdog.main as _watchdog  # noqa: E402  pylint: disable=wrong-import-position
 from integration.orchestrator import (  # noqa: E402  pylint: disable=wrong-import-position
     _completed_task_ids,
     _idempotency_lock,
@@ -105,8 +107,23 @@ class E2EBase(unittest.TestCase):
             _completed_task_ids.clear()
             _in_flight_task_ids.clear()
             _submitted_task_ids.clear()
+        # Phase 3A: Phase A `watchdog.wait_for_total` blocks BEFORE the stub
+        # driver is exercised, so wrap `enable_network_monitor` to auto-fire
+        # `notify_total` on a daemon thread for every enable call.  This
+        # unblocks both Phase A and Phase C waits in stub-driven E2E tests.
+        self._real_enable_network_monitor = _watchdog.enable_network_monitor
+
+        def _enable_and_autonotify(worker_id: str) -> None:
+            self._real_enable_network_monitor(worker_id)
+            threading.Thread(
+                target=lambda: _watchdog.notify_total(worker_id, 50.0),
+                daemon=True,
+            ).start()
+
+        _watchdog.enable_network_monitor = _enable_and_autonotify
 
     def tearDown(self):
+        _watchdog.enable_network_monitor = self._real_enable_network_monitor
         # cdp.unregister_driver is a no-op when worker_id is not registered
         # (it uses dict.pop with a default), so no guard is needed.
         _cdp_main.unregister_driver(self.worker_id)
