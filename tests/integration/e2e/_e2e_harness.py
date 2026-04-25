@@ -14,7 +14,7 @@ import os
 import sys
 import unittest
 from typing import Optional, Sequence
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Make the sibling ``_integration_harness`` module importable regardless of
 # how unittest discovers this suite (with or without __init__.py).
@@ -32,6 +32,7 @@ from modules.common.types import (  # noqa: E402  pylint: disable=wrong-import-p
     CardInfo,
     WorkerTask,
 )
+from modules.common.exceptions import SessionFlaggedError  # noqa: E402  pylint: disable=wrong-import-position
 from modules.fsm.main import cleanup_worker, reset_registry  # noqa: E402  pylint: disable=wrong-import-position
 from _integration_harness import (  # noqa: E402  pylint: disable=wrong-import-position
     _StubGivexDriver,
@@ -105,12 +106,50 @@ class E2EBase(unittest.TestCase):
             _completed_task_ids.clear()
             _in_flight_task_ids.clear()
             _submitted_task_ids.clear()
+        # Phase 3A introduced a Phase A pre-fill ``wait_for_total`` in
+        # ``run_payment_step`` that fires BEFORE any browser network event
+        # can deliver a checkout total in stub-driven E2E tests.  Route
+        # ``modules.watchdog.main.wait_for_total`` straight to the
+        # registered stub driver's ``dom_total`` attribute so that
+        # Phase A / Phase C resolve deterministically:
+        #   - dom_total non-None → return float(dom_total)
+        #   - dom_total is None  → raise SessionFlaggedError (timeout)
+        # Tests that need finer control (e.g. "Phase A succeeds, Phase C
+        # times out") can stop this patcher and install their own
+        # ``side_effect``.  Mirrors the same pattern used in
+        # tests/integration/_integration_harness.py::_IntegrationBase.
+        self._wait_for_total_patcher = patch(
+            "modules.watchdog.main.wait_for_total",
+            side_effect=self._stub_wait_for_total,
+        )
+        self._wait_for_total_patcher.start()
 
     def tearDown(self):
+        if hasattr(self, "_wait_for_total_patcher"):
+            try:
+                self._wait_for_total_patcher.stop()
+            except RuntimeError:
+                # Test already stopped/replaced the patcher — no-op.
+                pass
         # cdp.unregister_driver is a no-op when worker_id is not registered
         # (it uses dict.pop with a default), so no guard is needed.
         _cdp_main.unregister_driver(self.worker_id)
         cleanup_worker(self.worker_id)
+
+    def _stub_wait_for_total(self, worker_id, timeout=None):
+        """Resolve wait_for_total against the registered stub driver's dom_total."""
+        driver = _cdp_main._get_driver(worker_id)  # pylint: disable=protected-access
+        dom_total = getattr(driver, "dom_total", None) if driver is not None else None
+        if dom_total is None:
+            raise SessionFlaggedError(
+                f"Timeout ({timeout}s) waiting for total amount for worker '{worker_id}'"
+            )
+        try:
+            return float(dom_total)
+        except (TypeError, ValueError) as exc:
+            raise SessionFlaggedError(
+                f"Invalid stub dom_total={dom_total!r} for worker '{worker_id}': {exc}"
+            ) from exc
 
 
 __all__ = [
