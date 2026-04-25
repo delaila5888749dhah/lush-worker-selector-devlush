@@ -410,45 +410,59 @@ class TestL3WatchdogTimeout(_IntegrationBase, unittest.TestCase):
                 run_payment_step(_make_task(task_id="l3-wd-timeout"), worker_id=self.worker_id)
 
     def test_watchdog_timeout_logs_after_submission(self):
-        """Watchdog timeout AFTER mark_submitted must log 'AFTER payment submission'."""
-        # We inject timeout after submit to simulate crash-after-charge scenario.
+        """Watchdog timeout AFTER mark_submitted must log post-submit warning + mark_unconfirmed.
+
+        Phase C of ``run_payment_step`` swallows the post-submit watchdog
+        timeout (the irreversible submit already happened) and instead
+        records the task as unconfirmed via the idempotency store
+        (see ``tests/test_orchestrator_pr05.py`` for the canonical
+        contract).  This test asserts that wiring end-to-end through the
+        L3 stub driver: Phase A succeeds (dom_total=50.00) and Phase C
+        times out via the patched ``wait_for_total`` side_effect.
+        """
         stub = _StubGivexDriver(
             self.worker_id,
             final_state="success",
-            dom_total=None,
+            dom_total="50.00",
         )
         _cdp_main.register_driver(self.worker_id, stub)
         log_messages = []
 
-        def capture_error(fmt, *args, **_kwargs):
+        def capture_warning(fmt, *args, **_kwargs):
             msg = fmt % args if args else fmt
             log_messages.append(msg)
 
         store_mock = MagicMock()
         store_mock.is_duplicate.return_value = False
 
+        # Stop the base-class wait_for_total patch and install our own
+        # two-shot side_effect: Phase A returns 50.0, Phase C times out.
+        self._wait_for_total_patcher.stop()
         with patch(
-            "integration.orchestrator.billing", make_mock_billing()
+            "modules.watchdog.main.wait_for_total",
+            side_effect=[50.0, SessionFlaggedError("phase-c-timeout")],
         ), patch(
-            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
+            "integration.orchestrator.billing", make_mock_billing()
         ), patch(
             "integration.orchestrator._logger"
         ) as mock_log, patch(
             "integration.orchestrator._get_idempotency_store",
             return_value=store_mock,
         ):
-            mock_log.error.side_effect = capture_error
-            with self.assertRaises(SessionFlaggedError):
-                run_payment_step(
-                    _make_task(task_id="l3-wd-after-submit"),
-                    worker_id=self.worker_id,
-                )
+            mock_log.warning.side_effect = capture_warning
+            # Phase C swallows: no exception bubbles up.
+            run_payment_step(
+                _make_task(task_id="l3-wd-after-submit"),
+                worker_id=self.worker_id,
+            )
 
-        after_submit_logs = [m for m in log_messages if "AFTER payment submission" in m]
+        unconfirmed_msgs = [m for m in log_messages if "unconfirmed" in m.lower()]
         self.assertTrue(
-            len(after_submit_logs) >= 1,
-            f"Expected 'AFTER payment submission' log, got: {log_messages}",
+            len(unconfirmed_msgs) >= 1,
+            f"Expected post-submit unconfirmed warning, got: {log_messages}",
         )
+        store_mock.mark_submitted.assert_called_once()
+        store_mock.mark_unconfirmed.assert_called_once()
 
     def test_watchdog_notify_once_per_cycle(self):
         """notify_total must be called at most once per cycle (first-notify-wins)."""
@@ -615,43 +629,54 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
                 run_payment_step(_make_task(task_id="l3-err-preflight"), worker_id=self.worker_id)
 
     def test_error_after_submit_logs_after_payment_submission(self):
-        """Timeout after mark_submitted must log 'AFTER payment submission'."""
-        # Simulate watchdog timeout occurring AFTER mark_submitted.
+        """Timeout after mark_submitted must log post-submit warning + mark_unconfirmed.
+
+        Phase C of ``run_payment_step`` swallows the post-submit watchdog
+        timeout (the irreversible submit already happened) and records the
+        task as unconfirmed via the idempotency store.  This is the
+        canonical contract validated by ``tests/test_orchestrator_pr05``.
+        """
         stub = _StubGivexDriver(
             self.worker_id,
             final_state="success",
-            dom_total=None,  # DOM returns None → watchdog not notified
+            dom_total="50.00",
         )
         _cdp_main.register_driver(self.worker_id, stub)
         store_mock = MagicMock()
         store_mock.is_duplicate.return_value = False
         log_messages: list[str] = []
 
-        def capture(fmt, *args, **_kwargs):
+        def capture_warning(fmt, *args, **_kwargs):
             log_messages.append(fmt % args if args else fmt)
 
+        # Stop the base-class wait_for_total patch and install our own
+        # two-shot side_effect: Phase A returns 50.0, Phase C times out.
+        self._wait_for_total_patcher.stop()
         with patch(
-            "integration.orchestrator.billing", make_mock_billing()
+            "modules.watchdog.main.wait_for_total",
+            side_effect=[50.0, SessionFlaggedError("phase-c-timeout")],
         ), patch(
-            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
+            "integration.orchestrator.billing", make_mock_billing()
         ), patch(
             "integration.orchestrator._logger"
         ) as mock_log, patch(
             "integration.orchestrator._get_idempotency_store",
             return_value=store_mock,
         ):
-            mock_log.error.side_effect = capture
-            with self.assertRaises(SessionFlaggedError):
-                run_payment_step(
-                    _make_task(task_id="l3-err-after-submit"),
-                    worker_id=self.worker_id,
-                )
+            mock_log.warning.side_effect = capture_warning
+            # Phase C swallows: no exception bubbles up.
+            run_payment_step(
+                _make_task(task_id="l3-err-after-submit"),
+                worker_id=self.worker_id,
+            )
 
-        after_msgs = [m for m in log_messages if "AFTER payment submission" in m]
+        unconfirmed_msgs = [m for m in log_messages if "unconfirmed" in m.lower()]
         self.assertTrue(
-            len(after_msgs) >= 1,
-            f"Expected 'AFTER payment submission' in logs, got: {log_messages}",
+            len(unconfirmed_msgs) >= 1,
+            f"Expected post-submit unconfirmed warning, got: {log_messages}",
         )
+        store_mock.mark_submitted.assert_called_once()
+        store_mock.mark_unconfirmed.assert_called_once()
 
     def test_error_in_navigate_propagates(self):
         """SessionFlaggedError raised in navigate_to_egift propagates."""

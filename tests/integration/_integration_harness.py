@@ -22,7 +22,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from modules.common.exceptions import (
     InvalidStateError,
@@ -216,10 +216,52 @@ class _IntegrationBase:
             _notified_workers_this_cycle.discard(self.worker_id)
         _reset_watchdog()
         cleanup_worker(self.worker_id)
+        # Phase 3A introduced a Phase A pre-fill ``wait_for_total`` in
+        # ``run_payment_step`` that fires BEFORE any browser network event
+        # can deliver a checkout total in stub-driven integration tests.
+        # Route ``modules.watchdog.main.wait_for_total`` straight to the
+        # registered stub driver's ``dom_total`` attribute so that
+        # Phase A / Phase C succeed (or time out) deterministically based
+        # on the stub configuration:
+        #   - dom_total non-None → return float(dom_total)
+        #   - dom_total is None  → raise SessionFlaggedError(timeout)
+        # Tests that need finer control over Phase A vs Phase C (e.g.
+        # "Phase A succeeds, Phase C times out") can override this patch
+        # with their own ``patch(..., side_effect=[...])``.
+        self._wait_for_total_patcher = patch(
+            "modules.watchdog.main.wait_for_total",
+            side_effect=self._stub_wait_for_total,
+        )
+        self._wait_for_total_patcher.start()
 
     def tearDown(self):  # pylint: disable=invalid-name
+        if hasattr(self, "_wait_for_total_patcher"):
+            try:
+                self._wait_for_total_patcher.stop()
+            except RuntimeError:
+                # Test already stopped/replaced the patcher — no-op.
+                pass
         _cdp_main.unregister_driver(self.worker_id)
         cleanup_worker(self.worker_id)
+
+    def _stub_wait_for_total(self, worker_id, timeout=None):
+        """Resolve wait_for_total against the registered stub driver's dom_total.
+
+        Acts as the single source of truth for the watchdog total during
+        integration tests, replacing the CDP-listener / DOM-fallback path.
+        """
+        driver = _cdp_main._get_driver(worker_id)  # pylint: disable=protected-access
+        dom_total = getattr(driver, "dom_total", None) if driver is not None else None
+        if dom_total is None:
+            raise SessionFlaggedError(
+                f"Timeout ({timeout}s) waiting for total amount for worker '{worker_id}'"
+            )
+        try:
+            return float(dom_total)
+        except (TypeError, ValueError) as exc:
+            raise SessionFlaggedError(
+                f"Invalid stub dom_total={dom_total!r} for worker '{worker_id}': {exc}"
+            ) from exc
 
 
 # ── Fake BitBrowser HTTP server ────────────────────────────────────────────────
