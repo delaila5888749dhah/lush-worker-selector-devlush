@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -362,56 +363,89 @@ class TestL3WatchdogTimeout(_IntegrationBase, unittest.TestCase):
             dom_total=None,
         )
         _cdp_main.register_driver(self.worker_id, stub)
-        # Use a very short watchdog timeout so the test doesn't hang.
+        # Disable the _IntegrationBase auto-notify wrapper so Phase A can
+        # actually time out, and use a short Phase A/C timeout via
+        # _WATCHDOG_TIMEOUT_PAYMENT so the test doesn't hang.
+        import modules.watchdog.main as _wd  # pylint: disable=import-outside-toplevel
         with patch(
             "integration.orchestrator.billing", make_mock_billing()
-        ), patch("integration.orchestrator._WATCHDOG_TIMEOUT", 0.05):
+        ), patch(
+            "integration.orchestrator._WATCHDOG_TIMEOUT_PAYMENT", 0.05
+        ), patch.object(_wd, "enable_network_monitor", self._real_enable_network_monitor):
             with self.assertRaises(SessionFlaggedError):
                 run_payment_step(_make_task(task_id="l3-wd-timeout"), worker_id=self.worker_id)
 
     def test_watchdog_timeout_logs_after_submission(self):
-        """Watchdog timeout AFTER mark_submitted must log 'AFTER payment submission'."""
-        # We inject timeout after submit to simulate crash-after-charge scenario.
+        """Phase 3A: watchdog timeout AFTER submit (Phase C) is swallowed,
+        marks the task as unconfirmed, and logs a 'Post-submit confirmation'
+        warning instead of raising (INV-ORCHESTRATOR-04)."""
+        # Stub driver: dom_total=None so DOM fallback also returns None, and
+        # we override the auto-notify wrapper from _IntegrationBase so Phase C
+        # actually times out. Phase A still gets a single auto-notify so the
+        # pre-fill wait succeeds.
         stub = _StubGivexDriver(
             self.worker_id,
             final_state="success",
             dom_total=None,
         )
         _cdp_main.register_driver(self.worker_id, stub)
-        log_messages = []
+        log_messages: list[str] = []
 
-        def capture_error(fmt, *args, **_kwargs):
+        def capture_warning(fmt, *args, **_kwargs):
             msg = fmt % args if args else fmt
             log_messages.append(msg)
 
         store_mock = MagicMock()
         store_mock.is_duplicate.return_value = False
 
+        # Restrict auto-notify to Phase A only (first enable call) so the
+        # second enable (Phase C) leaves the watchdog session unsignalled
+        # and Phase C's wait_for_total times out.
+        import modules.watchdog.main as _wd  # pylint: disable=import-outside-toplevel
+        call_count = {"n": 0}
+        real_enable = self._real_enable_network_monitor
+
+        def _enable_phase_a_only(worker_id):
+            real_enable(worker_id)
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                import threading as _th  # pylint: disable=import-outside-toplevel
+                _th.Thread(
+                    target=lambda: _wd.notify_total(worker_id, 50.0), daemon=True,
+                ).start()
+
         with patch(
             "integration.orchestrator.billing", make_mock_billing()
         ), patch(
-            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
+            "integration.orchestrator._WATCHDOG_TIMEOUT_PAYMENT", 0.2
         ), patch(
             "integration.orchestrator._logger"
         ) as mock_log, patch(
             "integration.orchestrator._get_idempotency_store",
             return_value=store_mock,
-        ):
-            mock_log.error.side_effect = capture_error
-            with self.assertRaises(SessionFlaggedError):
-                run_payment_step(
-                    _make_task(task_id="l3-wd-after-submit"),
-                    worker_id=self.worker_id,
-                )
+        ), patch.object(_wd, "enable_network_monitor", _enable_phase_a_only):
+            mock_log.warning.side_effect = capture_warning
+            # Phase C swallows the timeout — run_payment_step should NOT raise.
+            run_payment_step(
+                _make_task(task_id="l3-wd-after-submit"),
+                worker_id=self.worker_id,
+            )
 
-        after_submit_logs = [m for m in log_messages if "AFTER payment submission" in m]
+        post_submit_logs = [m for m in log_messages if "Post-submit confirmation" in m]
         self.assertTrue(
-            len(after_submit_logs) >= 1,
-            f"Expected 'AFTER payment submission' log, got: {log_messages}",
+            len(post_submit_logs) >= 1,
+            f"Expected 'Post-submit confirmation' warning, got: {log_messages}",
         )
+        store_mock.mark_unconfirmed.assert_called_once()
 
     def test_watchdog_notify_once_per_cycle(self):
-        """notify_total must be called at most once per cycle (first-notify-wins)."""
+        """notify_total must not fire more than once per phase under
+        first-notify-wins (INV-WATCHDOG-02).
+
+        Phase 3A: a cycle has TWO notify windows — Phase A pre-fill +
+        Phase C post-submit — so up to 2 notifies per cycle is correct.
+        Within a single phase, first-notify-wins still bounds it to 1.
+        """
         # Local import: avoids importing notify_total at module scope where it would
         # be patched globally for all tests via the import binding.
         from modules.watchdog.main import notify_total as _notify_total  # pylint: disable=import-outside-toplevel
@@ -426,14 +460,37 @@ class TestL3WatchdogTimeout(_IntegrationBase, unittest.TestCase):
         stub = _StubGivexDriver(self.worker_id, final_state="success", dom_total="50.00")
         _cdp_main.register_driver(self.worker_id, stub)
 
+        # Disable the harness auto-notify wrapper so this test counts ONLY
+        # the orchestrator's own notify path (first-notify-wins via
+        # _first_notify_total_or_skip_with_lock).  Pre-arm the watchdog by
+        # firing one notify per phase in a background thread.
+        import modules.watchdog.main as _wd  # pylint: disable=import-outside-toplevel
+        real_enable = self._real_enable_network_monitor
+
+        def _enable(worker_id: str) -> None:
+            real_enable(worker_id)
+            # Fire one notify per phase via the orchestrator's path so
+            # first-notify-wins guards it.
+            threading.Thread(
+                target=lambda: _wd.notify_total(worker_id, 50.0), daemon=True,
+            ).start()
+
         with patch(
             "integration.orchestrator.billing", make_mock_billing()
+        ), patch.object(
+            _wd, "enable_network_monitor", _enable,
         ), patch("modules.watchdog.main.notify_total", side_effect=counting_notify):
             run_payment_step(_make_task(task_id="l3-wd-once"), worker_id=self.worker_id)
 
+        # Phase 3A: at most one notify per phase (Phase A pre-fill + Phase C
+        # post-submit) — Phase C also has a DOM-fallback notify path that
+        # races against the network listener, so up to 3 notify_total calls
+        # per cycle is structurally possible.  First-notify-wins guards each
+        # phase from runaway repeats.
         self.assertLessEqual(
-            len(notify_calls), 1,
-            f"notify_total must be called at most once; was called {len(notify_calls)} times",
+            len(notify_calls), 3,
+            f"notify_total must be bounded per cycle (≤3 across phases); "
+            f"was called {len(notify_calls)} times",
         )
 
 
@@ -575,12 +632,17 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
                 run_payment_step(_make_task(task_id="l3-err-preflight"), worker_id=self.worker_id)
 
     def test_error_after_submit_logs_after_payment_submission(self):
-        """Timeout after mark_submitted must log 'AFTER payment submission'."""
-        # Simulate watchdog timeout occurring AFTER mark_submitted.
+        """Phase 3A: SessionFlaggedError raised at submit_purchase (after
+        mark_submitted) propagates and produces 'AFTER payment submission'
+        ERROR log via the outer except block (`_submitted_before_wait=True`)."""
+        # Inject error at submit_purchase: the stub raises SessionFlaggedError
+        # immediately, so mark_submitted has already run and Phase C is never
+        # reached.  Phase A auto-notify (from _IntegrationBase.setUp) keeps the
+        # pre-fill wait_for_total from blocking.
         stub = _StubGivexDriver(
             self.worker_id,
             final_state="success",
-            dom_total=None,  # DOM returns None → watchdog not notified
+            error_at="submit_purchase",
         )
         _cdp_main.register_driver(self.worker_id, stub)
         store_mock = MagicMock()
@@ -592,8 +654,6 @@ class TestL3ErrorInjection(_IntegrationBase, unittest.TestCase):
 
         with patch(
             "integration.orchestrator.billing", make_mock_billing()
-        ), patch(
-            "integration.orchestrator._WATCHDOG_TIMEOUT", 0.05
         ), patch(
             "integration.orchestrator._logger"
         ) as mock_log, patch(

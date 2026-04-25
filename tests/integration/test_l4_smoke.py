@@ -169,12 +169,19 @@ class TestL4SmokeSuite(_IntegrationBase, unittest.TestCase):
             dom_total=None,  # DOM fallback returns None → watchdog fires on timeout
         )
         _cdp_main.register_driver(self.worker_id, stub)
+        # Disable the _IntegrationBase auto-notify wrapper so Phase A can
+        # actually time out.  Phase A uses _WATCHDOG_TIMEOUT_PAYMENT.
+        import modules.watchdog.main as _wd  # pylint: disable=import-outside-toplevel
         start = time.monotonic()
         exc_caught = None
         try:
             with patch(
                 "integration.orchestrator.billing", make_mock_billing()
-            ), patch("integration.orchestrator._WATCHDOG_TIMEOUT", timeout):
+            ), patch(
+                "integration.orchestrator._WATCHDOG_TIMEOUT_PAYMENT", timeout,
+            ), patch.object(
+                _wd, "enable_network_monitor", self._real_enable_network_monitor,
+            ):
                 run_payment_step(task, worker_id=self.worker_id)
         except SessionFlaggedError as exc:
             exc_caught = exc

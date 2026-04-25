@@ -40,6 +40,7 @@ from integration.orchestrator import (
     _notified_workers_this_cycle,
     _submitted_task_ids,
 )
+import modules.watchdog.main as _watchdog
 from modules.watchdog.main import reset as _reset_watchdog
 
 
@@ -216,8 +217,25 @@ class _IntegrationBase:
             _notified_workers_this_cycle.discard(self.worker_id)
         _reset_watchdog()
         cleanup_worker(self.worker_id)
+        # Phase 3A: run_payment_step now blocks on watchdog.wait_for_total
+        # BEFORE the stub driver runs, so the stub never gets a chance to
+        # fire a CDP/DOM notify.  Wrap enable_network_monitor so each call
+        # auto-fires notify_total in a daemon thread — every enable creates
+        # a fresh watchdog session, so it is safe to notify on every call
+        # (Phase A + Phase C, plus retry loops that re-enter run_payment_step).
+        self._real_enable_network_monitor = _watchdog.enable_network_monitor
+
+        def _enable_and_autonotify(worker_id: str) -> None:
+            self._real_enable_network_monitor(worker_id)
+            threading.Thread(
+                target=lambda: _watchdog.notify_total(worker_id, 50.0),
+                daemon=True,
+            ).start()
+
+        _watchdog.enable_network_monitor = _enable_and_autonotify
 
     def tearDown(self):  # pylint: disable=invalid-name
+        _watchdog.enable_network_monitor = self._real_enable_network_monitor
         _cdp_main.unregister_driver(self.worker_id)
         cleanup_worker(self.worker_id)
 
