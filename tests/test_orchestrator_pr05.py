@@ -289,12 +289,15 @@ class ExceptionRoutingTests(unittest.TestCase):
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
 
     def test_watchdog_timeout_after_submit_logs_after_submission(self):
-        """SessionFlaggedError from watchdog must log 'AFTER payment submission'."""
+        """SessionFlaggedError from POST-submit watchdog (Phase C) is now swallowed:
+        marks task unconfirmed and logs a WARNING (not an ERROR) — submission is
+        irreversible so we don't re-raise.  Phase 3A Task 2 / Option A.
+        """
         task = _make_task()
-        log_messages = []
+        warn_messages = []
 
-        def capture_error(fmt, *args, **kwargs):
-            log_messages.append(fmt % args if args else fmt)
+        def capture_warning(fmt, *args, **kwargs):
+            warn_messages.append(fmt % args if args else fmt)
 
         store_mock = MagicMock()
         with (
@@ -309,18 +312,24 @@ class ExceptionRoutingTests(unittest.TestCase):
             mock_cdp._get_driver.return_value = MagicMock()
             mock_cdp.run_preflight_and_fill.return_value = None
             mock_cdp.submit_purchase.return_value = None
-            mock_watchdog.wait_for_total.side_effect = SessionFlaggedError("timeout")
-            mock_logger.error.side_effect = capture_error
+            # Phase A succeeds, Phase C times out.
+            mock_watchdog.wait_for_total.side_effect = [
+                "preflight-total",
+                SessionFlaggedError("post-submit timeout"),
+            ]
+            mock_logger.warning.side_effect = capture_warning
 
-            with self.assertRaises(SessionFlaggedError):
-                run_payment_step(task, worker_id="exc-worker")
+            # Phase C swallows: no exception bubbles up.
+            run_payment_step(task, worker_id="exc-worker")
 
-        post_msgs = [m for m in log_messages if "AFTER payment submission" in m]
+        # New semantics: Phase C timeout logs WARNING with 'unconfirmed' marker.
+        unconfirmed_msgs = [m for m in warn_messages if "unconfirmed" in m.lower()]
         self.assertTrue(
-            len(post_msgs) >= 1,
-            f"Expected 'AFTER payment submission' log after watchdog timeout, got: {log_messages}",
+            len(unconfirmed_msgs) >= 1,
+            f"Expected post-submit unconfirmed warning, got: {warn_messages}",
         )
         store_mock.mark_submitted.assert_called_once_with(task.task_id)
+        store_mock.mark_unconfirmed.assert_called_once()
 
 
 # ── U-07: Idempotency crash simulation ────────────────────────────────────────

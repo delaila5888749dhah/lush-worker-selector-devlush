@@ -227,9 +227,13 @@ class WatchdogTimeoutAfterSubmitWiringTests(_IsolatedStoreTestCase):
         task = _make_task("wd-after-submit")
         fake_store = MagicMock()
 
+        # Phase A succeeds (preflight total received), Phase C times out
+        # AFTER the submit — the new Option A semantics swallow the post-submit
+        # timeout and mark the task unconfirmed without re-raising.
         with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
              patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
              patch.object(orch.cdp, "_get_driver", return_value=MagicMock()), \
+             patch.object(orch.cdp, "detect_page_state", return_value="success"), \
              patch.object(orch, "_setup_network_total_listener"), \
              patch.object(orch, "_notify_total_from_dom"), \
              patch.object(orch.billing, "select_profile", return_value=MagicMock()), \
@@ -237,11 +241,11 @@ class WatchdogTimeoutAfterSubmitWiringTests(_IsolatedStoreTestCase):
              patch.object(orch.watchdog, "enable_network_monitor"), \
              patch.object(orch.watchdog, "reset_session"), \
              patch.object(orch.watchdog, "wait_for_total",
-                          side_effect=SessionFlaggedError("timeout")):
-            with self.assertRaises(SessionFlaggedError):
-                orch.run_payment_step(
-                    worker_id="w1", task=task, zip_code="12345",
-                )
+                          side_effect=[49.99, SessionFlaggedError("timeout")]):
+            # Phase C swallows: no exception bubbles up.
+            orch.run_payment_step(
+                worker_id="w1", task=task, zip_code="12345",
+            )
 
         fake_store.mark_submitted.assert_called_once_with("wd-after-submit")
         fake_store.mark_unconfirmed.assert_called_once()
@@ -253,17 +257,18 @@ class WatchdogTimeoutAfterSubmitWiringTests(_IsolatedStoreTestCase):
         task = _make_task("wd-before-submit")
         fake_store = MagicMock()
 
-        def _fail_first(fn, *a, **kw):
-            raise SessionFlaggedError("preflight timeout")
-
+        # Phase A times out → SessionFlaggedError raised BEFORE any fill /
+        # submit / mark_submitted; therefore mark_unconfirmed is never called.
         with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
-             patch.object(orch, "_cdp_call_with_timeout", side_effect=_fail_first), \
+             patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
              patch.object(orch.cdp, "_get_driver", return_value=MagicMock()), \
              patch.object(orch, "_setup_network_total_listener"), \
              patch.object(orch.billing, "select_profile", return_value=MagicMock()), \
              patch.object(orch, "_emit_billing_audit_event"), \
              patch.object(orch.watchdog, "enable_network_monitor"), \
-             patch.object(orch.watchdog, "reset_session"):
+             patch.object(orch.watchdog, "reset_session"), \
+             patch.object(orch.watchdog, "wait_for_total",
+                          side_effect=SessionFlaggedError("preflight timeout")):
             with self.assertRaises(SessionFlaggedError):
                 orch.run_payment_step(
                     worker_id="w2", task=task, zip_code="12345",

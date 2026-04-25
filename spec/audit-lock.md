@@ -281,6 +281,7 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | ME-002 | MEDIUM | `integration/runtime.py` | Timezone-less log timestamps replaced with `datetime.now(timezone.utc).isoformat(timespec="seconds")`. |
 | ME-003 | MEDIUM | `modules/billing/main.py` | `_find_matching_index()` missing lock contract docstring added — documents that caller must hold `_lock`. |
 | ME-004 | MEDIUM | `integration/orchestrator.py` | `_FSM_STATES` duplicate eliminated — now imported directly from `modules.fsm.main.ALLOWED_STATES` to prevent drift (see INV-FSM-01). |
+| AF-001 | MEDIUM | `integration/orchestrator.py` | Phase 3A Task 2 — `run_payment_step` split into Phase A (preflight `wait_for_total` BEFORE fill, raises on timeout per INV-PAYMENT-01) / Phase B (fill + `mark_submitted` + `submit_purchase`) / Phase C (post-submit `wait_for_total`, swallows timeout → marks task unconfirmed). Reconciles `spec/contracts/section5_payment.yaml` ordering. |
 
 ---
 

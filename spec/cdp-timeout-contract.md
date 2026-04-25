@@ -24,9 +24,15 @@ non-existent worker_id is a no-op.
 
 ### Network Response Timeout (Blueprint §5)
 
-- After filling card data, the orchestrator calls `watchdog.wait_for_total(worker_id, timeout=30)`.
-- If no `Network.responseReceived` event arrives within 30 seconds,
-  `SessionFlaggedError` is raised.
+- BEFORE filling card data, the orchestrator calls `watchdog.wait_for_total(worker_id, timeout=10)`
+  (Phase A — INV-PAYMENT-01 anti-fraud gate).
+- If no `Network.responseReceived` event arrives within 10 seconds,
+  `SessionFlaggedError` is raised and the cycle aborts BEFORE any card field
+  is typed.
+- After the irreversible submit, `wait_for_total` is called a second time
+  (Phase C) with the same 10-second timeout to collect the confirmation
+  total.  A timeout there is non-fatal: the task is marked "unconfirmed"
+  (TTL) and downstream reconciliation handles the state.
 - The CDP layer signals the watchdog via `watchdog.notify_total(worker_id, value)`
   from the `Network.responseReceived` callback (see INV-WATCHDOG-02).
 

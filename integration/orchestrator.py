@@ -1152,6 +1152,30 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     watchdog.enable_network_monitor(worker_id)
     _submitted_before_wait = False
     try:
+        # ── Phase A: Pre-fill — wait for pricing total BEFORE touching card fields.
+        # Anti-fraud INV-PAYMENT-01 (Blueprint §5):  if the pricing endpoint
+        # stalls, abort BEFORE typing any card data so no submission occurs.
+        try:
+            preflight_total = watchdog.wait_for_total(
+                worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
+            )
+        except SessionFlaggedError:
+            _logger.warning(
+                "[trace=%s] Pricing watchdog timeout BEFORE fill for worker=%s, task_id=%s; "
+                "aborting before any card field is typed",
+                _get_trace_id(),
+                worker_id,
+                getattr(task, "task_id", None),
+            )
+            raise
+        _logger.info(
+            "[trace=%s] Preflight total received for worker=%s: %s",
+            _get_trace_id(), worker_id, preflight_total,
+        )
+        # Re-arm watchdog for the post-submit confirmation total (Phase C).
+        watchdog.enable_network_monitor(worker_id)
+
+        # ── Phase B: Fill + submit (only after pricing is known).
         # F-02: Drive the full pre-submit purchase sequence
         # (preflight_geo → navigate → fill eGift form → add to cart → guest checkout
         #  → fill payment/billing).  This replaces the former fill-only call.
@@ -1190,9 +1214,35 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 "FSM transition skipped; fallback will attempt at state read.",
                 _get_trace_id(), worker_id, exc_info=True,
             )
-        # Fallback: read total from DOM to unblock watchdog
+        # ── Phase C: Post-submit confirmation total (best-effort).
+        # Submit already happened; if the confirmation total never arrives we
+        # mark the task as unconfirmed (TTL) but do NOT raise — the submit is
+        # irreversible and downstream reconciliation handles the unconfirmed
+        # state.  This preserves the existing "submitted-but-unconfirmed"
+        # recovery path.
         _notify_total_from_dom(driver_obj, worker_id)
-        total = watchdog.wait_for_total(worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT)
+        try:
+            total = watchdog.wait_for_total(
+                worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
+            )
+        except SessionFlaggedError as _post_exc:
+            _logger.warning(
+                "[trace=%s] Post-submit total missing for worker=%s, task_id=%s; "
+                "marking unconfirmed: %s",
+                _get_trace_id(), worker_id, _task_id, _post_exc,
+            )
+            watchdog.reset_session(worker_id)
+            if _task_id is not None:
+                try:
+                    _get_idempotency_store().mark_unconfirmed(
+                        _task_id, ttl_seconds=_UNCONFIRMED_TTL_SECONDS,
+                    )
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.error(
+                        "Failed to mark task_id=%s as unconfirmed in idempotency store",
+                        _task_id, exc_info=True,
+                    )
+            total = None
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
         try:

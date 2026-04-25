@@ -58,6 +58,26 @@ class CDPError(Exception):
     """
 
 
+class CDPClickError(SessionFlaggedError):
+    """Raised when ``bounding_box_click`` cannot dispatch a trusted CDP click.
+
+    Inherits from :class:`SessionFlaggedError` so the runtime treats the
+    failure as a flagged session requiring cleanup, rather than retrying a
+    Selenium-native ``element.click()`` (which would emit ``isTrusted=False``
+    events and increase anti-fraud risk).
+
+    Raised by :meth:`modules.cdp.driver.GivexDriver.bounding_box_click`
+    in strict mode (``self._strict=True``, the default) when:
+
+    1. ``getBoundingClientRect()`` raises (rect fetch failure).
+    2. The element rect is missing/zero-size (off-screen or detached).
+    3. The persona-bound RNG (``self._rnd``) is unavailable.
+    4. The CDP dispatch sequence itself fails (network/protocol error).
+
+    See Phase 3A audit finding [D3].
+    """
+
+
 class CDPCommandError(SessionFlaggedError):
     """Raised when a CDP command fails in a non-retryable manner.
 

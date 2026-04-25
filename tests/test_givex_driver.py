@@ -60,7 +60,7 @@ from modules.cdp.driver import (
     URL_GEO_CHECK,
     URL_PAYMENT,
 )
-from modules.common.exceptions import PageStateError, SelectorTimeoutError
+from modules.common.exceptions import CDPClickError, PageStateError, SelectorTimeoutError
 from modules.common.types import BillingProfile, CardInfo, WorkerTask
 
 
@@ -303,7 +303,7 @@ class TestAddToCartAndCheckout(unittest.TestCase):
             return []
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"):
             with self.assertRaises(SelectorTimeoutError):
@@ -340,7 +340,14 @@ class TestSelectGuestCheckout(unittest.TestCase):
 
         begin_el.click.assert_called_once()
         heading_el.click.assert_called_once()
-        email_el.send_keys.assert_called_with("guest@example.com")
+        # Phase 3A Task 1: guest email is now routed through CDP dispatchKeyEvent
+        # via _realistic_type_field, NOT Selenium send_keys.
+        email_el.send_keys.assert_not_called()
+        cdp_chars = "".join(
+            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
+            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
+        )
+        self.assertIn("guest@example.com", cdp_chars)
         continue_el.click.assert_called_once()
 
     def test_select_guest_checkout_raises_if_begin_checkout_missing(self):
@@ -362,7 +369,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
             return []
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
         with patch("time.sleep"), patch.object(gd, "_wait_for_url"):
             with self.assertRaises(SelectorTimeoutError):
                 gd.select_guest_checkout("guest@example.com")
@@ -381,7 +388,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
             return []
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
         with patch("time.sleep"), patch.object(gd, "_wait_for_url"):
             with self.assertRaises(SelectorTimeoutError):
                 gd.select_guest_checkout("guest@example.com")
@@ -412,12 +419,14 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         self.assertIn(task.primary_card.card_number, cdp_chars)
         self.assertIn(task.primary_card.cvv, cdp_chars)
 
-        # Billing text fields (typed as whole string via _cdp_type_field).
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        self.assertIn(billing.address, sent_values)
-        self.assertIn(billing.city, sent_values)
-        self.assertIn(billing.zip_code, sent_values)
-        self.assertIn(billing.phone, sent_values)
+        # Billing text fields are now also routed through CDP dispatchKeyEvent
+        # (Phase 3A Task 1 — INV-PAYMENT-01 anti-detect).
+        self.assertIn(billing.address, cdp_chars)
+        self.assertIn(billing.city, cdp_chars)
+        self.assertIn(billing.zip_code, cdp_chars)
+        self.assertIn(billing.phone, cdp_chars)
+        # And NOT through Selenium send_keys.
+        element.send_keys.assert_not_called()
 
         # Select options for expiry, country, state
         select_calls = {c.args[0]: c.args[1] for c in mock_select.call_args_list}
@@ -504,11 +513,16 @@ class TestFillBilling(unittest.TestCase):
         with patch.object(gd, "_cdp_select_option") as mock_select:
             gd.fill_billing(billing)
 
-        sent_values = [c.args[0] for c in element.send_keys.call_args_list]
-        self.assertIn(billing.address, sent_values)
-        self.assertIn(billing.city, sent_values)
-        self.assertIn(billing.zip_code, sent_values)
-        self.assertIn(billing.phone, sent_values)
+        # Phase 3A Task 1: billing text fields routed through CDP dispatchKeyEvent.
+        cdp_chars = "".join(
+            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
+            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
+        )
+        self.assertIn(billing.address, cdp_chars)
+        self.assertIn(billing.city, cdp_chars)
+        self.assertIn(billing.zip_code, cdp_chars)
+        self.assertIn(billing.phone, cdp_chars)
+        element.send_keys.assert_not_called()
 
         # State and country selected
         state_calls = [c for c in mock_select.call_args_list if c.args[0] == SEL_BILLING_STATE]
@@ -833,7 +847,7 @@ class TestNavigateToEgift(unittest.TestCase):
             return [btn_el]
 
         selenium.find_elements.side_effect = side_effect
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"):
             gd.navigate_to_egift()
@@ -854,7 +868,7 @@ class TestNavigateToEgift(unittest.TestCase):
 
         selenium.find_elements.side_effect = side_effect
         selenium.execute_script.side_effect = RuntimeError("script error")
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"):
             gd.navigate_to_egift()
@@ -877,7 +891,7 @@ class TestNavigateToEgift(unittest.TestCase):
 
         selenium.find_elements.side_effect = side_effect
         selenium.delete_all_cookies.side_effect = RuntimeError("cookie clear error")
-        gd = GivexDriver(selenium)
+        gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"):
             gd.navigate_to_egift()
@@ -1747,7 +1761,7 @@ class TestStrictMode(unittest.TestCase):
         return {"left": 100.0, "top": 200.0, "width": 80.0, "height": 30.0}
 
     def test_strict_mode_no_click_fallback_when_cdp_fails(self):
-        """In strict mode, .click() must NOT be called when CDP fails."""
+        """In strict mode, CDP failure raises CDPClickError (no .click() fallback)."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -1756,7 +1770,8 @@ class TestStrictMode(unittest.TestCase):
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona, strict=True)
         with patch("time.sleep"):
-            gd.bounding_box_click("#el")
+            with self.assertRaises(CDPClickError):
+                gd.bounding_box_click("#el")
         element.click.assert_not_called()
 
     def test_non_strict_mode_uses_click_fallback_when_cdp_fails(self):
@@ -1772,8 +1787,8 @@ class TestStrictMode(unittest.TestCase):
             gd.bounding_box_click("#el")
         element.click.assert_called_once()
 
-    def test_strict_mode_emits_warning_on_cdp_failure(self):
-        """Strict mode logs WARNING when CDP interaction is suppressed."""
+    def test_strict_mode_raises_on_cdp_failure(self):
+        """Strict mode raises CDPClickError (Phase 3A: no warning-and-swallow)."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
@@ -1782,9 +1797,8 @@ class TestStrictMode(unittest.TestCase):
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona, strict=True)
         with patch("time.sleep"):
-            with self.assertLogs("modules.cdp.driver", level="WARNING") as cm:
+            with self.assertRaises(CDPClickError):
                 gd.bounding_box_click("#el")
-        self.assertTrue(any("strict" in msg.lower() for msg in cm.output))
 
     def test_default_strict_is_true(self):
         """GivexDriver defaults to strict mode."""
@@ -1824,13 +1838,13 @@ class TestRealisticTypeField(unittest.TestCase):
         self.assertEqual(mock_tv.call_args[0][2], "test")
 
     def test_realistic_type_falls_back_when_keyboard_unavailable(self):
-        """When _type_value is None, falls back to _cdp_type_field."""
+        """When _type_value is None, falls back to _send_keys_fallback (NOT _cdp_type_field)."""
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         gd = GivexDriver(selenium)
         with patch("modules.cdp.driver._type_value", None):
-            with patch.object(gd, "_cdp_type_field") as mock_fallback:
+            with patch.object(gd, "_send_keys_fallback") as mock_fallback:
                 gd._realistic_type_field("#field", "value")
         mock_fallback.assert_called_once_with("#field", "value")
 
