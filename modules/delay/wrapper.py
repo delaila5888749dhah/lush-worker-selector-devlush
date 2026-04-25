@@ -224,7 +224,7 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
                 engine.get_step_accumulated_delay(),
             )
             engine.reset_step_accumulator()
-            # Phase 5B Task 3: reset gradual drift envelope at cycle boundary.
+            # Reset AR(1) drift envelope per Blueprint §10 so each cycle starts neutral.
             temporal.reset_drift()
             sm.reset()
         # (before submit click).  Only reached when task_fn succeeded.

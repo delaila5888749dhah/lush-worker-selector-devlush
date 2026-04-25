@@ -52,6 +52,8 @@ class TestGradualDriftAutoregressive(unittest.TestCase):
             tm.apply_gradual_drift(1.0)
             multipliers.append(tm._drift_multiplier)  # pylint: disable=protected-access
         # AR(1) correlation between m[t] and m[t-1] should be > 0.5.
+        # With AR coef=0.98 the theoretical lag-1 autocorrelation ≈ 0.98;
+        # 0.5 is a conservative lower bound to tolerate finite-sample noise.
         corr = self._correlation(multipliers[:-1], multipliers[1:])
         self.assertGreater(corr, 0.5,
                            f"Expected AR(1) lag-1 correlation >0.5, got {corr:.3f}")

@@ -137,10 +137,10 @@ class TemporalModel:
         ``[1 - drift_cap, 1 + drift_cap]`` so the envelope never exceeds
         ±30% by default.
         """
+        with self._rnd_lock:
+            step = self._rnd.gauss(0.0, drift_rate)
         with self._drift_lock:
             self._drift_step_count += 1
-            with self._rnd_lock:
-                step = self._rnd.gauss(0.0, drift_rate)
             new_mult = (
                 self._DRIFT_AR_COEF * self._drift_multiplier
                 + (1.0 - self._DRIFT_AR_COEF) * 1.0
