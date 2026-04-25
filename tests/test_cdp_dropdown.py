@@ -37,8 +37,7 @@ class TestCdpSelectOption(unittest.TestCase):
 
         gd = GivexDriver(selenium, strict=False)
 
-        with patch("modules.cdp.driver.dispatch_key", create=True) as _unused, \
-                patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
+        with patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
                 patch.object(gd, "bounding_box_click") as mock_click, \
                 patch("modules.cdp.driver.time.sleep"):
             gd._cdp_select_option("#month", "03")
