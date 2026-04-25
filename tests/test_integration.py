@@ -1381,7 +1381,7 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
         profile_id = event["profile_id"]
         self.assertNotIn("Jane", profile_id)
         self.assertNotIn("Doe", profile_id)
-        expected = hashlib.sha256("Jane|Doe|90210".encode("utf-8")).hexdigest()[:16]
+        expected = hashlib.sha256("Jane|Doe|90210".encode("utf-8")).hexdigest()
         self.assertEqual(profile_id, expected)
 
     def test_no_raw_pii_in_audit_event(self):
@@ -1423,11 +1423,11 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
         self.assertEqual(id1, id2)
 
     def test_make_profile_id_format(self):
-        """profile_id must be exactly 16 lowercase hex characters."""
+        """profile_id must be exactly 64 lowercase hex characters (full SHA-256)."""
         profile = self._make_profile()
         profile_id = _make_profile_id(profile)
-        self.assertEqual(len(profile_id), 16)
-        self.assertRegex(profile_id, r'^[0-9a-f]{16}$')
+        self.assertEqual(len(profile_id), 64)
+        self.assertRegex(profile_id, r'^[0-9a-f]{64}$')
 
 
 if __name__ == "__main__":

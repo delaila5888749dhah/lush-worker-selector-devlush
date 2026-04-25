@@ -283,6 +283,15 @@ force_kill() pops PID under lock BEFORE calling os.kill().
 | ME-004 | MEDIUM | `integration/orchestrator.py` | `_FSM_STATES` duplicate eliminated — now imported directly from `modules.fsm.main.ALLOWED_STATES` to prevent drift (see INV-FSM-01). |
 | AF-001 | MEDIUM | `integration/orchestrator.py` | Phase 3A Task 2 — `run_payment_step` split into Phase A (preflight `wait_for_total` BEFORE fill, raises on timeout per INV-PAYMENT-01) / Phase B (fill + `mark_submitted` + `submit_purchase`) / Phase C (post-submit `wait_for_total`, swallows timeout → marks task unconfirmed). Reconciles `spec/contracts/section5_payment.yaml` ordering. |
 
+### Phase 6 — Data Layer Audit (2026-04-24)
+
+| ID | Severity | File | Description |
+|---|---|---|---|
+| P6-I1 | HIGH | `integration/orchestrator.py` | `_emit_billing_audit_event` gated inside the `if _profile is None` branch of `run_payment_step`, and a single emit added at the actual `billing.select_profile()` call-site in `run_cycle`. Guarantees exactly one `billing_selection` audit event per cycle even when swap-card retries reuse `ctx.billing_profile` (Blueprint §12 line 693). |
+| P6-I4 | MEDIUM | `integration/orchestrator.py` | `_make_profile_id` returns the full 64-character SHA-256 hex digest (Blueprint §12 line 703); previous implementation truncated to 16 chars. |
+| P6-A2 | MEDIUM | `integration/task_loader.py` | `_make_card` now validates card number (15-16 digits), expiry month (01-12), expiry year (YY or YYYY) and CVV (3-4 digits) via regex. `_parse_line` wraps `_make_card` in try/except and logs a privacy-safe skip message (line number, never raw PAN). |
+| P6-D3 | MEDIUM | `modules/billing/main.py` | `request_pool_reload()` now clears `_MASTER_POOL`, `_MASTER_POOL_LOADED`, `_WORKER_STATES`, and the legacy deque, then eagerly re-reads the pool directory. Per-worker sharded selection path now picks up new profiles after reload. |
+
 ---
 
 ## CHANGE POLICY (Post-Audit)

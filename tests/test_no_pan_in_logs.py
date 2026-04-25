@@ -158,6 +158,94 @@ class NoPanInLogsTests(unittest.TestCase):
             "Raw PAN leaked into the Telegram request body",
         )
 
+    def test_audit_event_profile_id_is_full_64_char_hash(self):
+        """After Phase 6 Task 2, profile_id must be 64 hex chars (full SHA-256).
+
+        Guards against regression to truncated 16-char form that would reduce
+        correlation strength and could be mistaken for raw data in log
+        scanners.
+        """
+        from integration import orchestrator  # noqa: PLC0415
+
+        profile = MagicMock()
+        profile.first_name = "Alice"
+        profile.last_name = "Smith"
+        profile.zip_code = "90210"
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        orchestrator._AUDIT_LOGGER.addHandler(handler)
+        prev_level = orchestrator._AUDIT_LOGGER.level
+        orchestrator._AUDIT_LOGGER.setLevel(logging.DEBUG)
+        try:
+            orchestrator._emit_billing_audit_event(
+                profile=profile, worker_id="w1", task_id="t-1", zip_code="90210",
+            )
+        finally:
+            orchestrator._AUDIT_LOGGER.removeHandler(handler)
+            orchestrator._AUDIT_LOGGER.setLevel(prev_level)
+        logged = stream.getvalue()
+        # Extract profile_id value — "profile_id": "<64 hex>"
+        m = re.search(r'"profile_id":\s*"([0-9a-f]+)"', logged)
+        self.assertIsNotNone(m, f"profile_id not found in audit log: {logged}")
+        self.assertEqual(len(m.group(1)), 64)
+
+    def test_parser_error_messages_never_contain_pan(self):
+        """ValueError messages raised by ``_make_card`` must not echo raw digits."""
+        from integration.task_loader import _make_card  # noqa: PLC0415
+
+        bad_pans = ["4" * 14, "5" * 17, "4111-ABCD-1111-1111"]
+        for bad in bad_pans:
+            with self.assertRaises(ValueError) as ctx:
+                _make_card([bad, "01", "2030", "123"])
+            msg = str(ctx.exception)
+            self.assertFalse(
+                _contains_pan(msg, pan=re.sub(r"\D", "", bad)),
+                f"Parser error leaked PAN digits: {msg}",
+            )
+
+    def test_concurrent_audit_emit_no_pii_interleaving(self):
+        """Multi-thread emits from different workers must not interleave PII
+        fragments from distinct profiles in the same log line."""
+        import threading  # noqa: PLC0415
+        from integration import orchestrator  # noqa: PLC0415
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        orchestrator._AUDIT_LOGGER.addHandler(handler)
+        prev_level = orchestrator._AUDIT_LOGGER.level
+        orchestrator._AUDIT_LOGGER.setLevel(logging.DEBUG)
+
+        def _emit(name, worker_id):
+            profile = MagicMock()
+            profile.first_name = name
+            profile.last_name = "X"
+            profile.zip_code = "12345"
+            orchestrator._emit_billing_audit_event(
+                profile=profile, worker_id=worker_id, task_id="t", zip_code="12345",
+            )
+
+        threads = [
+            threading.Thread(target=_emit, args=(f"Name{i}", f"w{i}")) for i in range(8)
+        ]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            orchestrator._AUDIT_LOGGER.removeHandler(handler)
+            orchestrator._AUDIT_LOGGER.setLevel(prev_level)
+
+        logged = stream.getvalue()
+        # No raw first_name should appear anywhere.
+        for i in range(8):
+            self.assertNotIn(f"Name{i}", logged)
+        # And no PAN-shaped string either.
+        self.assertFalse(_contains_pan(logged))
+
 
 if __name__ == "__main__":
     unittest.main()
