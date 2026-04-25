@@ -1299,7 +1299,6 @@ class GivexDriver:
                         self, SEL_VBV_IFRAME, sel, rng=self._get_rng(),
                     )
                     _log.debug("VBV cancel clicked via selector: %s", sel)
-                    last_exc = None
                     break
                 except (NoSuchElementException, StaleElementReferenceException) as exc:
                     last_exc = exc
