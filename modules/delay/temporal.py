@@ -8,6 +8,8 @@ within ``modules.delay``; no imports from outside that package.
 Deterministic via random.Random(seed) from PersonaProfile.
 """
 
+import contextvars
+import math
 import random
 import threading
 import time
@@ -19,6 +21,40 @@ from modules.delay.config import (
     ENABLE_GRADUAL_DRIFT,
 )
 from modules.delay.persona import PersonaProfile
+
+
+# ── UTC offset propagation (Phase 5B Task 1) ────────────────────────────────
+# ContextVar approach keeps wrapper/inject_step_delay signatures unchanged.
+# integration.worker_task sets this value right after the MaxMind lookup so
+# that all temporal computations performed inside the same execution context
+# (worker thread) see the proxy-derived UTC offset.
+_utc_offset_var: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "delay_utc_offset_hours", default=0.0
+)
+
+
+def set_utc_offset(offset_hours: float) -> None:
+    """Set the UTC offset for temporal computations in the current context.
+
+    *offset_hours* is the proxy-derived UTC offset (e.g. ``-8.0`` for PST).
+    The value propagates to :meth:`TemporalModel.apply_temporal_modifier`
+    and :meth:`TemporalModel.get_night_typo_increase` for any caller in
+    the same ``contextvars`` context (typically the same worker thread)
+    that does not pass an explicit ``utc_offset_hours`` argument.
+    """
+    try:
+        offset = float(offset_hours)
+        if not math.isfinite(offset):
+            raise ValueError("utc offset must be finite")
+        _utc_offset_var.set(offset)
+    except (TypeError, ValueError):
+        # Defensive: never let a bad MaxMind payload crash worker setup.
+        _utc_offset_var.set(0.0)
+
+
+def get_utc_offset() -> float:
+    """Return the current context's UTC offset (defaults to 0.0)."""
+    return _utc_offset_var.get()
 
 
 class TemporalModel:
@@ -34,7 +70,7 @@ class TemporalModel:
         self._drift_step_count: int = 0
         self._drift_lock = threading.Lock()
 
-    def get_time_state(self, utc_offset_hours: int = 0) -> str:
+    def get_time_state(self, utc_offset_hours: float = 0) -> str:
         """Return ``"DAY"`` or ``"NIGHT"`` based on the persona's active
         hours (Blueprint §10), with midnight wrap-around support.
 
@@ -43,17 +79,39 @@ class TemporalModel:
         (e.g. 22→04 → DAY covers 22..23 and 0..4). When the persona
         exposes no ``active_hours`` attribute, falls back to the global
         ``DAY_START..DAY_END`` constants.
+
+        ``utc_offset_hours`` may be a fractional value (e.g. ``5.5`` for
+        IST); minute precision is preserved for half-hour / quarter-hour
+        offsets when deciding the day/night bucket.
         """
-        local_hour = (time.gmtime().tm_hour + utc_offset_hours) % 24
+        now_utc = time.gmtime()
+        try:
+            offset = float(utc_offset_hours)
+            if not math.isfinite(offset):
+                raise ValueError("utc offset must be finite")
+        except (TypeError, ValueError):
+            offset = 0.0
+        local_hour = (
+            now_utc.tm_hour
+            + (now_utc.tm_min / 60.0)
+            + (now_utc.tm_sec / 3600.0)
+            + offset
+        ) % 24.0
         start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
+        # ``active_hours`` uses inclusive integer buckets, so a fractional
+        # clock must compare against the next whole-hour boundary.
+        day_end_exclusive = end + 1
         if start <= end:
-            in_day = start <= local_hour <= end
+            in_day = start <= local_hour < day_end_exclusive
         else:  # wrap-around through midnight
-            in_day = local_hour >= start or local_hour <= end
+            in_day = local_hour >= start or local_hour < (day_end_exclusive % 24)
         return "DAY" if in_day else "NIGHT"
 
     def apply_temporal_modifier(
-        self, base_delay: float, action_type: str, utc_offset_hours: int = 0
+        self,
+        base_delay: float,
+        action_type: str,
+        utc_offset_hours: float | None = None,
     ) -> float:
         """Apply day/night scaling to *base_delay*, clamped by action type.
 
@@ -62,9 +120,15 @@ class TemporalModel:
         NIGHT mode applies different penalties per action type:
         - typing: slowed by ``night_penalty_factor`` (15–30%, Blueprint §10)
         - thinking: increased by ``NIGHT_HESITATION_INCREASE_RANGE`` (20–40%)
+
+        When *utc_offset_hours* is ``None`` the value is read from the
+        ``contextvars`` set by :func:`set_utc_offset` (typically populated
+        by :mod:`integration.worker_task` after the MaxMind lookup).
         """
         if base_delay <= 0:
             return 0.0
+        if utc_offset_hours is None:
+            utc_offset_hours = _utc_offset_var.get()
         if self.get_time_state(utc_offset_hours) == "NIGHT":
             if action_type == "thinking":
                 with self._rnd_lock:
@@ -105,11 +169,15 @@ class TemporalModel:
             "micro_var_range": (0.90, 1.10),
         }
 
-    def get_night_typo_increase(self, utc_offset_hours: int = 0) -> float:
+    def get_night_typo_increase(self, utc_offset_hours: float | None = None) -> float:
         """Return extra typo probability during NIGHT, 0.0 during DAY.
 
         Blueprint §10: NIGHT increases typo rate by 1–2% absolute (random in range).
+        ``utc_offset_hours=None`` → read from the ContextVar populated by
+        :func:`set_utc_offset`.
         """
+        if utc_offset_hours is None:
+            utc_offset_hours = _utc_offset_var.get()
         if self.get_time_state(utc_offset_hours) == "NIGHT":
             with self._rnd_lock:
                 return self._rnd.uniform(*NIGHT_TYPO_INCREASE_RANGE)

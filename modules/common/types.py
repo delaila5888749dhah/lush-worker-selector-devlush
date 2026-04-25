@@ -94,3 +94,6 @@ class CycleContext:
     card_attempts: int = 0
     task: Optional[WorkerTask] = None
     swap_count: int = 0
+    # Phase 5B Task 1: proxy-derived UTC offset (hours), populated from MaxMind.
+    # 0.0 (UTC) when the lookup is unavailable so behavior remains correct.
+    utc_offset_hours: float = 0.0
