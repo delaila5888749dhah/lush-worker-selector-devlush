@@ -14,7 +14,8 @@ from unittest.mock import MagicMock, patch
 
 from modules.cdp import driver as drv
 from modules.cdp.driver import GivexDriver
-from modules.common.exceptions import SelectorTimeoutError
+from modules.cdp.keyboard import dispatch_key
+from modules.common.exceptions import CDPCommandError, SelectorTimeoutError
 
 
 def _make_driver():
@@ -110,6 +111,122 @@ class TestCdpSelectOption(unittest.TestCase):
         """
         self.assertFalse(hasattr(drv, "Select"),
                          "Select must not be imported in modules.cdp.driver")
+
+    def test_dropdown_aborts_when_arrow_dispatch_fails(self):
+        """Audit [F1]: a failed ``dispatch_key`` MUST stop the navigation
+        loop and surface the error — silently continuing then sending
+        Enter would leave the dropdown unchanged while pretending success.
+        """
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [0, 2]  # need 2× ArrowDown + Enter
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch(
+            "modules.cdp.keyboard.dispatch_key", return_value=False,
+        ) as mock_dispatch, patch.object(
+            gd, "bounding_box_click",
+        ), patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(CDPCommandError):
+                gd._cdp_select_option("#month", "03")
+        # Only the first ArrowDown should be attempted before the abort —
+        # crucially Enter must NOT be dispatched after a failed arrow.
+        keys = [c.args[1] for c in mock_dispatch.call_args_list]
+        self.assertEqual(keys, ["ArrowDown"])
+
+    def test_dropdown_aborts_when_enter_dispatch_fails(self):
+        """Audit [F1]: a failed confirming Enter must also surface."""
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [2, 2]  # already-selected → 0 arrows
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch(
+            "modules.cdp.keyboard.dispatch_key", return_value=False,
+        ) as mock_dispatch, patch.object(
+            gd, "bounding_box_click",
+        ), patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(CDPCommandError):
+                gd._cdp_select_option("#month", "03")
+        keys = [c.args[1] for c in mock_dispatch.call_args_list]
+        self.assertEqual(keys, ["Enter"])
+
+    def test_dropdown_missing_value_does_not_dispatch_any_key(self):
+        """Audit [F2]: when the option is missing, no key event should fire."""
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [0, -1]  # not found
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch(
+            "modules.cdp.keyboard.dispatch_key",
+        ) as mock_dispatch, patch.object(
+            gd, "bounding_box_click",
+        ), patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(ValueError):
+                gd._cdp_select_option("#country", "ZZ")
+        mock_dispatch.assert_not_called()
+
+    def test_dropdown_no_prior_selection_navigates_to_inner_index(self):
+        """Audit [F2/N2]: generalize the no-prior-selection formula — for
+        ``[-1, 3]`` we expect ``target_idx + 1`` ArrowDown presses then Enter.
+        """
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [-1, 3]
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch(
+            "modules.cdp.keyboard.dispatch_key",
+        ) as mock_dispatch, patch.object(
+            gd, "bounding_box_click",
+        ), patch("modules.cdp.driver.time.sleep"):
+            gd._cdp_select_option("#country", "FR")
+
+        keys = [c.args[1] for c in mock_dispatch.call_args_list]
+        self.assertEqual(keys, ["ArrowDown"] * 4 + ["Enter"])
+
+
+class TestDispatchKey(unittest.TestCase):
+    """Audit [F2]: direct coverage for ``modules.cdp.keyboard.dispatch_key``."""
+
+    def test_dispatch_key_emits_keydown_keyup_payload(self):
+        """ArrowDown must emit keyDown+keyUp with proper code + windowsVirtualKeyCode."""
+        selenium = MagicMock()
+        result = dispatch_key(selenium, "ArrowDown")
+        self.assertTrue(result)
+        calls = selenium.execute_cdp_cmd.call_args_list
+        self.assertEqual(len(calls), 2)
+        for call, expected_type in zip(calls, ("keyDown", "keyUp")):
+            method, payload = call.args
+            self.assertEqual(method, "Input.dispatchKeyEvent")
+            self.assertEqual(payload["type"], expected_type)
+            self.assertEqual(payload["key"], "ArrowDown")
+            self.assertEqual(payload["code"], "ArrowDown")
+            self.assertEqual(payload["windowsVirtualKeyCode"], 40)
+            self.assertEqual(payload["modifiers"], 0)
+            self.assertFalse(payload["isKeypad"])
+
+    def test_dispatch_key_enter_payload(self):
+        """Enter must map to vk=13."""
+        selenium = MagicMock()
+        self.assertTrue(dispatch_key(selenium, "Enter"))
+        for call in selenium.execute_cdp_cmd.call_args_list:
+            self.assertEqual(call.args[1]["windowsVirtualKeyCode"], 13)
+            self.assertEqual(call.args[1]["code"], "Enter")
+
+    def test_dispatch_key_unsupported_key_raises_value_error(self):
+        """Unknown key names must raise ``ValueError`` (no CDP call attempted)."""
+        selenium = MagicMock()
+        with self.assertRaises(ValueError):
+            dispatch_key(selenium, "Nope")
+        selenium.execute_cdp_cmd.assert_not_called()
+
+    def test_dispatch_key_returns_false_on_cdp_failure(self):
+        """CDP exceptions are swallowed and reported via False return value."""
+        selenium = MagicMock()
+        selenium.execute_cdp_cmd.side_effect = RuntimeError("boom")
+        self.assertFalse(dispatch_key(selenium, "Enter"))
 
 
 if __name__ == "__main__":  # pragma: no cover

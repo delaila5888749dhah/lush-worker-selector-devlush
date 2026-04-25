@@ -1546,12 +1546,26 @@ class GivexDriver:
             steps = abs(delta)
             key = "ArrowDown" if delta >= 0 else "ArrowUp"
         for _ in range(steps):
-            dispatch_key(self._driver, key)
+            # Audit finding [F1]: ``dispatch_key`` returns False on CDP
+            # failure.  We MUST NOT silently continue (and especially must
+            # not dispatch the confirming Enter) — that would leave the
+            # dropdown unchanged while the caller believes selection
+            # succeeded, breaking the anti-detect contract for [G2].
+            if not dispatch_key(self._driver, key):
+                raise CDPCommandError(
+                    "Input.dispatchKeyEvent",
+                    f"_cdp_select_option: failed to dispatch {key!r} for {selector!r}",
+                )
             jitter = self._rnd.uniform(0.0, 0.05) if self._rnd is not None else 0.0
             time.sleep(0.05 + jitter)
 
-        # Step 4 — confirm the selection.
-        dispatch_key(self._driver, "Enter")
+        # Step 4 — confirm the selection.  Same hardening: a failed Enter
+        # leaves the highlight unchanged and must surface to the caller.
+        if not dispatch_key(self._driver, "Enter"):
+            raise CDPCommandError(
+                "Input.dispatchKeyEvent",
+                f"_cdp_select_option: failed to dispatch Enter for {selector!r}",
+            )
 
     def _smooth_scroll_to(self, selector: str) -> None:
         """Scroll an element into view with a smooth pass and micro-correction."""
@@ -1908,12 +1922,16 @@ class GivexDriver:
                 exc,
             )
         # Also clear the HTTP cache to match Blueprint §7 hard-reset.
+        # Audit finding [F3]: cache wipe failure must be observable at
+        # production log level — silent debug logging hides a real
+        # half-broken hard-reset that lets cross-origin cache survive
+        # into the next cycle.
         try:
             self._driver.execute_cdp_cmd("Network.clearBrowserCache", {})
-        except Exception:
-            _log.debug(
-                "_clear_browser_state: CDP Network.clearBrowserCache skipped",
-                exc_info=True,
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning(
+                "_clear_browser_state: CDP Network.clearBrowserCache failed: %s",
+                exc,
             )
         _log.debug("_clear_browser_state: browser state cleared for new cycle")
 
