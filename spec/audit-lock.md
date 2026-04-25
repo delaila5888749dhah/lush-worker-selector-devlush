@@ -41,16 +41,22 @@ _in_critical_section = True                    → is_critical_context() = True
 
 ### INV-DELAY-03 — Wrapper try/finally Cleanup (Fixed: BUG-001)
 ```
-modules/delay/wrapper.py — _wrapped() always calls engine.reset_step_accumulator()
-and sm.reset() in a finally block, even when task_fn() raises an exception.
+modules/delay/wrapper.py — _wrapped() always calls engine.reset_step_accumulator(),
+temporal.reset_drift(), and sm.reset() in a finally block, even when task_fn()
+raises an exception.
 
 Both injection points are protected:
   - Injection point 1 (typing): inject_step_delay() is inside the try block so
     cleanup runs on exception or interruption from the delay call itself.
-  - Injection point 2 (thinking): wrapped in its own try/finally so accumulator
-    and SM are reset even if the post-success thinking delay raises.
+  - Injection point 2 (thinking): wrapped in its own try/finally so accumulator,
+    drift envelope, and SM are reset even if the post-success thinking delay
+    raises.
 ```
-**Rule:** The `BehaviorStateMachine` for a worker must always return to `IDLE` after each cycle invocation. The `try/finally` pattern in `wrap()` is the enforcing mechanism for both injection points.
+**Rule:** The `BehaviorStateMachine` for a worker must always return to `IDLE`
+after each cycle invocation. The `try/finally` pattern in `wrap()` is the
+enforcing mechanism for both injection points. The gradual drift envelope
+(Phase 5B Task 3) is also reset at every cycle boundary so each new cycle starts
+from a neutral multiplier of 1.0.
 
 ---
 
@@ -60,12 +66,28 @@ modules/delay/temporal.py — apply_temporal_modifier():
   base_delay <= 0          → returns 0.0 immediately (no-op guard)
   any action_type, NIGHT   → return value ∈ [0.0, MAX_*_DELAY]
   any action_type, DAY     → return value ∈ [0.0, MAX_*_DELAY]
+  utc_offset_hours=None    → reads value from contextvars (set by
+                             integration.worker_task.set_utc_offset())
+  action_type ∈ {"typing","thinking"} and ENABLE_GRADUAL_DRIFT
+                           → AR(1) gradual drift multiplier applied
+                             (clamped to [0.70, 1.30] of base, Blueprint §10)
 
 modules/delay/temporal.py — apply_micro_variation():
   result = max(0.0, base_delay * uniform(0.90, 1.10))
   → result is always non-negative
 ```
-**Rule:** Temporal modifier output must be non-negative and bounded by the relevant MAX constant for the action type. `apply_temporal_modifier` guards against non-positive inputs and clamps all outputs to `[0.0, MAX]`. `apply_micro_variation` clamps its result to 0.0 minimum to prevent any negative value propagating to the accumulator.
+
+modules/delay/temporal.py — apply_gradual_drift():
+  AR(1): new = 0.98 * old + 0.02 * 1.0 + N(0, 0.02), clamped to ±30%.
+  reset_drift() restores multiplier=1.0, step_count=0.
+
+**Rule:** Temporal modifier output must be non-negative and bounded by the
+relevant MAX constant for the action type. `apply_temporal_modifier` guards
+against non-positive inputs and clamps all outputs to `[0.0, MAX]`.
+`apply_micro_variation` clamps its result to 0.0 minimum to prevent any
+negative value propagating to the accumulator. `apply_gradual_drift` keeps
+the slow-varying envelope inside ±30% so realistic cycle-to-cycle pacing
+never breaches the per-action MAX clamp.
 
 ---
 ```

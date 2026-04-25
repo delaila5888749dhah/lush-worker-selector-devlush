@@ -30,6 +30,24 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         raise ValueError(f"Invalid DELAY_{name}={raw!r}: expected int")
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Read *name* (NOT prefixed with ``DELAY_``) as a boolean flag.
+
+    Truthy values: ``"1"``, ``"true"``, ``"yes"`` (case-insensitive).
+    Anything else evaluates to *False*. Missing → *default*.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes")
+
+
+# Phase 5B Task 3: gradual behavior drift (Blueprint §10 temporal variation).
+# Default ON so deployments get autoregressive envelope without opt-in;
+# operators can set ENABLE_GRADUAL_DRIFT=0 to disable for A/B testing.
+ENABLE_GRADUAL_DRIFT: bool = _env_bool("ENABLE_GRADUAL_DRIFT", True)
+
 MIN_TYPING_DELAY: float = _env_float("MIN_TYPING_DELAY", 0.6)
 MAX_TYPING_DELAY: float = _env_float("MAX_TYPING_DELAY", 1.8)
 MIN_THINKING_DELAY: float = _env_float("MIN_THINKING_DELAY", 3.0)

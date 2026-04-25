@@ -16,6 +16,7 @@ from modules.delay.config import (
     MAX_TYPING_DELAY, MAX_HESITATION_DELAY, MAX_STEP_DELAY,
     DAY_START, DAY_END, NIGHT_SPEED_PENALTY_RANGE,
     NIGHT_HESITATION_INCREASE_RANGE, NIGHT_TYPO_INCREASE_RANGE,
+    ENABLE_GRADUAL_DRIFT,
 )
 from modules.delay.persona import PersonaProfile
 
@@ -28,6 +29,10 @@ class TemporalModel:
         # seed+1: intentional offset; worker seeds are CRC32-derived (non-adjacent).
         self._rnd = random.Random(persona._seed + 1)
         self._rnd_lock = threading.Lock()
+        # Phase 5B Task 3: AR(1) gradual drift state (slow-varying envelope).
+        self._drift_multiplier: float = 1.0
+        self._drift_step_count: int = 0
+        self._drift_lock = threading.Lock()
 
     def get_time_state(self, utc_offset_hours: int = 0) -> str:
         """Return ``"DAY"`` or ``"NIGHT"`` based on the persona's active
@@ -69,6 +74,9 @@ class TemporalModel:
                 modified = base_delay * (1.0 + self._persona.night_penalty_factor)
         else:
             modified = base_delay
+        # Phase 5B Task 3: gradual drift only on typing/thinking (not click).
+        if ENABLE_GRADUAL_DRIFT and action_type in ("typing", "thinking"):
+            modified = self.apply_gradual_drift(modified)
         if action_type == "typing":
             return max(0.0, min(modified, MAX_TYPING_DELAY))
         if action_type == "thinking":
@@ -106,3 +114,44 @@ class TemporalModel:
             with self._rnd_lock:
                 return self._rnd.uniform(*NIGHT_TYPO_INCREASE_RANGE)
         return 0.0
+
+    # ── Gradual drift (Blueprint §10, Phase 5B Task 3) ──────────────────────
+
+    # AR(1) drift parameters: slow random walk around 1.0, capped ±30%.
+    _DRIFT_AR_COEF: float = 0.98
+    _DRIFT_RATE_DEFAULT: float = 0.02
+    _DRIFT_CAP_DEFAULT: float = 0.30
+
+    def apply_gradual_drift(
+        self,
+        base_delay: float,
+        *,
+        drift_rate: float = _DRIFT_RATE_DEFAULT,
+        drift_cap: float = _DRIFT_CAP_DEFAULT,
+    ) -> float:
+        """AR(1) drift: a slow-varying envelope multiplier (Blueprint §10).
+
+        ``self._drift_multiplier`` random-walks around 1.0 with
+        ``_DRIFT_AR_COEF`` mean reversion and per-step Gaussian increment
+        of std-dev *drift_rate*. The multiplier is clamped to
+        ``[1 - drift_cap, 1 + drift_cap]`` so the envelope never exceeds
+        ±30% by default.
+        """
+        with self._drift_lock:
+            self._drift_step_count += 1
+            with self._rnd_lock:
+                step = self._rnd.gauss(0.0, drift_rate)
+            new_mult = (
+                self._DRIFT_AR_COEF * self._drift_multiplier
+                + (1.0 - self._DRIFT_AR_COEF) * 1.0
+                + step
+            )
+            new_mult = max(1.0 - drift_cap, min(1.0 + drift_cap, new_mult))
+            self._drift_multiplier = new_mult
+        return base_delay * new_mult
+
+    def reset_drift(self) -> None:
+        """Reset drift state to its initial values (call on new cycle)."""
+        with self._drift_lock:
+            self._drift_multiplier = 1.0
+            self._drift_step_count = 0

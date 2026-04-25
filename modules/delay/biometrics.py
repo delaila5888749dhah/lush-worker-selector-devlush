@@ -21,6 +21,15 @@ from modules.delay.config import MIN_TYPING_DELAY, MAX_TYPING_DELAY
 
 _KEYSTROKE_MAX: float = 0.3
 
+# Log-normal parameters for fast burst keystrokes (Blueprint §9):
+# matches real typing biomechanics. exp(_LOGNORM_FAST_MU) ≈ 0.05s median.
+_LOGNORM_FAST_MU: float = -3.0
+_LOGNORM_FAST_SIGMA: float = 0.35
+# Clamp bounds for fast keystrokes — keep distribution scale consistent with
+# the original [0.03, 0.08] range used pre-Phase-5B.
+_FAST_MIN: float = 0.03
+_FAST_MAX: float = 0.08
+
 
 class BiometricProfile:
     """Generate biometric keystroke timing for a worker."""
@@ -38,29 +47,40 @@ class BiometricProfile:
         return max(0.0, min(raw, _KEYSTROKE_MAX))
 
     def generate_burst_pattern(self, total_chars: int) -> list[float]:
-        """Delay list for each character with burst rhythm."""
+        """Per-keystroke delays for burst-typed fields (Blueprint §9).
+
+        Uses a log-normal distribution that matches real typing
+        biomechanics, clamped to ``[_FAST_MIN, _FAST_MAX]``.  Unlike
+        :meth:`generate_4x4_pattern` this method does NOT inject any
+        inter-group pauses — all keystrokes are fast.
+        """
         delays: list[float] = []
-        for i in range(total_chars):
-            if i > 0 and i % 4 == 0:
-                with self._rnd_lock:
-                    delays.append(min(self._rnd.uniform(0.6, 1.8), MAX_TYPING_DELAY))
-            else:
-                with self._rnd_lock:
-                    delays.append(self._rnd.uniform(0.03, 0.08))
+        for _ in range(total_chars):
+            with self._rnd_lock:
+                raw = self._rnd.lognormvariate(
+                    _LOGNORM_FAST_MU, _LOGNORM_FAST_SIGMA
+                )
+            delay = min(max(raw, _FAST_MIN), _FAST_MAX)
+            delay = min(delay, MAX_TYPING_DELAY)
+            delays.append(delay)
         return delays
 
     def generate_4x4_pattern(self) -> list[float]:
-        """16 delay values for 16 card digits (4 fast → pause → repeat)."""
-        delays: list[float] = []
-        for i in range(16):
-            if i in (3, 7, 11):
-                with self._rnd_lock:
-                    delays.append(
-                        max(MIN_TYPING_DELAY,
-                            min(self._rnd.uniform(0.6, 1.8), MAX_TYPING_DELAY)))
-            else:
-                with self._rnd_lock:
-                    delays.append(self._rnd.uniform(0.03, 0.08))
+        """16 delay values for 16 card digits (4 fast → pause → repeat).
+
+        Fast keystrokes use the same log-normal distribution as
+        :meth:`generate_burst_pattern`.  Pauses at indices 3, 7, 11
+        remain uniform per Blueprint §9 spec (longer dwell between
+        4-digit groups).
+        """
+        delays = self.generate_burst_pattern(16)
+        # Override pause positions (indices 3, 7, 11) with longer uniform delay.
+        for pause_idx in (3, 7, 11):
+            with self._rnd_lock:
+                raw_pause = self._rnd.uniform(0.6, 1.8)
+            delays[pause_idx] = max(
+                MIN_TYPING_DELAY, min(raw_pause, MAX_TYPING_DELAY)
+            )
         return delays
 
     def apply_noise(self, base_delay: float) -> float:
