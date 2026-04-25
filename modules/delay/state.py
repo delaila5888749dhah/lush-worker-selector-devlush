@@ -13,8 +13,10 @@ Five mandatory states (SPEC-6 §10.2):
 Thread-safe via threading.Lock.  No cross-module imports.
 """
 
+import contextvars
 import logging
 import threading
+from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -130,3 +132,52 @@ class BehaviorStateMachine:
         with self._lock:
             self._state = "IDLE"
             self._in_critical_section = False
+
+
+# ── Shared-instance context (Phase 5A Task 1) ─────────────────────
+#
+# A :class:`contextvars.ContextVar` so the behaviour wrapper and the
+# CDP driver layer can share a single :class:`BehaviorStateMachine`
+# without changing call signatures across ``integration``/``modules``
+# boundaries.  ``modules.delay.wrapper.wrap`` publishes its SM into
+# this context for the duration of each wrapped task call;
+# ``GivexDriver.__init__`` reads it via :func:`get_current_sm` so
+# transitions issued from driver methods affect the same SM the
+# delay engine uses for safety decisions.
+#
+# The default is ``None`` so call-sites must explicitly fall back to
+# constructing their own SM (preserving existing test behaviour).
+
+_current_sm: "contextvars.ContextVar[Optional[BehaviorStateMachine]]" = (
+    contextvars.ContextVar("modules.delay.state._current_sm", default=None)
+)
+
+
+def get_current_sm() -> Optional[BehaviorStateMachine]:
+    """Return the :class:`BehaviorStateMachine` for the current context.
+
+    Returns ``None`` when no SM has been published in the current
+    context (e.g. the caller is running outside of a behaviour wrapper
+    or in a unit test that constructs the driver directly).
+    """
+    return _current_sm.get()
+
+
+def set_current_sm(sm: Optional[BehaviorStateMachine]):
+    """Publish *sm* as the active state machine for the current context.
+
+    Returns the :class:`contextvars.Token` that must be passed to
+    :func:`reset_current_sm` to restore the previous value.  Callers
+    are expected to use a ``try``/``finally`` pair to guarantee the
+    token is always reset even when the wrapped task raises.
+    """
+    return _current_sm.set(sm)
+
+
+def reset_current_sm(token) -> None:
+    """Restore the previous value of the current-SM context variable.
+
+    *token* must be the :class:`contextvars.Token` returned by the
+    matching :func:`set_current_sm` call.
+    """
+    _current_sm.reset(token)

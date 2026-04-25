@@ -16,7 +16,11 @@ from modules.delay.config import (
     MAX_TYPING_DELAY, MIN_TYPING_DELAY, MIN_THINKING_DELAY, MAX_HESITATION_DELAY,
 )
 from modules.delay.persona import PersonaProfile
-from modules.delay.state import BehaviorStateMachine
+from modules.delay.state import (
+    BehaviorStateMachine,
+    set_current_sm as _set_current_sm,
+    reset_current_sm as _reset_current_sm,
+)
 from modules.delay.engine import DelayEngine
 from modules.delay.temporal import TemporalModel
 from modules.delay.biometrics import BiometricProfile
@@ -210,37 +214,51 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
         with cycle_lock:
             cycle_state["count"] += 1
             cycle_count = cycle_state["count"]
-        # Injection point 1: typing delay before form interaction.
-        # Both the delay injection and task_fn are inside the try so that
-        # the finally cleanup always runs, even if inject_step_delay raises.
-        sm.transition("FILLING_FORM")
+        # Phase 5A Task 1: publish this wrapper's SM into the context so
+        # downstream code (e.g. modules.cdp.driver.GivexDriver) running
+        # inside ``task_fn`` adopts the same instance.  Transitions and
+        # critical-section flips applied by the driver therefore affect
+        # the same SM the delay engine consults.
+        sm_token = _set_current_sm(sm)
         try:
-            inject_step_delay(engine, temporal, "typing", stop_event,
-                              cycle_count=cycle_count)
-            result = task_fn(*args, **kwargs)
-        finally:
-            _log.debug(
-                "wrap: step_accumulated_delay=%.4fs before reset",
-                engine.get_step_accumulated_delay(),
-            )
-            engine.reset_step_accumulator()
-            # Reset AR(1) drift envelope per Blueprint §10 so each cycle starts neutral.
-            temporal.reset_drift()
-            sm.reset()
-        # (before submit click).  Only reached when task_fn succeeded.
-        # Re-enter FILLING_FORM; accumulator was reset above so the
-        # thinking delay is not blocked by the earlier typing delay.
-        # try/finally ensures accumulator and SM are always cleaned up
-        # even if the thinking delay injection raises or is interrupted.
-        sm.transition("FILLING_FORM")
-        try:
-            inject_step_delay(engine, temporal, "thinking", stop_event,
-                              cycle_count=cycle_count)
-        finally:
-            engine.reset_step_accumulator()
-            temporal.reset_drift()
-            sm.reset()
+            # Injection point 1: typing delay before form interaction.
+            # Both the delay injection and task_fn are inside the try so that
+            # the finally cleanup always runs, even if inject_step_delay raises.
+            sm.transition("FILLING_FORM")
+            try:
+                inject_step_delay(engine, temporal, "typing", stop_event,
+                                  cycle_count=cycle_count)
+                result = task_fn(*args, **kwargs)
+            finally:
+                _log.debug(
+                    "wrap: step_accumulated_delay=%.4fs before reset",
+                    engine.get_step_accumulated_delay(),
+                )
+                engine.reset_step_accumulator()
+                # Reset AR(1) drift envelope per Blueprint §10 so each cycle starts neutral.
+                temporal.reset_drift()
+                sm.reset()
+            # (before submit click).  Only reached when task_fn succeeded.
+            # Re-enter FILLING_FORM; accumulator was reset above so the
+            # thinking delay is not blocked by the earlier typing delay.
+            # try/finally ensures accumulator and SM are always cleaned up
+            # even if the thinking delay injection raises or is interrupted.
+            sm.transition("FILLING_FORM")
+            try:
+                inject_step_delay(engine, temporal, "thinking", stop_event,
+                                  cycle_count=cycle_count)
+            finally:
+                engine.reset_step_accumulator()
+                temporal.reset_drift()
+                sm.reset()
 
-        return result
+            return result
+        finally:
+            _reset_current_sm(sm_token)
 
+    # Phase 5A Task 1: expose the wrapper's SM/engine on the returned
+    # callable so tests (and integration code) can verify the shared
+    # instance without breaking the existing single-argument call shape.
+    _wrapped.behavior_sm = sm  # type: ignore[attr-defined]
+    _wrapped.behavior_engine = engine  # type: ignore[attr-defined]
     return _wrapped
