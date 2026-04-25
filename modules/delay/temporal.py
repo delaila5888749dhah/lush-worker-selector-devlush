@@ -93,11 +93,13 @@ class TemporalModel:
             + offset
         ) % 24.0
         start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
-        day_end = (end + 1) % 24
+        # ``active_hours`` uses inclusive integer buckets, so a fractional
+        # clock must compare against the next whole-hour boundary.
+        day_end_exclusive = end + 1
         if start <= end:
-            in_day = start <= local_hour < (end + 1)
+            in_day = start <= local_hour < day_end_exclusive
         else:  # wrap-around through midnight
-            in_day = local_hour >= start or local_hour < day_end
+            in_day = local_hour >= start or local_hour < (day_end_exclusive % 24)
         return "DAY" if in_day else "NIGHT"
 
     def apply_temporal_modifier(
