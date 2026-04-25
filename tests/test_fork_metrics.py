@@ -7,6 +7,15 @@ import unittest
 
 from modules.monitor import main as monitor
 
+EXPECTED_FORK_KEYS = {
+    "fork_success",
+    "fork_declined",
+    "fork_vbv_3ds",
+    "fork_vbv_cancelled",
+    "fork_ui_lock",
+    "fork_abort_cycle",
+}
+
 
 def _reset_fork_counters():
     """Zero all fork counters while holding the dedicated lock."""
@@ -45,10 +54,7 @@ class TestMonitorForkCounters(unittest.TestCase):
     def test_get_metrics_exposes_all_six_fork_counters(self):
         """get_metrics() must expose all 6 fork_* keys (acceptance criterion)."""
         metrics = monitor.get_metrics()
-        for key in (
-            "fork_success", "fork_declined", "fork_vbv_3ds",
-            "fork_vbv_cancelled", "fork_ui_lock", "fork_abort_cycle",
-        ):
+        for key in EXPECTED_FORK_KEYS:
             self.assertIn(key, metrics, f"{key} missing from get_metrics() output")
             self.assertEqual(metrics[key], 0)
 
@@ -59,7 +65,7 @@ class TestMonitorForkCounters(unittest.TestCase):
         monitor.reset()
 
         snapshot = monitor.get_fork_metrics()
-        self.assertEqual(len(snapshot), 6)
+        self.assertEqual(set(snapshot), EXPECTED_FORK_KEYS)
         self.assertTrue(all(v == 0 for v in snapshot.values()))
 
     def test_record_fork_unknown_branch_is_logged_not_counted(self):
@@ -68,7 +74,7 @@ class TestMonitorForkCounters(unittest.TestCase):
         snapshot = monitor.get_fork_metrics()
         # Unknown branches must not silently inflate any existing counter.
         self.assertNotIn("fork_bogus_branch", snapshot)
-        self.assertEqual(len(snapshot), 6)
+        self.assertEqual(set(snapshot), EXPECTED_FORK_KEYS)
         self.assertTrue(all(v == 0 for v in snapshot.values()))
 
 
