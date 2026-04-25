@@ -422,8 +422,8 @@ class TestCdpHandleUiLockFocusShiftWrapper(unittest.TestCase):
         with cdp_main._registry_lock:
             cdp_main._driver_registry.clear()
 
-    def test_calls_driver_level_function_with_raw_driver(self):
-        """Wrapper unwraps GivexDriver._driver and calls the module-level function."""
+    def test_calls_driver_level_function_with_givex_driver(self):
+        """Wrapper passes the GivexDriver directly (CDP clicks via bounding_box_click)."""
         raw_driver = MagicMock(name="raw_selenium_driver")
         givex_wrapper = MagicMock(name="givex_driver_wrapper")
         givex_wrapper._driver = raw_driver
@@ -433,7 +433,7 @@ class TestCdpHandleUiLockFocusShiftWrapper(unittest.TestCase):
                    return_value=True) as mock_shift:
             result = cdp_main.handle_ui_lock_focus_shift("w-p04")
 
-        mock_shift.assert_called_once_with(raw_driver)
+        mock_shift.assert_called_once_with(givex_wrapper)
         self.assertTrue(result)
 
     def test_uses_driver_directly_when_no_inner_driver_attr(self):

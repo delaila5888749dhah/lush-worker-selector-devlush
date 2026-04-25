@@ -329,8 +329,10 @@ def handle_ui_lock_focus_shift(worker_id: str) -> bool:
         RuntimeError: if no driver has been registered for the given worker_id.
     """
     driver = _get_driver(worker_id)
-    raw = getattr(driver, "_driver", driver)
-    return _driver_focus_shift(raw)
+    # Pass the GivexDriver directly so the Fork-1 retry can dispatch CDP
+    # clicks via ``bounding_box_click`` (Phase 4 audit [B2]) instead of
+    # Selenium ActionChains on the raw driver.
+    return _driver_focus_shift(driver)
 
 
 def register_browser_profile(worker_id: str, profile_id: str) -> None:

@@ -122,5 +122,73 @@ class TestVbvCdpAbsClick(unittest.TestCase):
         driver.switch_to.default_content.assert_called_once_with()
 
 
+class TestVbvCancelSelectorPriority(unittest.TestCase):
+    """Phase 4 audit [D6] — SEL_VBV_CANCEL_BUTTONS priority + helper."""
+
+    def _make_givex(self, selector_to_elements):
+        """Build a driver-stub whose find_elements returns per-selector lists."""
+        from modules.cdp import driver as drv  # noqa: PLC0415
+
+        givex = MagicMock(spec=[
+            "find_elements", "_find_vbv_cancel_button",
+        ])
+        givex.find_elements.side_effect = lambda sel: selector_to_elements.get(sel, [])
+        # Bind the real helper against the stub so we exercise the real logic.
+        givex._find_vbv_cancel_button = (
+            lambda: drv.GivexDriver._find_vbv_cancel_button(givex)
+        )
+        return givex
+
+    def test_sel_vbv_cancel_buttons_is_priority_tuple(self):
+        from modules.cdp.driver import SEL_VBV_CANCEL_BUTTONS, SEL_VBV_CANCEL_BTN
+
+        self.assertIsInstance(SEL_VBV_CANCEL_BUTTONS, tuple)
+        # Blueprint acceptance: ≥10 entries ordered by priority.
+        self.assertGreaterEqual(len(SEL_VBV_CANCEL_BUTTONS), 10)
+        # Cancel selectors must precede any generic close/X selectors.
+        first_close = next(
+            (i for i, s in enumerate(SEL_VBV_CANCEL_BUTTONS) if "close" in s.lower()),
+            len(SEL_VBV_CANCEL_BUTTONS),
+        )
+        last_cancel = max(
+            (i for i, s in enumerate(SEL_VBV_CANCEL_BUTTONS) if "cancel" in s.lower()),
+            default=-1,
+        )
+        self.assertLess(last_cancel, first_close,
+                        "Cancel selectors must have higher priority than Close")
+        # Backward-compat alias — comma-joined string preserves legacy shape.
+        self.assertIsInstance(SEL_VBV_CANCEL_BTN, str)
+        for sel in SEL_VBV_CANCEL_BUTTONS:
+            self.assertIn(sel, SEL_VBV_CANCEL_BTN)
+
+    def test_vbv_cancel_selector_priority_cancel_first(self):
+        """Page has both Cancel and Close — Cancel wins (highest priority)."""
+        cancel_el = MagicMock(name="cancel_btn")
+        close_el = MagicMock(name="close_btn")
+        mapping = {
+            "button[id*='cancel' i]": [cancel_el],
+            "button[aria-label*='close' i]": [close_el],
+        }
+        givex = self._make_givex(mapping)
+        el, sel = givex._find_vbv_cancel_button()
+        self.assertIs(el, cancel_el)
+        self.assertEqual(sel, "button[id*='cancel' i]")
+
+    def test_vbv_cancel_selector_falls_back_to_close_icon(self):
+        """No Cancel/Return; only a close aria-label match — it is used."""
+        close_el = MagicMock(name="close_btn")
+        mapping = {"button[aria-label*='close' i]": [close_el]}
+        givex = self._make_givex(mapping)
+        el, sel = givex._find_vbv_cancel_button()
+        self.assertIs(el, close_el)
+        self.assertEqual(sel, "button[aria-label*='close' i]")
+
+    def test_vbv_cancel_selector_returns_none_when_absent(self):
+        givex = self._make_givex({})
+        el, sel = givex._find_vbv_cancel_button()
+        self.assertIsNone(el)
+        self.assertIsNone(sel)
+
+
 if __name__ == "__main__":
     unittest.main()
