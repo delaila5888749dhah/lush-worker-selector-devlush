@@ -70,12 +70,10 @@ try:
     from modules.delay.biometrics import BiometricProfile as _BiometricProfile  # type: ignore
     from modules.delay.temporal import TemporalModel as _TemporalModel  # type: ignore
     from modules.delay.state import BehaviorStateMachine as _BehaviorStateMachine  # type: ignore
-    from modules.delay.state import get_current_sm as _get_current_sm  # type: ignore
     from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
 except ImportError:
     _BiometricProfile = _TemporalModel = None
     _BehaviorStateMachine = _DelayEngine = None
-    _get_current_sm = None  # type: ignore[assignment]
 
 _log = logging.getLogger(__name__)
 
@@ -1256,12 +1254,7 @@ class GivexDriver:
         self._rnd = persona._rnd if persona is not None else None
         self._utc_offset_hours: int = 0
         if persona is not None and _BehaviorStateMachine is not None:
-            # Phase 5A Task 1: prefer the SM published by the behaviour
-            # wrapper (via :func:`modules.delay.state.set_current_sm`)
-            # so transitions and critical-section flips applied here
-            # affect the same instance the delay engine consults.
-            shared_sm = _get_current_sm() if _get_current_sm is not None else None
-            self._sm = shared_sm if shared_sm is not None else _BehaviorStateMachine()
+            self._sm = _BehaviorStateMachine()
             self._engine = _DelayEngine(persona, self._sm)
             self._temporal = _TemporalModel(persona)
             self._bio = _BiometricProfile(persona)
@@ -1305,53 +1298,36 @@ class GivexDriver:
             'cdp_fail'        — CDP/WebDriver error; caller may retry.
             'error'           — other unexpected error; caller decides.
         """
-        # Phase 5A Tasks 2B / 3: transition into VBV (audit [C2]) and arm
-        # the CRITICAL_SECTION flag for the duration of the iframe
-        # interaction so the delay layer skips any injection.  The
-        # transition is best-effort — if the SM is in POST_ACTION (e.g.
-        # because submit_purchase already advanced past PAYMENT) the
-        # state machine silently rejects it; the CS flag still applies.
-        if self._sm is not None:
-            self._sm.transition("VBV")
-            self._sm.set_critical_section(True)
         try:
-            try:
-                vbv_dynamic_wait(rng=self._get_rng())
-                # Phase 4 audit [D6]: iterate SEL_VBV_CANCEL_BUTTONS in priority
-                # order (Cancel → Return → Close → X-icon).  First selector whose
-                # CDP click succeeds wins; remaining selectors are not attempted.
-                last_exc: Exception | None = None
-                for sel in SEL_VBV_CANCEL_BUTTONS:
-                    try:
-                        cdp_click_iframe_element(
-                            self, SEL_VBV_IFRAME, sel, rng=self._get_rng(),
-                        )
-                        _log.debug("VBV cancel clicked via selector: %s", sel)
-                        break
-                    except (NoSuchElementException, StaleElementReferenceException) as exc:
-                        last_exc = exc
-                        continue
-                else:
-                    if last_exc is not None:
-                        raise last_exc
-                handle_something_wrong_popup(self)
-                return "cancelled"
-            except (NoSuchElementException, StaleElementReferenceException) as exc:
-                _log.info("handle_vbv_challenge iframe missing: %s", _sanitize_error(str(exc)))
-                return "iframe_missing"
-            except WebDriverException as exc:
-                _log.warning("handle_vbv_challenge CDP fail: %s", _sanitize_error(str(exc)))
-                return "cdp_fail"
-            except Exception as exc:  # pylint: disable=broad-except
-                _log.error("handle_vbv_challenge unexpected: %s", _sanitize_error(str(exc)))
-                return "error"
-        finally:
-            if self._sm is not None:
-                self._sm.set_critical_section(False)
-                # Phase 5A Task 3: advance to POST_ACTION (best-effort —
-                # rejected silently when not a valid transition from the
-                # current state).
-                self._sm.transition("POST_ACTION")
+            vbv_dynamic_wait(rng=self._get_rng())
+            # Phase 4 audit [D6]: iterate SEL_VBV_CANCEL_BUTTONS in priority
+            # order (Cancel → Return → Close → X-icon).  First selector whose
+            # CDP click succeeds wins; remaining selectors are not attempted.
+            last_exc: Exception | None = None
+            for sel in SEL_VBV_CANCEL_BUTTONS:
+                try:
+                    cdp_click_iframe_element(
+                        self, SEL_VBV_IFRAME, sel, rng=self._get_rng(),
+                    )
+                    _log.debug("VBV cancel clicked via selector: %s", sel)
+                    break
+                except (NoSuchElementException, StaleElementReferenceException) as exc:
+                    last_exc = exc
+                    continue
+            else:
+                if last_exc is not None:
+                    raise last_exc
+            handle_something_wrong_popup(self)
+            return "cancelled"
+        except (NoSuchElementException, StaleElementReferenceException) as exc:
+            _log.info("handle_vbv_challenge iframe missing: %s", _sanitize_error(str(exc)))
+            return "iframe_missing"
+        except WebDriverException as exc:
+            _log.warning("handle_vbv_challenge CDP fail: %s", _sanitize_error(str(exc)))
+            return "cdp_fail"
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.error("handle_vbv_challenge unexpected: %s", _sanitize_error(str(exc)))
+            return "error"
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 
@@ -1497,18 +1473,7 @@ class GivexDriver:
             typo_prob += self._temporal.get_night_typo_increase(self._utc_offset_hours)
         if typo_rate is not None:
             typo_prob = typo_rate
-        # Phase 5A Task 4 / audit [J2]: when the engine reports that
-        # delay is not permitted (e.g. CRITICAL_SECTION active, VBV /
-        # POST_ACTION state, or accumulator exhausted), skip the
-        # biometric pattern generation entirely and fall through to
-        # deterministic fast typing.  The keyboard layer also zeroes
-        # per-keystroke sleeps via ``engine.is_delay_permitted``; this
-        # extra guard ensures the biometric RNG advance is also avoided
-        # so the production path matches the safe-zone contract.
-        if self._engine is not None and not self._engine.is_delay_permitted():
-            dl = None
-        else:
-            dl = (self._bio.generate_4x4_pattern() if self._bio and use_burst and len(val) >= 16 else self._bio.generate_burst_pattern(len(val)) if self._bio else None)
+        dl = (self._bio.generate_4x4_pattern() if self._bio and use_burst and len(val) >= 16 else self._bio.generate_burst_pattern(len(val)) if self._bio else None)
         _type_value(
             self._driver, els[0], val, self._get_rng(),
             typo_rate=typo_prob, delays=dl, strict=self._strict,
@@ -2150,20 +2115,7 @@ class GivexDriver:
         except ImportError:  # pragma: no cover - monitor always present in prod
             pass
         try:
-            # Phase 5A Task 2A: gate the irreversible submit click behind
-            # the CRITICAL_SECTION flag so any concurrent delay-injection
-            # site (e.g. background biometric typing) is forced to zero.
-            if self._sm is not None:
-                self._sm.set_critical_section(True)
-            try:
-                self.bounding_box_click(SEL_COMPLETE_PURCHASE)
-            finally:
-                if self._sm is not None:
-                    self._sm.set_critical_section(False)
-                    # Phase 5A Task 3: advance the FSM to POST_ACTION
-                    # after the submit click succeeds (best-effort —
-                    # invalid transitions are silently rejected).
-                    self._sm.transition("POST_ACTION")
+            self.bounding_box_click(SEL_COMPLETE_PURCHASE)
         finally:
             if monitor is not None:
                 monitor.cancel(timeout=_VBV_MONITOR_CANCEL_TIMEOUT_S)
