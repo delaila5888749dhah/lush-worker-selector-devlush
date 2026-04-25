@@ -422,7 +422,7 @@ def _random_greeting(rnd=None) -> str:
     return secrets.choice(_GREETINGS)
 
 
-def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
+def _lookup_maxmind_utc_offset(ip_addr: str) -> float | None:
     """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb.
 
     Uses the module-level singleton reader when available (initialised via
@@ -451,7 +451,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
                     offset = now.utcoffset()
                     if offset is None:
                         return None
-                    return int(offset.total_seconds() // 3600)
+                    return offset.total_seconds() / 3600.0
         except Exception as exc:  # pylint: disable=broad-except
             _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
         return None
@@ -465,7 +465,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
             offset = now.utcoffset()
             if offset is None:
                 return None
-            return int(offset.total_seconds() // 3600)
+            return offset.total_seconds() / 3600.0
     except Exception as exc:  # pylint: disable=broad-except
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None

@@ -8,6 +8,7 @@ Covers:
   - ContextVar set by `integration.worker_task` propagates to TemporalModel
 """
 import contextvars
+import math
 import time
 import unittest
 from unittest.mock import patch
@@ -42,6 +43,18 @@ class TestTemporalUsesMaxmindOffset(unittest.TestCase):
         """22:00 UTC + (-8h) = 14:00 local PST → DAY."""
         with patch("modules.delay.temporal.time.gmtime", return_value=_frozen_gmt(22)):
             self.assertEqual(self.tm.get_time_state(-8), "DAY")
+
+    def test_half_hour_offset_preserves_boundary_precision(self):
+        """00:30 UTC + 5.5h = 06:00 local, which must stay inside the DAY window."""
+        frozen = time.struct_time((2026, 1, 1, 0, 30, 0, 3, 1, 0))
+        with patch("modules.delay.temporal.time.gmtime", return_value=frozen):
+            self.assertEqual(self.tm.get_time_state(5.5), "DAY")
+
+    def test_negative_half_hour_offset_preserves_boundary_precision(self):
+        """09:00 UTC + (-3.5h) = 05:30 local, which must remain NIGHT."""
+        frozen = time.struct_time((2026, 1, 1, 9, 0, 0, 3, 1, 0))
+        with patch("modules.delay.temporal.time.gmtime", return_value=frozen):
+            self.assertEqual(self.tm.get_time_state(-3.5), "NIGHT")
 
 
 class TestDelayVariesWithUtcOffset(unittest.TestCase):
@@ -132,6 +145,17 @@ class TestMissingMaxmindOffsetDefaultsTo0(unittest.TestCase):
         """set_utc_offset() with non-numeric input must not crash; falls back to 0.0."""
         set_utc_offset("not-a-number")  # type: ignore[arg-type]
         self.assertEqual(get_utc_offset(), 0.0)
+
+    def test_none_offset_value_falls_back_to_zero(self):
+        """set_utc_offset() accepts None defensively and resets to UTC."""
+        set_utc_offset(None)  # type: ignore[arg-type]
+        self.assertEqual(get_utc_offset(), 0.0)
+
+    def test_non_finite_offset_values_fall_back_to_zero(self):
+        """NaN/inf offsets are rejected so later delay math cannot crash."""
+        for value in (math.nan, math.inf, -math.inf):
+            set_utc_offset(value)
+            self.assertEqual(get_utc_offset(), 0.0)
 
 
 if __name__ == "__main__":

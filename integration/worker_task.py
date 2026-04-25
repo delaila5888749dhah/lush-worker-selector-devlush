@@ -142,9 +142,9 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                     detected_ip = _get_current_ip_best_effort()
                     if detected_ip:
                         zip_code = maxmind_lookup_zip(detected_ip)
-                        offset_int = _lookup_maxmind_utc_offset(detected_ip)
-                        if offset_int is not None:
-                            utc_offset = float(offset_int)
+                        offset_hours = _lookup_maxmind_utc_offset(detected_ip)
+                        if offset_hours is not None:
+                            utc_offset = float(offset_hours)
                 except Exception as exc:  # pylint: disable=broad-except
                     _log.debug(
                         "worker=%s zip derivation error: %s", worker_id, exc

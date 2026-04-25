@@ -9,6 +9,7 @@ Deterministic via random.Random(seed) from PersonaProfile.
 """
 
 import contextvars
+import math
 import random
 import threading
 import time
@@ -41,7 +42,10 @@ def set_utc_offset(offset_hours: float) -> None:
     that does not pass an explicit ``utc_offset_hours`` argument.
     """
     try:
-        _utc_offset_var.set(float(offset_hours))
+        offset = float(offset_hours)
+        if not math.isfinite(offset):
+            raise ValueError("utc offset must be finite")
+        _utc_offset_var.set(offset)
     except (TypeError, ValueError):
         # Defensive: never let a bad MaxMind payload crash worker setup.
         _utc_offset_var.set(0.0)
@@ -72,14 +76,28 @@ class TemporalModel:
         ``DAY_START..DAY_END`` constants.
 
         ``utc_offset_hours`` may be a fractional value (e.g. ``5.5`` for
-        IST); only the integer part is consulted for the hour bucket.
+        IST); minute precision is preserved for half-hour / quarter-hour
+        offsets when deciding the day/night bucket.
         """
-        local_hour = (time.gmtime().tm_hour + int(utc_offset_hours)) % 24
+        now_utc = time.gmtime()
+        try:
+            offset = float(utc_offset_hours)
+            if not math.isfinite(offset):
+                raise ValueError("utc offset must be finite")
+        except (TypeError, ValueError):
+            offset = 0.0
+        local_hour = (
+            now_utc.tm_hour
+            + (now_utc.tm_min / 60.0)
+            + (now_utc.tm_sec / 3600.0)
+            + offset
+        ) % 24.0
         start, end = getattr(self._persona, "active_hours", (DAY_START, DAY_END))
+        day_end = (end + 1) % 24
         if start <= end:
-            in_day = start <= local_hour <= end
+            in_day = start <= local_hour < (end + 1)
         else:  # wrap-around through midnight
-            in_day = local_hour >= start or local_hour <= end
+            in_day = local_hour >= start or local_hour < day_end
         return "DAY" if in_day else "NIGHT"
 
     def apply_temporal_modifier(
