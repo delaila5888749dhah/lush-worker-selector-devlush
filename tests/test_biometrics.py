@@ -22,21 +22,49 @@ class TestKeystrokeDelay(_BioSetup):
 class TestBurstPattern(_BioSetup):
     def test_length_matches(self):
         pattern = self.bio.generate_burst_pattern(16)
-        # 16 chars: pauses at positions i=4,8,12 replace the fast keystroke
-        # so total length is still 16
+        # 16 chars → 16 delays (no inter-group pauses in burst).
         self.assertEqual(len(pattern), 16)
 
-    def test_pause_at_group_boundaries(self):
-        pattern = self.bio.generate_burst_pattern(8)
-        # 8 chars: pause at i=4, total length = 8
-        self.assertEqual(len(pattern), 8)
-        # The pause (index 4) should be larger than typical fast key
-        self.assertGreater(pattern[4], 0.1)
+    def test_burst_delays_clamped_to_fast_bounds(self):
+        """All burst delays must lie within the fast keystroke band [0.03, 0.08]."""
+        from modules.delay.biometrics import _FAST_MIN, _FAST_MAX
+        pattern = self.bio.generate_burst_pattern(64)
+        for d in pattern:
+            self.assertGreaterEqual(d, _FAST_MIN - 1e-9)
+            self.assertLessEqual(d, _FAST_MAX + 1e-9)
 
     def test_all_positive(self):
         pattern = self.bio.generate_burst_pattern(20)
         for d in pattern:
             self.assertGreater(d, 0.0)
+
+    def test_burst_pattern_deterministic_per_seed(self):
+        """Same persona seed → same burst sequence."""
+        bio2 = BiometricProfile(PersonaProfile(42))
+        self.assertEqual(
+            self.bio.generate_burst_pattern(32),
+            bio2.generate_burst_pattern(32),
+        )
+
+    def test_burst_delays_fit_lognormal_distribution(self):
+        """Mean and variance of clamped log-normal samples fall in expected bands.
+
+        Theoretical (un-clamped):
+            mean ≈ exp(mu + sigma²/2),  exp(-3.0 + 0.35²/2) ≈ 0.0530
+        After clamping to [0.03, 0.08]:
+            empirical mean stays in roughly [0.04, 0.07] band.
+        Standard deviation must be > 0 (non-degenerate distribution).
+        """
+        import statistics
+        n = 10_000
+        # Use a fresh seeded biometric profile so this assertion is deterministic.
+        bio = BiometricProfile(PersonaProfile(123))
+        delays = bio.generate_burst_pattern(n)
+        mean = statistics.fmean(delays)
+        stdev = statistics.pstdev(delays)
+        self.assertGreater(mean, 0.04)
+        self.assertLess(mean, 0.07)
+        self.assertGreater(stdev, 0.0)
 
 
 class TestFourByFourPattern(_BioSetup):
@@ -57,6 +85,26 @@ class TestFourByFourPattern(_BioSetup):
         fast_indices = [i for i in range(len(pattern)) if i not in (3, 7, 11)]
         for idx in fast_indices:
             self.assertLess(pattern[idx], 0.1)
+
+    def test_4x4_pattern_pauses_still_uniform(self):
+        """Pauses (indices 3,7,11) sample uniform[0.6,1.8]; fast keys log-normal[0.03,0.08].
+
+        The two distributions must remain distinguishable: pause ranges sit
+        well above 0.5s, fast keystrokes well below 0.1s.
+        """
+        from modules.delay.biometrics import _FAST_MAX
+        bio = BiometricProfile(PersonaProfile(7))
+        pause_samples = []
+        fast_samples = []
+        for _ in range(200):
+            pat = bio.generate_4x4_pattern()
+            for idx in (3, 7, 11):
+                pause_samples.append(pat[idx])
+            for idx in [i for i in range(16) if i not in (3, 7, 11)]:
+                fast_samples.append(pat[idx])
+        # All pause samples must be at least 0.5s; all fast samples at most _FAST_MAX.
+        self.assertGreaterEqual(min(pause_samples), 0.5)
+        self.assertLessEqual(max(fast_samples), _FAST_MAX + 1e-9)
 
 
 class TestNoise(_BioSetup):

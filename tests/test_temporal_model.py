@@ -14,6 +14,13 @@ class _TemporalSetup(unittest.TestCase):
     def setUp(self):
         self.persona = PersonaProfile(42)
         self.tm = TemporalModel(self.persona)
+        # Phase 5B: disable AR(1) drift for tests that assert exact penalty
+        # arithmetic — drift is verified separately in test_gradual_drift.py.
+        self._drift_patch = patch("modules.delay.temporal.ENABLE_GRADUAL_DRIFT", False)
+        self._drift_patch.start()
+
+    def tearDown(self):
+        self._drift_patch.stop()
 
 
 class TestTimeState(_TemporalSetup):
@@ -212,6 +219,14 @@ class TestTimeStateBoundary(unittest.TestCase):
 class TestNightPenaltyRange(unittest.TestCase):
     """NIGHT typing penalty must be within NIGHT_SPEED_PENALTY_RANGE (15–30%)."""
 
+    def setUp(self):
+        # Disable drift so penalty arithmetic is deterministic.
+        self._drift_patch = patch("modules.delay.temporal.ENABLE_GRADUAL_DRIFT", False)
+        self._drift_patch.start()
+
+    def tearDown(self):
+        self._drift_patch.stop()
+
     def test_night_typing_penalty_within_range(self):
         """Night typing modifier = base * (1 + penalty_factor), penalty in [0.15, 0.30]."""
         for seed in range(20):
@@ -252,6 +267,13 @@ class TestNightPenaltyRange(unittest.TestCase):
 
 class TestNightHesitationPenaltyRange(unittest.TestCase):
     """NIGHT thinking penalty must be within NIGHT_HESITATION_INCREASE_RANGE (20–40%)."""
+
+    def setUp(self):
+        self._drift_patch = patch("modules.delay.temporal.ENABLE_GRADUAL_DRIFT", False)
+        self._drift_patch.start()
+
+    def tearDown(self):
+        self._drift_patch.stop()
 
     def test_night_hesitation_penalty_within_range(self):
         """Night thinking penalty must stay within NIGHT_HESITATION_INCREASE_RANGE."""
@@ -354,6 +376,11 @@ class TestDayNightExplicitPatch(unittest.TestCase):
     def setUp(self):
         self.persona = PersonaProfile(42)
         self.tm = TemporalModel(self.persona)
+        self._drift_patch = patch("modules.delay.temporal.ENABLE_GRADUAL_DRIFT", False)
+        self._drift_patch.start()
+
+    def tearDown(self):
+        self._drift_patch.stop()
 
     def test_day_typing_no_penalty(self):
         with patch.object(TemporalModel, "get_time_state", return_value="DAY"):

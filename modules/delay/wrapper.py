@@ -224,6 +224,8 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
                 engine.get_step_accumulated_delay(),
             )
             engine.reset_step_accumulator()
+            # Phase 5B Task 3: reset gradual drift envelope at cycle boundary.
+            temporal.reset_drift()
             sm.reset()
 
         # Injection point 2: thinking/hesitation delay after form fill
@@ -238,6 +240,7 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
                               cycle_count=cycle_count)
         finally:
             engine.reset_step_accumulator()
+            temporal.reset_drift()
             sm.reset()
 
         return result
