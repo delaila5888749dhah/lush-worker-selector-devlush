@@ -353,37 +353,12 @@ def get_bitbrowser_client() -> Optional[BitBrowserClient]:
                 "BITBROWSER_POOL_MODE=1 but BITBROWSER_PROFILE_IDS is empty. "
                 "Add a CSV of profile IDs to .env (Blueprint §2.1)."
             )
-        # Dedupe while preserving order; warn if duplicates were present.
-        seen: set = set()
-        profile_ids: List[str] = []
-        for pid in raw_ids:
-            if pid in seen:
-                continue
-            seen.add(pid)
-            profile_ids.append(pid)
-        if len(profile_ids) < len(raw_ids):
-            _log.warning(
-                "BITBROWSER_PROFILE_IDS contains duplicate ids; "
-                "deduped %d → %d entries.",
-                len(raw_ids), len(profile_ids),
-            )
-        # Warn when the pool is too small for the configured worker count —
-        # Blueprint §2.1 recommends ≥ 2×WORKER_COUNT so workers do not
-        # serialise on acquire_profile.
-        try:
-            worker_count = int(os.getenv("WORKER_COUNT", "0"))
-        except ValueError:
-            worker_count = 0
-        if worker_count > 0 and len(profile_ids) < worker_count * 2:
-            _log.warning(
-                "BitBrowser pool size %d < 2x WORKER_COUNT (%d); workers "
-                "may block on acquire_profile. Increase BITBROWSER_PROFILE_IDS.",
-                len(profile_ids), worker_count,
-            )
+        # Dedupe + size validation are enforced inside BitBrowserPoolClient
+        # __init__ so direct callers get the same guarantees.
         return BitBrowserPoolClient(
             endpoint=endpoint,
             api_key=api_key,
-            profile_ids=profile_ids,
+            profile_ids=raw_ids,
         )
     client = BitBrowserClient(endpoint=endpoint, api_key=api_key)
     if not client.is_available():
@@ -417,8 +392,59 @@ class BitBrowserPoolClient(BitBrowserClient):
                 "to be a non-empty CSV list."
             )
         super().__init__(endpoint=endpoint, api_key=api_key)
+        # Strip + filter empty entries first so direct callers get the same
+        # sanitisation as the get_bitbrowser_client() CSV factory path.
+        sanitised: List[str] = [
+            pid.strip() for pid in profile_ids if pid and pid.strip()
+        ]
+        if not sanitised:
+            raise ValueError(
+                "BITBROWSER_POOL_MODE=1 requires BITBROWSER_PROFILE_IDS "
+                "to be a non-empty CSV list."
+            )
+        # Dedupe preserving order — a duplicate id would bias round-robin
+        # towards the same profile (audit [E2]).
+        seen: set = set()
+        deduped: List[str] = []
+        had_duplicates = False
+        for pid in sanitised:
+            if pid in seen:
+                _log.warning(
+                    "Duplicate BitBrowser profile ID ignored: %s", pid,
+                )
+                had_duplicates = True
+                continue
+            seen.add(pid)
+            deduped.append(pid)
+        if had_duplicates:
+            _log.warning(
+                "BITBROWSER_PROFILE_IDS contained duplicates; "
+                "deduped %d → %d entries.",
+                len(profile_ids), len(deduped),
+            )
         # Copy to avoid caller mutation affecting pool order.
-        self._pool: List[str] = list(profile_ids)
+        self._pool: List[str] = deduped
+        # Pool-size validation vs WORKER_COUNT (Blueprint §2.1 / audit [A1]):
+        # < WORKER_COUNT is a hard error (not enough profiles to cover every
+        # worker); < 2×WORKER_COUNT warns that acquire_profile may serialise.
+        try:
+            worker_count = int(os.environ.get("WORKER_COUNT", "0") or "0")
+        except ValueError:
+            worker_count = 0
+        if worker_count > 0:
+            if len(self._pool) < worker_count:
+                raise RuntimeError(
+                    f"BitBrowser pool size ({len(self._pool)}) < "
+                    f"WORKER_COUNT ({worker_count}); add more profile IDs "
+                    f"to BITBROWSER_PROFILE_IDS (Blueprint §2.1)."
+                )
+            if len(self._pool) < worker_count * 2:
+                _log.warning(
+                    "BitBrowser pool size %d < 2x WORKER_COUNT (%d); workers "
+                    "may block on acquire_profile. Increase "
+                    "BITBROWSER_PROFILE_IDS.",
+                    len(self._pool), worker_count,
+                )
         self._cursor: int = 0
         self._busy: set = set()
         self._lock = threading.Lock()
@@ -511,8 +537,22 @@ class BitBrowserPoolClient(BitBrowserClient):
             raise
 
     def launch_profile(self, profile_id: str) -> Dict[str, object]:
-        """POST ``/browser/open`` → ``{"webdriver": ..., ...}``."""
-        data = self._post("/browser/open", {"id": profile_id}, timeout=30)
+        """POST ``/browser/open`` → ``{"webdriver": ..., ...}``.
+
+        On HTTP 404 the profile is evicted from the pool before the error
+        is re-raised so the session layer can retry/rotate (audit [A6]).
+        """
+        try:
+            data = self._post("/browser/open", {"id": profile_id}, timeout=30)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                _log.warning(
+                    "BitBrowser /browser/open returned 404 for profile %s; "
+                    "evicting from pool",
+                    profile_id,
+                )
+                self._evict_profile(profile_id)
+            raise
         if not isinstance(data, dict):
             raise RuntimeError("BitBrowser /browser/open returned non-dict")
         return data
@@ -522,12 +562,26 @@ class BitBrowserPoolClient(BitBrowserClient):
         self._post("/browser/close", {"id": profile_id}, timeout=10)
 
     def _evict_profile(self, profile_id: str) -> None:
-        """Remove a 404 profile from the pool at runtime."""
+        """Remove a 404 profile from the pool at runtime.
+
+        Cursor is rewound so the next :meth:`acquire_profile` does not skip
+        over a neighbour of the evicted slot. If the cursor sat strictly
+        after the removed index it is decremented by one; otherwise it is
+        left in place, and finally clamped into range when the pool still
+        has entries.
+        """
         with self._lock:
             if profile_id in self._pool:
+                idx = self._pool.index(profile_id)
                 self._pool.remove(profile_id)
                 self._busy.discard(profile_id)
-                if self._cursor >= len(self._pool) and self._pool:
+                # cursor <= idx is intentionally left unchanged: removing an
+                # entry after the cursor does not affect its position, and
+                # removing the cursor's current slot shifts the next profile
+                # into that same index.
+                if self._cursor > idx:
+                    self._cursor -= 1
+                if self._pool and self._cursor >= len(self._pool):
                     self._cursor = 0
                 _log.error(
                     "evicted profile %s; pool size=%d",

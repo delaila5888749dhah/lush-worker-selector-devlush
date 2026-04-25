@@ -224,9 +224,9 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
                 engine.get_step_accumulated_delay(),
             )
             engine.reset_step_accumulator()
+            # Reset AR(1) drift envelope per Blueprint §10 so each cycle starts neutral.
+            temporal.reset_drift()
             sm.reset()
-
-        # Injection point 2: thinking/hesitation delay after form fill
         # (before submit click).  Only reached when task_fn succeeded.
         # Re-enter FILLING_FORM; accumulator was reset above so the
         # thinking delay is not blocked by the earlier typing delay.
@@ -238,6 +238,7 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
                               cycle_count=cycle_count)
         finally:
             engine.reset_step_accumulator()
+            temporal.reset_drift()
             sm.reset()
 
         return result

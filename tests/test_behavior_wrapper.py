@@ -100,6 +100,41 @@ class TestWrapPropagatesExceptions(unittest.TestCase):
         self.assertEqual(mock_reset_acc.call_count, 2)
         self.assertEqual(mock_sm_reset.call_count, 2)
 
+    def test_drift_reset_on_success(self):
+        """Phase 5B Task 3: temporal.reset_drift() runs at both cycle boundaries."""
+        persona = PersonaProfile(42)
+        with patch("modules.delay.wrapper.TemporalModel.reset_drift") as mock_reset_drift:
+            wrapped = wrap(_dummy_task, persona)
+            wrapped("w-1")
+        # One reset after typing+task_fn finally, one after thinking finally.
+        self.assertEqual(mock_reset_drift.call_count, 2)
+
+    def test_drift_reset_on_task_exception(self):
+        """reset_drift() must run even when task_fn raises (typing-cycle finally)."""
+        persona = PersonaProfile(42)
+        with patch("modules.delay.wrapper.TemporalModel.reset_drift") as mock_reset_drift:
+            wrapped = wrap(_failing_task, persona)
+            with self.assertRaises(RuntimeError):
+                wrapped("w-1")
+        # Only the typing-cycle finally fires; thinking cycle is skipped.
+        mock_reset_drift.assert_called_once()
+
+    def test_drift_reset_when_thinking_delay_raises(self):
+        """reset_drift() in the thinking-cycle finally runs even on inject_step_delay failure."""
+        persona = PersonaProfile(42)
+        with (
+            patch(
+                "modules.delay.wrapper.inject_step_delay",
+                side_effect=[0.1, RuntimeError("thinking-delay-boom")],
+            ),
+            patch("modules.delay.wrapper.TemporalModel.reset_drift") as mock_reset_drift,
+        ):
+            wrapped = wrap(_dummy_task, persona)
+            with self.assertRaises(RuntimeError):
+                wrapped("w-1")
+        # Both finally blocks must reset drift even though thinking delay raised.
+        self.assertEqual(mock_reset_drift.call_count, 2)
+
 
 class TestCriticalSectionBypass(unittest.TestCase):
     """Verify zero delay when BehaviorStateMachine is in a critical context."""

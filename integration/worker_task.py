@@ -26,9 +26,14 @@ import zlib
 from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
-from modules.cdp.driver import _get_current_ip_best_effort, maxmind_lookup_zip
+from modules.cdp.driver import (
+    _get_current_ip_best_effort,
+    _lookup_maxmind_utc_offset,
+    maxmind_lookup_zip,
+)
 from modules.cdp.fingerprint import BitBrowserSession, get_bitbrowser_client
 from modules.delay.persona import PersonaProfile
+from modules.delay.temporal import set_utc_offset
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -131,26 +136,38 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 # The proxy IP is extracted from the PROXY_SERVER env var or
                 # the driver's proxy attribute — no external HTTP calls.
                 zip_code: Optional[str] = None
+                # Phase 5B Task 1: also resolve UTC offset for Temporal Layer.
+                utc_offset: float = 0.0
                 try:
                     detected_ip = _get_current_ip_best_effort()
                     if detected_ip:
                         zip_code = maxmind_lookup_zip(detected_ip)
+                        offset_hours = _lookup_maxmind_utc_offset(detected_ip)
+                        if offset_hours is not None:
+                            utc_offset = float(offset_hours)
                 except Exception as exc:  # pylint: disable=broad-except
                     _log.debug(
                         "worker=%s zip derivation error: %s", worker_id, exc
                     )
 
+                # Propagate UTC offset to TemporalModel via ContextVar so all
+                # delay computations on this worker thread see the proxy-derived
+                # local-hour for DAY/NIGHT detection (Blueprint §10).
+                set_utc_offset(utc_offset)
+
                 if zip_code:
                     _log.info(
-                        "worker=%s zip_selection=zip_match zip=%s",
+                        "worker=%s zip_selection=zip_match zip=%s utc_offset=%+.1fh",
                         worker_id,
                         zip_code,
+                        utc_offset,
                     )
                 else:
                     _log.info(
                         "worker=%s zip_selection=round_robin "
-                        "(MaxMind zip unavailable)",
+                        "(MaxMind zip unavailable) utc_offset=%+.1fh",
                         worker_id,
+                        utc_offset,
                     )
 
                 # Run purchase cycle when a task source is wired (F-02/F-07).
@@ -162,6 +179,7 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                             cycle_id=uuid.uuid4().hex,
                             worker_id=worker_id,
                             zip_code=zip_code,
+                            utc_offset_hours=utc_offset,
                         )
                         orchestrator_module = importlib.import_module(
                             "integration.orchestrator"

@@ -429,12 +429,26 @@ _GREETINGS = [
     "Thank you for being you",
 ]
 
-def _random_greeting() -> str:
-    """Return a random greeting message for the eGift form."""
+def _random_greeting(rnd=None) -> str:
+    """Return a greeting message for the eGift form.
+
+    When *rnd* is provided (typically the persona-seeded
+    ``random.Random`` from a :class:`GivexDriver`), the choice is
+    deterministic per persona seed — preserving Blueprint §8 consistency.
+    Falls back to ``secrets.choice`` for callers that have no persona
+    RNG (tests, ad-hoc usage); the cryptographic fallback never crashes.
+    """
+    if rnd is not None:
+        try:
+            return rnd.choice(_GREETINGS)
+        except Exception as exc:  # pylint: disable=broad-except
+            # Defensive fallback: anything goes wrong with the persona
+            # RNG, fall back to secrets so the form fill never fails.
+            _log.debug("_random_greeting: persona RNG failed (%s); using secrets fallback", exc)
     return secrets.choice(_GREETINGS)
 
 
-def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
+def _lookup_maxmind_utc_offset(ip_addr: str) -> float | None:
     """Look up UTC offset for an IP using MaxMind GeoLite2-City.mmdb.
 
     Uses the module-level singleton reader when available (initialised via
@@ -463,7 +477,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
                     offset = now.utcoffset()
                     if offset is None:
                         return None
-                    return int(offset.total_seconds() // 3600)
+                    return offset.total_seconds() / 3600.0
         except Exception as exc:  # pylint: disable=broad-except
             _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
         return None
@@ -477,7 +491,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> int | None:
             offset = now.utcoffset()
             if offset is None:
                 return None
-            return int(offset.total_seconds() // 3600)
+            return offset.total_seconds() / 3600.0
     except Exception as exc:  # pylint: disable=broad-except
         _log.debug("MaxMind lookup failed for %s: %s", ip_addr, exc)
     return None
@@ -1802,7 +1816,7 @@ class GivexDriver:
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         self._realistic_type_field(
-            SEL_GREETING_MSG, _random_greeting(), field_kind="text",
+            SEL_GREETING_MSG, _random_greeting(self._rnd), field_kind="text",
         )
         self._realistic_type_field(
             SEL_AMOUNT_INPUT, str(task.amount),
