@@ -285,6 +285,14 @@ def get_metrics():
     When memory cannot be determined on the current platform,
     ``memory_usage_bytes`` is 0.  Callers that need to distinguish
     "zero RSS" from "unavailable" should treat 0 as the degraded sentinel.
+
+    The snapshot also exposes two audit-named aliases for FSM branch
+    outcomes (Phase 4 audit [P4-H3]):
+
+    * ``declined_count`` — alias of ``fork_declined``
+    * ``vbv_cancelled_count`` — alias of ``fork_vbv_cancelled``
+
+    Existing ``fork_*`` keys are preserved for backward compatibility.
     """
     with _lock:
         mem = get_memory_usage_bytes()
@@ -314,6 +322,11 @@ def get_metrics():
     # Merge per-branch fork counters under a separate lock so fork metric
     # updates never contend with the main metrics lock (Phase 4 audit [H3]).
     metrics.update(get_fork_metrics())
+    # Audit-named aliases for FSM branch outcomes (Phase 4 audit [P4-H3]).
+    # These mirror the corresponding ``fork_*`` counters; existing keys are
+    # preserved for backward compatibility.
+    metrics["declined_count"] = metrics["fork_declined"]
+    metrics["vbv_cancelled_count"] = metrics["fork_vbv_cancelled"]
     return metrics
 
 

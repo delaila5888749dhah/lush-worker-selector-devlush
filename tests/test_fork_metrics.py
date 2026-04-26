@@ -77,6 +77,31 @@ class TestMonitorForkCounters(unittest.TestCase):
         self.assertEqual(set(snapshot), EXPECTED_FORK_KEYS)
         self.assertTrue(all(v == 0 for v in snapshot.values()))
 
+    def test_get_metrics_exposes_audit_named_aliases(self):
+        """get_metrics() exposes ``declined_count`` and ``vbv_cancelled_count``
+        as aliases of the corresponding fork counters (Phase 4 audit [P4-H3]).
+        """
+        # Initial snapshot: both aliases present and zero.
+        metrics = monitor.get_metrics()
+        self.assertIn("declined_count", metrics)
+        self.assertIn("vbv_cancelled_count", metrics)
+        self.assertEqual(metrics["declined_count"], 0)
+        self.assertEqual(metrics["vbv_cancelled_count"], 0)
+
+        # After recording fork outcomes, aliases must equal the fork_* keys.
+        for _ in range(2):
+            monitor.record_fork("declined")
+        for _ in range(3):
+            monitor.record_fork("vbv_cancelled")
+
+        metrics = monitor.get_metrics()
+        self.assertEqual(metrics["declined_count"], metrics["fork_declined"])
+        self.assertEqual(
+            metrics["vbv_cancelled_count"], metrics["fork_vbv_cancelled"]
+        )
+        self.assertEqual(metrics["declined_count"], 2)
+        self.assertEqual(metrics["vbv_cancelled_count"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()
