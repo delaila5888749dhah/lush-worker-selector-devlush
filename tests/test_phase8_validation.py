@@ -92,7 +92,7 @@ class TestDeploymentPipeline(Phase8ResetMixin, unittest.TestCase):
         required_keys = {
             "running", "state", "worker_count",
             "active_workers", "consecutive_rollbacks",
-            "trace_id", "metrics",
+            "trace_id", "log_sink_errors", "metrics",
         }
         self.assertEqual(set(ds.keys()), required_keys)
 
