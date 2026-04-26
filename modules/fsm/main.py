@@ -86,7 +86,7 @@ def _normalize_state(state_name: "str | PaymentState") -> str:
     if isinstance(state_name, str):
         # Coerce ``str`` subclasses (e.g. unrelated ``StrEnum`` members) to a
         # plain ``str`` so downstream consumers always observe ``type(name) is str``.
-        return str.__str__(state_name)
+        return str(state_name)
     raise TypeError(
         f"state_name must be str or PaymentState, got {type(state_name).__name__}"
     )
