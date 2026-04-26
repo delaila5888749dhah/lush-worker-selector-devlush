@@ -1307,12 +1307,18 @@ class GivexDriver:
         """
         # Phase 5A Tasks 2B / 3: transition into VBV (audit [C2]) and arm
         # the CRITICAL_SECTION flag for the duration of the iframe
-        # interaction so the delay layer skips any injection.  The
-        # transition is best-effort — if the SM is in POST_ACTION (e.g.
-        # because submit_purchase already advanced past PAYMENT) the
-        # state machine silently rejects it; the CS flag still applies.
+        # interaction so the delay layer skips any injection.  Surface
+        # rejected transitions as a WARNING (review fix [F3]) so a stale
+        # FSM state — e.g. POST_ACTION already set by submit_purchase —
+        # is observable instead of silently swallowed; the CS flag still
+        # applies regardless so iframe interaction stays delay-safe.
+        result: str = "error"
         if self._sm is not None:
-            self._sm.transition("VBV")
+            if not self._sm.transition("VBV"):
+                _log.warning(
+                    "handle_vbv_challenge: SM rejected VBV transition from %s",
+                    self._sm.get_state(),
+                )
             self._sm.set_critical_section(True)
         try:
             try:
@@ -1335,23 +1341,35 @@ class GivexDriver:
                     if last_exc is not None:
                         raise last_exc
                 handle_something_wrong_popup(self)
-                return "cancelled"
+                result = "cancelled"
+                return result
             except (NoSuchElementException, StaleElementReferenceException) as exc:
                 _log.info("handle_vbv_challenge iframe missing: %s", _sanitize_error(str(exc)))
-                return "iframe_missing"
+                result = "iframe_missing"
+                return result
             except WebDriverException as exc:
                 _log.warning("handle_vbv_challenge CDP fail: %s", _sanitize_error(str(exc)))
-                return "cdp_fail"
+                result = "cdp_fail"
+                return result
             except Exception as exc:  # pylint: disable=broad-except
                 _log.error("handle_vbv_challenge unexpected: %s", _sanitize_error(str(exc)))
-                return "error"
+                result = "error"
+                return result
         finally:
             if self._sm is not None:
                 self._sm.set_critical_section(False)
-                # Phase 5A Task 3: advance to POST_ACTION (best-effort —
-                # rejected silently when not a valid transition from the
-                # current state).
-                self._sm.transition("POST_ACTION")
+                # Review fix [F2]: only advance to POST_ACTION when the
+                # iframe was successfully cancelled.  On `iframe_missing`
+                # / `cdp_fail` / `error` the FSM must remain in its
+                # current (e.g. VBV / PAYMENT) state so future delay-
+                # permission checks reflect the real progress through the
+                # checkout flow rather than a forced post-submit state.
+                if result == "cancelled":
+                    if not self._sm.transition("POST_ACTION"):
+                        _log.warning(
+                            "handle_vbv_challenge: SM rejected POST_ACTION transition from %s",
+                            self._sm.get_state(),
+                        )
 
     # ── Low-level helpers ────────────────────────────────────────────────────
 
@@ -2153,17 +2171,25 @@ class GivexDriver:
             # Phase 5A Task 2A: gate the irreversible submit click behind
             # the CRITICAL_SECTION flag so any concurrent delay-injection
             # site (e.g. background biometric typing) is forced to zero.
+            # Review fix [F1]: only advance the FSM to POST_ACTION when
+            # the click actually succeeded — otherwise an unrelated mid-
+            # submit failure would mark the worker as post-submit and
+            # incorrectly lock out future delay injection.
             if self._sm is not None:
                 self._sm.set_critical_section(True)
+            click_succeeded = False
             try:
                 self.bounding_box_click(SEL_COMPLETE_PURCHASE)
+                click_succeeded = True
             finally:
                 if self._sm is not None:
                     self._sm.set_critical_section(False)
-                    # Phase 5A Task 3: advance the FSM to POST_ACTION
-                    # after the submit click succeeds (best-effort —
-                    # invalid transitions are silently rejected).
-                    self._sm.transition("POST_ACTION")
+                    if click_succeeded:
+                        if not self._sm.transition("POST_ACTION"):
+                            _log.warning(
+                                "submit_purchase: SM rejected POST_ACTION transition from %s",
+                                self._sm.get_state(),
+                            )
         finally:
             if monitor is not None:
                 monitor.cancel(timeout=_VBV_MONITOR_CANCEL_TIMEOUT_S)
