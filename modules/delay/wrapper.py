@@ -256,9 +256,4 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
         finally:
             _reset_current_sm(sm_token)
 
-    # Phase 5A Task 1: expose the wrapper's SM/engine on the returned
-    # callable so tests (and integration code) can verify the shared
-    # instance without breaking the existing single-argument call shape.
-    _wrapped.behavior_sm = sm  # type: ignore[attr-defined]
-    _wrapped.behavior_engine = engine  # type: ignore[attr-defined]
     return _wrapped
