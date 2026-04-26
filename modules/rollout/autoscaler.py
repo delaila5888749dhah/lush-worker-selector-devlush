@@ -40,24 +40,30 @@ class AutoScaler:
         )
 
     def _evaluate_scale_down(self, error_rate: float = 0.0) -> Optional[int]:
-        """On-demand scale-down evaluation driven by an external error-rate signal.
+        """On-demand scale-down evaluation.
 
-        This is an explicit external-trigger API and is *not* called by the
-        automatic per-failure path (``record_failure``).  Callers supply an
-        aggregate ``error_rate``; if it exceeds ``ERROR_RATE_THRESHOLD`` the
-        whole service is scaled down via ``_scale_down``, otherwise any workers
-        whose accumulated failure count has already crossed the threshold are
-        scaled down individually.
+        Two distinct sub-paths share this method:
 
-        When called with ``error_rate=0.0`` (the default, used by
-        ``get_recommended_scale_down_target``), the global error-rate threshold
-        check is skipped and only per-worker failure counts are evaluated.
-        ``error_rate`` is expected to be in the range ``[0.0, 1.0]``; negative
-        values are treated the same as ``0.0`` (threshold check not triggered).
+        1. **Per-worker failure path** (production-wired). Called with the
+           default ``error_rate=0.0`` by ``get_recommended_scale_down_target``,
+           which is invoked from ``integration.runtime._runtime_loop`` every
+           tick.  Any worker whose ``_consecutive_failures`` counter has
+           crossed ``_CONSECUTIVE_FAILURE_THRESHOLD`` is scaled down
+           individually.  The global error-rate threshold check is skipped.
 
-        Production path status: not wired into any automatic call-site.  Invoke
-        this method directly when reacting to an external error-rate metric
-        (e.g. from a monitoring dashboard or a periodic health-check loop).
+        2. **Global error-rate path** (Option B — *external-only / opt-in*,
+           Blueprint §14.5). When ``error_rate > ERROR_RATE_THRESHOLD`` the
+           whole service is scaled down via ``_scale_down``.  This branch is
+           **deliberately not wired into any automatic production loop**; the
+           production global-error-rate response is owned by the behavior path
+           (``behavior.evaluate`` → runtime → ``rollout.force_rollback`` under
+           the ``_is_safe_locked`` safety gate, see Blueprint §14.1).  Wire-in
+           here would duplicate that path *without* the safety gate, so the
+           ``error_rate`` argument is reserved for explicit external triggers
+           — e.g. a monitoring dashboard, an emergency-rollback CLI, or an
+           integration test asserting the threshold contract.  Callers that
+           opt in supply ``error_rate`` in ``[0.0, 1.0]``; negative values are
+           treated the same as ``0.0`` (threshold check not triggered).
 
         Returns:
             The recommended target worker count when scale-down is triggered,
