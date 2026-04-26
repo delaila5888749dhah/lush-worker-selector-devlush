@@ -148,9 +148,8 @@ class TestEvaluateScaleDownExternalOnlyContract(AutoScalerResetMixin, unittest.T
                 ERROR_RATE_THRESHOLD + 0.05
             )
         mock_scale_down.assert_called_once()
-        reason = mock_scale_down.call_args.kwargs.get("reason") or (
-            mock_scale_down.call_args.args[0] if mock_scale_down.call_args.args else ""
-        )
+        _, kwargs = mock_scale_down.call_args
+        reason = kwargs["reason"]
         self.assertIn("error_rate", reason)
         self.assertEqual(target, 1)
 
@@ -183,15 +182,31 @@ class TestEvaluateScaleDownExternalOnlyContract(AutoScalerResetMixin, unittest.T
 
         def spy(*args, **kwargs):
             recorded.append((args, kwargs))
+            with runtime_module._lock:
+                runtime_module._state = "STOPPED"
             return original(*args, **kwargs)
 
-        with patch.object(scaler, "_evaluate_scale_down", side_effect=spy):
-            scaler.get_recommended_scale_down_target()
+        with (
+            patch.object(scaler, "_evaluate_scale_down", side_effect=spy),
+            patch.object(runtime_module, "get_autoscaler", return_value=scaler),
+            patch.object(runtime_module.monitor, "get_metrics", return_value={"error_rate": 0.0}),
+            patch.object(runtime_module.metrics_exporter, "export_metrics"),
+            patch.object(runtime_module.alerting, "evaluate_alerts", return_value=[]),
+            patch.object(runtime_module.behavior, "evaluate", return_value=(runtime_module.behavior.HOLD, [])),
+            patch.object(runtime_module.rollout, "get_current_step_index", return_value=0),
+            patch.object(runtime_module.rollout, "get_current_workers", return_value=0),
+            patch.object(runtime_module, "_apply_scale"),
+            patch.object(runtime_module, "_log_event"),
+        ):
+            with runtime_module._lock:
+                runtime_module._state = "RUNNING"
+            runtime_module._stop_event.clear()
+            runtime_module._runtime_loop(lambda _worker_id: None, 0.01)
 
         self.assertEqual(len(recorded), 1)
         args, kwargs = recorded[0]
         # Either positional default omitted, or explicit 0.0 — never a real rate.
-        passed_rate = kwargs.get("error_rate", args[0] if args else 0.0)
+        passed_rate = kwargs.get("error_rate", args[0] if len(args) > 0 else 0.0)
         self.assertEqual(passed_rate, 0.0)
 
 
