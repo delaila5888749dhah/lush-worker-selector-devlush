@@ -62,6 +62,29 @@ class _RuntimeAutoscalerMixin:
             time.sleep(0.02)
         return wid not in get_active_workers()
 
+    @staticmethod
+    def _preload_failure_threshold_minus_one(scaler, worker_id):
+        """Set a worker's autoscaler counter to threshold-1."""
+        with scaler._lock:  # pylint: disable=protected-access
+            scaler._consecutive_failures[worker_id] = (  # pylint: disable=protected-access
+                scaler._CONSECUTIVE_FAILURE_THRESHOLD - 1  # pylint: disable=protected-access
+            )
+
+    @staticmethod
+    def _register_current_thread_worker(worker_id):
+        """Register the current thread as the owner of a worker id."""
+        with runtime._lock:
+            runtime._workers[worker_id] = threading.current_thread()
+            runtime._worker_states[worker_id] = "IDLE"
+
+    @staticmethod
+    def _clear_worker_registration(worker_id):
+        """Remove any explicit worker registration created by a test."""
+        with runtime._lock:
+            runtime._workers.pop(worker_id, None)
+            runtime._worker_states.pop(worker_id, None)
+            runtime._stop_requests.discard(worker_id)
+
 
 class TestWorkerFnRecordsAutoscalerFailure(_RuntimeAutoscalerMixin, unittest.TestCase):
     """``_worker_fn`` must invoke ``autoscaler.record_failure`` for both
@@ -71,12 +94,20 @@ class TestWorkerFnRecordsAutoscalerFailure(_RuntimeAutoscalerMixin, unittest.Tes
         runtime._state = "RUNNING"
         try:
             scaler = autoscaler_module.get_autoscaler()
-            with patch.object(scaler, "_scale_down_worker"):
+            with (
+                patch.object(scaler, "_scale_down_worker"),
+                patch.object(
+                    scaler,
+                    "record_failure",
+                    wraps=scaler.record_failure,
+                ) as record_failure,
+            ):
                 def billing_fail(_):
                     raise CycleExhaustedError("pool empty")
 
                 wid = start_worker(billing_fail)
                 self.assertTrue(self._wait_until_worker_exited(wid))
+                record_failure.assert_called_once_with(wid)
                 self.assertGreaterEqual(
                     scaler.get_consecutive_failures(wid), 1,
                     "billing failure must increment autoscaler counter for the worker",
@@ -88,12 +119,20 @@ class TestWorkerFnRecordsAutoscalerFailure(_RuntimeAutoscalerMixin, unittest.Tes
         runtime._state = "RUNNING"
         try:
             scaler = autoscaler_module.get_autoscaler()
-            with patch.object(scaler, "_scale_down_worker"):
+            with (
+                patch.object(scaler, "_scale_down_worker"),
+                patch.object(
+                    scaler,
+                    "record_failure",
+                    wraps=scaler.record_failure,
+                ) as record_failure,
+            ):
                 def generic_fail(_):
                     raise RuntimeError("boom")
 
                 wid = start_worker(generic_fail)
                 self.assertTrue(self._wait_until_worker_exited(wid))
+                record_failure.assert_called_once_with(wid)
                 self.assertGreaterEqual(
                     scaler.get_consecutive_failures(wid), 1,
                     "generic failure must increment autoscaler counter for the worker",
@@ -110,16 +149,22 @@ class TestWorkerFnRecordsAutoscalerFailure(_RuntimeAutoscalerMixin, unittest.Tes
             def succeed(_):
                 ran.set()
 
-            wid = start_worker(succeed)
-            self.assertTrue(ran.wait(timeout=CLEANUP_TIMEOUT))
-            # Worker may keep looping; stop it cleanly.
-            with runtime._lock:
-                runtime._stop_requests.add(wid)
-            self.assertTrue(self._wait_until_worker_exited(wid))
-            self.assertEqual(
-                scaler.get_consecutive_failures(wid), 0,
-                "successful task execution must keep autoscaler counter at 0",
-            )
+            with patch.object(
+                scaler,
+                "record_success",
+                wraps=scaler.record_success,
+            ) as record_success:
+                wid = start_worker(succeed)
+                self.assertTrue(ran.wait(timeout=CLEANUP_TIMEOUT))
+                # Worker may keep looping; stop it cleanly.
+                with runtime._lock:
+                    runtime._stop_requests.add(wid)
+                self.assertTrue(self._wait_until_worker_exited(wid))
+                record_success.assert_called_with(wid)
+                self.assertEqual(
+                    scaler.get_consecutive_failures(wid), 0,
+                    "successful task execution must keep autoscaler counter at 0",
+                )
         finally:
             runtime._state = "INIT"
 
@@ -146,6 +191,11 @@ class TestWorkerFnAndBehaviorRollbackIdempotent(_RuntimeAutoscalerMixin, unittes
 
             scaler = autoscaler_module.get_autoscaler()
 
+            # Pre-load the autoscaler counter to threshold-1 so a single
+            # _worker_fn failure crosses the threshold.
+            target_wid = "w-target"
+            self._preload_failure_threshold_minus_one(scaler, target_wid)
+
             # Synchronize the behavior-path force_rollback with the
             # autoscaler-path force_rollback so they race.
             barrier = threading.Barrier(2)
@@ -159,23 +209,21 @@ class TestWorkerFnAndBehaviorRollbackIdempotent(_RuntimeAutoscalerMixin, unittes
                 except Exception as exc:  # pylint: disable=broad-except
                     errors.append(exc)
 
-            # Pre-load the autoscaler counter to threshold-1 so a single
-            # _worker_fn failure crosses the threshold.
-            target_wid = "w-target"
-            with scaler._lock:  # pylint: disable=protected-access
-                scaler._consecutive_failures[target_wid] = (  # pylint: disable=protected-access
-                    scaler._CONSECUTIVE_FAILURE_THRESHOLD - 1  # pylint: disable=protected-access
-                )
-
             def autoscaler_path():
                 """Drive the autoscaler from a real _worker_fn failure."""
                 try:
-                    barrier.wait(timeout=CLEANUP_TIMEOUT)
-                    # record_failure() at threshold triggers
-                    # _scale_down_worker -> rollout.force_rollback().
-                    scaler.record_failure(target_wid)
+                    self._register_current_thread_worker(target_wid)
+
+                    def fail_after_barrier(_):
+                        """Block until the behavior path is ready, then fail."""
+                        barrier.wait(timeout=CLEANUP_TIMEOUT)
+                        raise RuntimeError("boom")
+
+                    runtime._worker_fn(target_wid, fail_after_barrier, None)
                 except Exception as exc:  # pylint: disable=broad-except
                     errors.append(exc)
+                finally:
+                    self._clear_worker_registration(target_wid)
 
             t_behavior = threading.Thread(target=behavior_path)
             t_autoscaler = threading.Thread(target=autoscaler_path)
@@ -225,16 +273,11 @@ class TestWorkerFnAndBehaviorRollbackIdempotent(_RuntimeAutoscalerMixin, unittes
                 raise RuntimeError("boom")
 
             for _ in range(threshold):
-                with runtime._lock:
-                    runtime._workers[wid] = threading.current_thread()
-                    runtime._worker_states[wid] = "IDLE"
+                self._register_current_thread_worker(wid)
                 try:
                     runtime._worker_fn(wid, _boom, None)
                 finally:
-                    with runtime._lock:
-                        runtime._workers.pop(wid, None)
-                        runtime._worker_states.pop(wid, None)
-                        runtime._stop_requests.discard(wid)
+                    self._clear_worker_registration(wid)
 
             # force_rollback fired exactly once at the threshold crossing.
             end_step = rollout.get_current_step_index()
