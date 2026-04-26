@@ -44,7 +44,6 @@ _VALID_BEHAVIOR_TRANSITIONS = {
     "POST_ACTION": {"IDLE"},
 }
 
-_CRITICAL_CONTEXTS = CRITICAL_SECTION  # backward-compat alias
 _SAFE_CONTEXTS = {"IDLE", "FILLING_FORM", "PAYMENT"}
 
 # ── BehaviorStateMachine ─────────────────────────────────────────
