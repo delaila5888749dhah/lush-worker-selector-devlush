@@ -20,7 +20,7 @@ class TestNetworkUrlPatterns(unittest.TestCase):
         self.assertNotIn("cws4.0", patterns,
                          "cws4.0 broad fallback must be removed")
 
-    def test_no_precise_alias_remains(self):
+    def test_precise_alias_removed(self):
         """The legacy precise-subset alias must be gone after cleanup."""
         self.assertFalse(
             hasattr(orchestrator, "_CDP_NETWORK_URL_PATTERNS_PRECISE"),
