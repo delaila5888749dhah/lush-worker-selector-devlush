@@ -42,11 +42,11 @@ class TestNetworkUrlPatterns(unittest.TestCase):
         )
 
     def test_url_matching_only_broad_fallback_is_flagged(self):
-        """When only ``cws4.0`` matches, it is not in the precise set."""
+        """After P3-F2 fix (option A), broad == precise; static asset matches neither."""
         url = "https://wwws-usa2.givex.com/cws4.0/lushusa/static/app.js"
         broad_match = any(p in url for p in orchestrator._CDP_NETWORK_URL_PATTERNS)
         precise_match = any(p in url for p in orchestrator._CDP_NETWORK_URL_PATTERNS_PRECISE)
-        self.assertTrue(broad_match, "broad pattern still matches (fallback retained)")
+        self.assertFalse(broad_match, "broad pattern no longer matches non-pricing XHR (cws4.0 removed)")
         self.assertFalse(precise_match, "precise pattern rejects non-pricing XHR")
 
 

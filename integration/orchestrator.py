@@ -264,7 +264,7 @@ _notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptabl
 # page, replace ``cws4.0`` with the exact pricing endpoint path (e.g.
 # ``/cws4.0/lushusa/api/checkout/`` or similar) and drop the fallback
 # warning branch.  See docs/audit/addendum-cdp-url-patterns.md.
-_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout", "cws4.0")
+_CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout")
 # Narrower "precise" subset — any one of these uniquely identifies a
 # pricing endpoint.  If a URL matches only the broad ``cws4.0`` fallback
 # but none of these, the response listener logs a WARNING so operators

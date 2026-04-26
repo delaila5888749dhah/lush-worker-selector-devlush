@@ -394,8 +394,8 @@ class NetworkListenerCallbackTests(unittest.TestCase):
             captured_callback[0]({"response": {}})
         mock_wd.notify_total.assert_not_called()
 
-    def test_cws40_pattern_matches(self):
-        """'cws4.0' substring pattern must trigger the callback."""
+    def test_cws40_pattern_no_longer_matches(self):
+        """After P3-F2 fix (option A), 'cws4.0' substring alone must NOT trigger callback."""
         driver = MagicMock()
         captured_callback = [None]
 
@@ -408,7 +408,7 @@ class NetworkListenerCallbackTests(unittest.TestCase):
         with patch("integration.orchestrator.watchdog") as mock_wd:
             _setup_network_total_listener(driver, "nl-worker")
             captured_callback[0]({"response": {"url": "https://example.com/cws4.0/submit"}})
-        mock_wd.notify_total.assert_called_once()
+        mock_wd.notify_total.assert_not_called()
 
     def test_add_listener_failure_does_not_raise(self):
         """If add_cdp_listener raises, the error must be caught and logged."""
