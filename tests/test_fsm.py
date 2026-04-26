@@ -341,5 +341,67 @@ class FSMLegacyWarnTests(unittest.TestCase):
             cleanup_worker("w1")
 
 
+class FSMPaymentStateEnumTests(unittest.TestCase):
+    """Tests for the PaymentState StrEnum (audit P4-A1).
+
+    Verifies that FSM states are defined using ``enum.StrEnum`` and that the
+    backward-compat string contract is preserved.
+    """
+
+    def setUp(self):
+        cleanup_worker(_WID)
+        initialize_for_worker(_WID)
+
+    def tearDown(self):
+        cleanup_worker(_WID)
+
+    def test_payment_state_is_str_enum(self):
+        """PaymentState must be an enum.StrEnum subclass."""
+        import enum as _enum
+        from modules.fsm.main import PaymentState
+
+        self.assertTrue(issubclass(PaymentState, _enum.StrEnum))
+
+    def test_payment_state_members_equal_strings(self):
+        """StrEnum members compare equal to their string values."""
+        from modules.fsm.main import PaymentState
+
+        self.assertEqual(PaymentState.UI_LOCK, "ui_lock")
+        self.assertEqual(PaymentState.SUCCESS, "success")
+        self.assertEqual(PaymentState.VBV_3DS, "vbv_3ds")
+        self.assertEqual(PaymentState.DECLINED, "declined")
+        self.assertEqual(PaymentState.VBV_CANCELLED, "vbv_cancelled")
+        # And isinstance str remains True (StrEnum semantics).
+        self.assertIsInstance(PaymentState.SUCCESS, str)
+
+    def test_payment_state_membership_in_allowed_states(self):
+        """StrEnum members and their string values both satisfy membership."""
+        from modules.fsm.main import PaymentState
+
+        for member in PaymentState:
+            self.assertIn(member, ALLOWED_STATES)
+            self.assertIn(member.value, ALLOWED_STATES)
+
+    def test_transition_accepts_enum_member(self):
+        """transition_for_worker must accept a PaymentState member (backward-compat)."""
+        from modules.fsm.main import PaymentState
+
+        s = transition_for_worker(_WID, PaymentState.UI_LOCK)
+        self.assertIsInstance(s, State)
+        # State.name must remain a plain string for upstream consumers.
+        self.assertEqual(s.name, "ui_lock")
+        self.assertIsInstance(s.name, str)
+
+        s = transition_for_worker(_WID, PaymentState.SUCCESS)
+        self.assertEqual(s.name, "success")
+
+    def test_transition_accepts_raw_string(self):
+        """transition_for_worker must still accept raw string state names."""
+        s = transition_for_worker(_WID, "ui_lock")
+        self.assertEqual(s.name, "ui_lock")
+        s = transition_for_worker(_WID, "declined")
+        self.assertEqual(s.name, "declined")
+
+
 if __name__ == "__main__":
     unittest.main()
