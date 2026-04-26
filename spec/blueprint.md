@@ -809,5 +809,23 @@ Full chain: monitor.get_metrics() → behavior.evaluate() → rollout.try_scale_
 · rollout step index and worker count are kept in sync via _apply_scale().
 · Each decision window emits a distinct observable log action (see §13.5–13.6, §14.1–14.3).
 
+§14.5. AUTOSCALER ERROR-RATE PATH — EXTERNAL-ONLY (OPT-IN)
+
+`autoscaler._evaluate_scale_down(error_rate)` exposes two sub-paths:
+
+· Per-worker failure path (`error_rate=0.0`, the default): WIRED into the
+  production loop via `get_recommended_scale_down_target()` →
+  `integration.runtime._runtime_loop`. Scales down individual workers whose
+  `_consecutive_failures` have crossed `_CONSECUTIVE_FAILURE_THRESHOLD`.
+
+· Global error-rate path (`error_rate > ERROR_RATE_THRESHOLD`): NOT WIRED —
+  *external-only / opt-in by design*. The production global-error-rate
+  response is owned by the behavior path (§14.1: `behavior.evaluate` →
+  `rollout.force_rollback` under the `_is_safe_locked` gate). Wiring this
+  branch into the automatic loop would duplicate that response **without**
+  the safety gate. The `error_rate` parameter is therefore reserved for
+  explicit external triggers — e.g. a monitoring dashboard, an emergency
+  rollback CLI, or an integration test asserting the threshold contract.
+
 Synchronization Matrix (§11) — thêm entries mới:
 · Spec §14 (Cross-Module Stabilization) ↔ Blueprint §14: Status: ✓ ĐỒNG BỘ

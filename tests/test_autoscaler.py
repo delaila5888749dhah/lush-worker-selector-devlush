@@ -131,6 +131,70 @@ class TestConsecutiveFailures(AutoScalerResetMixin, unittest.TestCase):
         self.assertEqual(call_count["n"], 2)
 
 
+class TestEvaluateScaleDownExternalOnlyContract(AutoScalerResetMixin, unittest.TestCase):
+    """Blueprint §14.5: ``_evaluate_scale_down(error_rate)`` is two-mode.
+
+    The per-worker failure sub-path (``error_rate=0.0``) is production-wired
+    via ``get_recommended_scale_down_target()``; the global error-rate sub-path
+    (``error_rate > ERROR_RATE_THRESHOLD``) is *external-only / opt-in* and
+    must not be invoked by any automatic production loop.
+    """
+
+    def test_manual_external_trigger_invokes_global_scale_down(self):
+        """Manual external caller passes a real error_rate → global scale-down fires."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(scaler, "_scale_down", return_value=1) as mock_scale_down:
+            target = scaler._evaluate_scale_down(  # pylint: disable=protected-access
+                ERROR_RATE_THRESHOLD + 0.05
+            )
+        mock_scale_down.assert_called_once()
+        reason = mock_scale_down.call_args.kwargs.get("reason") or (
+            mock_scale_down.call_args.args[0] if mock_scale_down.call_args.args else ""
+        )
+        self.assertIn("error_rate", reason)
+        self.assertEqual(target, 1)
+
+    def test_default_invocation_skips_global_threshold_branch(self):
+        """``get_recommended_scale_down_target`` must not trigger the global path."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(scaler, "_scale_down") as mock_scale_down:
+            with patch.object(scaler, "_scale_down_worker"):
+                scaler.get_recommended_scale_down_target()
+        mock_scale_down.assert_not_called()
+
+    def test_negative_error_rate_skips_global_threshold_branch(self):
+        """Negative error_rate must behave like 0.0 (threshold not triggered)."""
+        scaler = autoscaler_module.AutoScaler()
+        with patch.object(scaler, "_scale_down") as mock_scale_down:
+            result = scaler._evaluate_scale_down(-1.0)  # pylint: disable=protected-access
+        mock_scale_down.assert_not_called()
+        self.assertIsNone(result)
+
+    def test_runtime_loop_does_not_feed_error_rate(self):
+        """Production runtime loop must call the autoscaler with default error_rate=0.0.
+
+        Pins the Option B contract: ``integration.runtime`` only invokes the
+        per-worker sub-path; it never plumbs a runtime ``error_rate`` value
+        into ``_evaluate_scale_down``.
+        """
+        recorded = []  # list of (args, kwargs) tuples
+        scaler = autoscaler_module.get_autoscaler()
+        original = scaler._evaluate_scale_down  # pylint: disable=protected-access
+
+        def spy(*args, **kwargs):
+            recorded.append((args, kwargs))
+            return original(*args, **kwargs)
+
+        with patch.object(scaler, "_evaluate_scale_down", side_effect=spy):
+            scaler.get_recommended_scale_down_target()
+
+        self.assertEqual(len(recorded), 1)
+        args, kwargs = recorded[0]
+        # Either positional default omitted, or explicit 0.0 — never a real rate.
+        passed_rate = kwargs.get("error_rate", args[0] if args else 0.0)
+        self.assertEqual(passed_rate, 0.0)
+
+
 class TestAutoscalerReset(AutoScalerResetMixin, unittest.TestCase):
     def test_reset_clears_failure_counts(self):
         scaler = autoscaler_module.get_autoscaler()

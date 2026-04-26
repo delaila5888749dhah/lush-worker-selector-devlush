@@ -5,6 +5,19 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Documented (Blueprint §14.5 — Autoscaler error-rate path)
+- `autoscaler._evaluate_scale_down(error_rate)` clarified as a two-mode API:
+  the per-worker failure sub-path (default `error_rate=0.0`) is production-
+  wired via `get_recommended_scale_down_target()`, while the global
+  `error_rate > ERROR_RATE_THRESHOLD` sub-path is **external-only / opt-in**
+  and intentionally not invoked by any automatic production loop. Production
+  global-error-rate response remains owned by the behavior path under the
+  `_is_safe_locked` safety gate (Blueprint §14.1).
+- Blueprint §14.5 added; `_evaluate_scale_down` docstring tightened to match.
+- `tests/test_autoscaler.py` adds explicit coverage for the manual external-
+  trigger contract and asserts the runtime loop never feeds a non-zero
+  `error_rate` into this API.
+
 ### Added (Blueprint §2.1 — BitBrowser Profile Pool)
 - `BITBROWSER_POOL_MODE` env var — bật chế độ pool profile có sẵn,
   thay create/delete flow (tránh Operation Password prompt của BitBrowser).
