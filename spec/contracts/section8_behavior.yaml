@@ -72,6 +72,7 @@ contracts:
       - tests/test_behavior_state.py::TestIsCriticalContext::test_vbv_is_critical
       - tests/test_behavior_state.py::TestIsCriticalContext::test_post_action_is_critical
       - tests/test_behavior_state.py::TestIsCriticalContext::test_critical_section_flag_is_critical
+      - tests/test_behavior_state.py::TestCriticalSectionConstant::test_critical_section_value
       - tests/test_safe_point.py::TestIsSafeToControl::test_false_when_worker_critical_section
     fail_severity: block_merge
 

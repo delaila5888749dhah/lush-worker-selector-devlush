@@ -30,6 +30,7 @@ WATCHDOG_HEADROOM    = ≥3.0s  (7.0 - max behavioral delay = 3.0s minimum)
 
 ### INV-DELAY-02 — CRITICAL_SECTION Zero Delay
 ```
+modules/delay/state.py::CRITICAL_SECTION = frozenset({"VBV","POST_ACTION"})
 BehaviorStateMachine states {VBV, POST_ACTION} → is_safe_for_delay() = False → delay = 0.0
 _in_critical_section = True                    → is_safe_for_delay() = False → delay = 0.0
 BehaviorStateMachine states {VBV, POST_ACTION} → is_critical_context() = True

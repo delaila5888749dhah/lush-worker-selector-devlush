@@ -11,6 +11,12 @@ Five mandatory states (SPEC-6 §10.2):
   POST_ACTION   — after submit, waiting for result (critical — zero delay)
 
 Thread-safe via threading.Lock.  No cross-module imports.
+
+Module-level constant ``CRITICAL_SECTION`` (Blueprint §8.3, INV-DELAY-02)
+exposes the canonical frozenset of behavior states that mandate zero
+delay (``{"VBV", "POST_ACTION"}``).  It is the single source of truth
+used by :meth:`BehaviorStateMachine.is_critical_context` and is
+re-exported via :mod:`modules.delay.main` for downstream consumers.
 """
 
 import contextvars
@@ -24,6 +30,12 @@ _logger = logging.getLogger(__name__)
 
 BEHAVIOR_STATES = {"IDLE", "FILLING_FORM", "PAYMENT", "VBV", "POST_ACTION"}
 
+# Canonical frozenset of behavior states that mandate zero delay
+# (Blueprint §8.3, INV-DELAY-02).  Module-level public constant — the
+# authoritative source of truth referenced by :meth:`is_critical_context`
+# and re-exported via :mod:`modules.delay.main`.
+CRITICAL_SECTION = frozenset({"VBV", "POST_ACTION"})
+
 _VALID_BEHAVIOR_TRANSITIONS = {
     "IDLE": {"FILLING_FORM"},
     "FILLING_FORM": {"PAYMENT", "IDLE"},
@@ -32,7 +44,6 @@ _VALID_BEHAVIOR_TRANSITIONS = {
     "POST_ACTION": {"IDLE"},
 }
 
-_CRITICAL_CONTEXTS = {"VBV", "POST_ACTION"}
 _SAFE_CONTEXTS = {"IDLE", "FILLING_FORM", "PAYMENT"}
 
 # ── BehaviorStateMachine ─────────────────────────────────────────
@@ -100,7 +111,7 @@ class BehaviorStateMachine:
         by the delay engine.
         """
         with self._lock:
-            return self._state in _CRITICAL_CONTEXTS or self._in_critical_section
+            return self._state in CRITICAL_SECTION or self._in_critical_section
 
     def is_safe_for_delay(self) -> bool:
         """Return *True* when delay injection is permitted.
