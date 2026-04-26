@@ -366,5 +366,45 @@ class TestPhase9Compatibility(unittest.TestCase):
         self.assertNotIn("SAFE_POINT", BEHAVIOR_STATES)
 
 
+# ── CRITICAL_SECTION constant (BEH-CS-CONST) ────────────────────
+
+
+class TestCriticalSectionConstant(unittest.TestCase):
+    """Validate the module-level ``CRITICAL_SECTION`` constant
+    (Blueprint §8.3, INV-DELAY-02, audit claim BEH-CS-CONST)."""
+
+    def test_critical_section_exists(self):
+        from modules.delay.state import CRITICAL_SECTION  # noqa: F401
+
+    def test_critical_section_is_frozenset(self):
+        from modules.delay.state import CRITICAL_SECTION
+        self.assertIsInstance(CRITICAL_SECTION, frozenset)
+
+    def test_critical_section_value(self):
+        from modules.delay.state import CRITICAL_SECTION
+        self.assertEqual(CRITICAL_SECTION, frozenset({"VBV", "POST_ACTION"}))
+
+    def test_critical_section_subset_of_behavior_states(self):
+        from modules.delay.state import CRITICAL_SECTION
+        self.assertTrue(CRITICAL_SECTION.issubset(BEHAVIOR_STATES))
+
+    def test_critical_section_disjoint_with_safe_contexts(self):
+        from modules.delay.state import CRITICAL_SECTION, _SAFE_CONTEXTS
+        self.assertTrue(CRITICAL_SECTION.isdisjoint(_SAFE_CONTEXTS))
+
+    def test_critical_section_exported_via_main(self):
+        from modules.delay.main import CRITICAL_SECTION
+        self.assertEqual(CRITICAL_SECTION, frozenset({"VBV", "POST_ACTION"}))
+
+    def test_is_critical_context_uses_constant(self):
+        from modules.delay.state import CRITICAL_SECTION
+        for state in CRITICAL_SECTION:
+            sm = BehaviorStateMachine(initial_state=state)
+            self.assertTrue(
+                sm.is_critical_context(),
+                f"is_critical_context() should be True for state {state!r}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
