@@ -18,13 +18,16 @@ _logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
 class PaymentState(enum.StrEnum):
-    """Canonical FSM payment states.
+    """Canonical FSM payment-state identifiers.
 
     Inheriting from :class:`enum.StrEnum` (Python 3.11+) gives each member a
     string value identity: ``PaymentState.SUCCESS == "success"`` is ``True``
     and ``hash(PaymentState.SUCCESS) == hash("success")``. This guarantees
     backward compatibility with callers that pass raw strings while providing
-    type safety and a single source of truth for valid state names.
+    type safety and a single source of truth **for state identifiers**.
+
+    Note: transition topology (:data:`_VALID_PAYMENT_TRANSITIONS`) is still
+    declared separately and is not derived from this enum.
     """
 
     UI_LOCK = "ui_lock"
@@ -34,11 +37,15 @@ class PaymentState(enum.StrEnum):
     VBV_CANCELLED = "vbv_cancelled"
 
 
-# `ALLOWED_STATES` is exposed as a frozenset of the underlying string values so
-# that existing membership checks (`name in ALLOWED_STATES`) keep working with
-# raw strings AND with `PaymentState` members (StrEnum members hash/compare
-# equal to their string values).
-ALLOWED_STATES: frozenset = frozenset(s.value for s in PaymentState)
+# `ALLOWED_STATES` is a ``frozenset[str]`` of the underlying string values so
+# that existing membership checks (``name in ALLOWED_STATES``) keep working
+# with raw strings AND with :class:`PaymentState` members (StrEnum members
+# hash/compare equal to their string values).
+#
+# Note: the container type changed from a mutable ``set`` (pre-refactor) to
+# an immutable ``frozenset``; callers that mutated it in-place must instead
+# build their own ``set(ALLOWED_STATES)`` copy.
+ALLOWED_STATES: frozenset[str] = frozenset(s.value for s in PaymentState)
 
 _VALID_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
     PaymentState.UI_LOCK.value: {PaymentState.SUCCESS.value, PaymentState.DECLINED.value, PaymentState.VBV_3DS.value},
@@ -53,21 +60,36 @@ _VALID_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
 # `vbv_cancelled` is terminal at the FSM layer — card-swap/refill is handled
 # by the orchestrator (`handle_outcome`) at a higher level, not via an FSM
 # transition.
-TERMINAL_STATES: frozenset = frozenset(
-    {PaymentState.SUCCESS, PaymentState.DECLINED, PaymentState.VBV_CANCELLED}
+#
+# Stored as raw string values so that ``current.name in TERMINAL_STATES``
+# (where ``current.name`` is a plain ``str``) is a direct string-set lookup
+# and does not rely on ``StrEnum`` hash/equality alignment.
+TERMINAL_STATES: frozenset[str] = frozenset(
+    {PaymentState.SUCCESS.value, PaymentState.DECLINED.value, PaymentState.VBV_CANCELLED.value}
 )
 
 
 def _normalize_state(state_name: "str | PaymentState") -> str:
     """Return the canonical string form of *state_name*.
 
-    Accepts either a raw ``str`` or a :class:`PaymentState` member and returns
-    a plain ``str``. This keeps :class:`State` ``.name`` a plain string and
-    preserves backward compatibility with callers passing raw strings.
+    Accepts either a raw ``str`` (or ``str`` subclass, including
+    :class:`PaymentState`) and returns a **plain** ``str``. This keeps
+    :class:`State` ``.name`` a plain string and preserves backward
+    compatibility with callers passing raw strings.
+
+    Any input that is not a ``str`` instance is rejected with
+    :class:`TypeError` so foreign objects cannot leak through the
+    membership check and end up stored in :attr:`State.name`.
     """
     if isinstance(state_name, PaymentState):
         return state_name.value
-    return state_name
+    if isinstance(state_name, str):
+        # Coerce ``str`` subclasses (e.g. unrelated ``StrEnum`` members) to a
+        # plain ``str`` so downstream consumers always observe ``type(name) is str``.
+        return str.__str__(state_name)
+    raise TypeError(
+        f"state_name must be str or PaymentState, got {type(state_name).__name__}"
+    )
 
 # Per-worker registry: worker_id → {"states": {}, "current": None}
 _registry: dict[str, dict] = {}

@@ -402,6 +402,102 @@ class FSMPaymentStateEnumTests(unittest.TestCase):
         s = transition_for_worker(_WID, "declined")
         self.assertEqual(s.name, "declined")
 
+    def test_payment_state_hash_equals_string_hash(self):
+        """``hash(member) == hash(member.value)`` — relied on for frozenset membership."""
+        from modules.fsm.main import PaymentState
+
+        for member in PaymentState:
+            self.assertEqual(hash(member), hash(member.value))
+
+    def test_terminal_states_membership_with_raw_string(self):
+        """Direct contract: raw strings must satisfy ``in TERMINAL_STATES``.
+
+        ``transition_for_worker`` checks ``current.name in TERMINAL_STATES``
+        where ``current.name`` is always a plain ``str`` — so raw-string
+        membership is a load-bearing invariant.
+        """
+        from modules.fsm.main import TERMINAL_STATES
+
+        for value in ("success", "declined", "vbv_cancelled"):
+            self.assertIn(value, TERMINAL_STATES)
+        self.assertNotIn("ui_lock", TERMINAL_STATES)
+        self.assertNotIn("vbv_3ds", TERMINAL_STATES)
+
+    def test_transition_state_name_is_exact_str(self):
+        """``State.name`` must be ``type(...) is str`` — not a ``str`` subclass."""
+        from modules.fsm.main import PaymentState
+
+        s = transition_for_worker(_WID, PaymentState.UI_LOCK)
+        self.assertIs(type(s.name), str)
+        s = transition_for_worker(_WID, "vbv_3ds")
+        self.assertIs(type(s.name), str)
+        s = transition_for_worker(_WID, PaymentState.SUCCESS)
+        self.assertIs(type(s.name), str)
+
+    def test_normalize_state_rejects_foreign_types(self):
+        """_normalize_state must reject inputs that are not ``str | PaymentState``."""
+        from modules.fsm.main import _normalize_state
+
+        for bogus in (None, 123, 1.5, ("ui_lock",), ["ui_lock"], object()):
+            with self.assertRaises(TypeError):
+                _normalize_state(bogus)
+
+    def test_normalize_state_coerces_str_subclass_to_plain_str(self):
+        """Foreign ``str`` subclasses must be coerced to plain ``str``."""
+        import enum as _enum
+
+        from modules.fsm.main import _normalize_state
+
+        class _ForeignStrEnum(_enum.StrEnum):
+            UI_LOCK = "ui_lock"
+
+        normalized = _normalize_state(_ForeignStrEnum.UI_LOCK)
+        self.assertEqual(normalized, "ui_lock")
+        self.assertIs(type(normalized), str)
+
+
+class FSMLegacyEnumCompatTests(unittest.TestCase):
+    """Legacy global API must accept ``PaymentState`` members and keep
+    ``State.name`` a plain ``str`` (audit P4-A1 follow-up [F2])."""
+
+    def setUp(self):
+        self._legacy_patch = patch.dict(os.environ, {"FSM_ALLOW_LEGACY": "1"})
+        self._legacy_patch.start()
+        reset_states()
+
+    def tearDown(self):
+        self._legacy_patch.stop()
+
+    def test_add_new_state_accepts_enum_member(self):
+        from modules.fsm.main import PaymentState
+
+        result = add_new_state(PaymentState.SUCCESS)
+        self.assertIsInstance(result, State)
+        self.assertEqual(result.name, "success")
+        self.assertIs(type(result.name), str)
+
+    def test_transition_to_accepts_enum_member(self):
+        from modules.fsm.main import PaymentState
+
+        add_new_state(PaymentState.SUCCESS)
+        result = transition_to(PaymentState.SUCCESS)
+        self.assertEqual(result.name, "success")
+        self.assertIs(type(result.name), str)
+        self.assertEqual(get_current_state().name, "success")
+        self.assertIs(type(get_current_state().name), str)
+
+    def test_enum_value_and_member_yield_identical_results(self):
+        """Passing ``PaymentState.SUCCESS`` and ``"success"`` must be equivalent."""
+        from modules.fsm.main import PaymentState
+
+        add_new_state(PaymentState.SUCCESS)
+        s_member = transition_to(PaymentState.SUCCESS)
+        reset_states()
+        add_new_state("success")
+        s_raw = transition_to("success")
+        self.assertEqual(s_member.name, s_raw.name)
+        self.assertIs(type(s_member.name), type(s_raw.name))
+
 
 if __name__ == "__main__":
     unittest.main()
