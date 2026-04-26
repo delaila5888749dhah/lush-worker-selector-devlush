@@ -251,25 +251,11 @@ _network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
 # Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
 # Protected by _network_listener_lock.
 _notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptable-object
-# CDP Network.responseReceived URL filter (Phase 3 audit [F2]).
-# Listed in priority of specificity.  A substring match against the request
-# URL is sufficient to trigger the pricing-total notification path.
-#
-# NOTE: ``cws4.0`` is retained as a **broad fallback** only — it matches
-# every XHR served from the Givex payment domain (including static assets
-# and telemetry), so when it is the sole matching pattern we emit a
-# WARNING so inflated callback rates surface in observability.
-#
-# TODO(phase-4-[F2]): after live DevTools inspection of the Givex checkout
-# page, replace ``cws4.0`` with the exact pricing endpoint path (e.g.
-# ``/cws4.0/lushusa/api/checkout/`` or similar) and drop the fallback
-# warning branch.  See docs/audit/addendum-cdp-url-patterns.md.
+# CDP Network.responseReceived URL filter.
+# A substring match against the request URL is sufficient to trigger the
+# pricing-total notification path.  Each entry uniquely identifies a
+# pricing endpoint (verified against the live Givex checkout page).
 _CDP_NETWORK_URL_PATTERNS = ("/checkout/total", "/api/tax", "/api/checkout")
-# Narrower "precise" subset — any one of these uniquely identifies a
-# pricing endpoint.  If a URL matches only the broad ``cws4.0`` fallback
-# but none of these, the response listener logs a WARNING so operators
-# can see that the broad pattern is driving the notify call.
-_CDP_NETWORK_URL_PATTERNS_PRECISE = ("/checkout/total", "/api/tax", "/api/checkout")
 
 # NOTE on _active_cdp_requests:
 # This counter reflects orchestration-level tracking only.
@@ -1071,8 +1057,6 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
 
 def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     """Enable CDP Network monitoring and set up total interception."""
-    # "cws4.0" is intentionally substring-matched because this endpoint path
-    # can appear with varying prefixes across environments.
     try:
         driver_obj.execute_cdp_cmd("Network.enable", {})
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
@@ -1090,16 +1074,6 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                     url = str(response.get("url", ""))
                     if not any(part in url for part in _CDP_NETWORK_URL_PATTERNS):
                         return
-                    # Phase 4 audit [F2]: warn when only the broad ``cws4.0``
-                    # fallback matches so inflated callback rates surface in
-                    # observability.  Remove once the precise pricing
-                    # endpoint is confirmed (see _CDP_NETWORK_URL_PATTERNS).
-                    if not any(p in url for p in _CDP_NETWORK_URL_PATTERNS_PRECISE):
-                        _logger.warning(
-                            "[trace=%s] CDP URL matched only broad cws4.0 fallback "
-                            "(non-precise); worker=%s url=%s",
-                            _get_trace_id(), worker_id, url,
-                        )
 
                     request_id = params.get("requestId")
                     body_parsed = False
