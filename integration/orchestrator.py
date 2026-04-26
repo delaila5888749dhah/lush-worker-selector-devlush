@@ -34,6 +34,7 @@ except ImportError:
 from modules.billing import main as billing
 from modules.cdp import main as cdp
 from modules.delay.config import CDP_CALL_TIMEOUT as _CDP_CALL_TIMEOUT_CONFIG
+from modules.delay.state import get_current_sm as _get_current_sm
 from modules.fsm import main as fsm
 from modules.fsm.main import ALLOWED_STATES as _FSM_STATES  # noqa: F401 — Imported from fsm canonical source; intentionally unused but enforces INV-FSM-01 at import time
 from modules.monitor import main as monitor
@@ -1211,14 +1212,25 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         _notified_workers_this_cycle.discard(worker_id)
     watchdog.enable_network_monitor(worker_id)
     _submitted_before_wait = False
+    # Phase 5A Task 2C: surface the active BehaviorStateMachine (published
+    # by the behaviour wrapper into a ContextVar) so the wait_for_total
+    # call-sites below can flip the CRITICAL_SECTION flag for the
+    # duration of the blocking watchdog wait.
+    _behavior_sm = _get_current_sm()
     try:
         # ── Phase A: Pre-fill — wait for pricing total BEFORE touching card fields.
         # Anti-fraud INV-PAYMENT-01 (Blueprint §5):  if the pricing endpoint
         # stalls, abort BEFORE typing any card data so no submission occurs.
         try:
-            preflight_total = watchdog.wait_for_total(
-                worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
-            )
+            if _behavior_sm is not None:
+                _behavior_sm.set_critical_section(True)
+            try:
+                preflight_total = watchdog.wait_for_total(
+                    worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
+                )
+            finally:
+                if _behavior_sm is not None:
+                    _behavior_sm.set_critical_section(False)
         except SessionFlaggedError:
             _logger.warning(
                 "[trace=%s] Pricing watchdog timeout BEFORE fill for worker=%s, task_id=%s; "
@@ -1282,9 +1294,15 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         # recovery path.
         _notify_total_from_dom(driver_obj, worker_id)
         try:
-            total = watchdog.wait_for_total(
-                worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
-            )
+            if _behavior_sm is not None:
+                _behavior_sm.set_critical_section(True)
+            try:
+                total = watchdog.wait_for_total(
+                    worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
+                )
+            finally:
+                if _behavior_sm is not None:
+                    _behavior_sm.set_critical_section(False)
         except SessionFlaggedError as _post_exc:
             _logger.warning(
                 "[trace=%s] Post-submit total missing for worker=%s, task_id=%s; "
@@ -1513,6 +1531,14 @@ def refill_after_vbv_reload(driver, ctx, new_card) -> None:
     if ctx.billing_profile is None:
         _logger.warning("refill_after_vbv_reload skipped: billing_profile missing")
         return
+    # Phase 5A Task 2D: gate the entire reload chain behind the
+    # CRITICAL_SECTION flag.  Page reload after VBV cancel is a fragile
+    # window where any background biometric / hesitation delay would
+    # risk the watchdog budget; flip the flag on the SM published into
+    # the behaviour ContextVar so all delay sites see the active CS.
+    sm = _get_current_sm()
+    if sm is not None:
+        sm.set_critical_section(True)
     try:
         if ctx.task is not None:
             # Full refill: page was reloaded to the beginning after VBV cancel.
@@ -1535,6 +1561,9 @@ def refill_after_vbv_reload(driver, ctx, new_card) -> None:
             driver.fill_card_fields(new_card)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("refill_after_vbv_reload failed: %s", _sanitize_error(exc))
+    finally:
+        if sm is not None:
+            sm.set_critical_section(False)
 
 
 def _record_fork_safe(branch: str) -> None:
