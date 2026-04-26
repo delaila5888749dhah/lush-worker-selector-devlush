@@ -3,6 +3,7 @@
 Legacy global API is deprecated. Use `initialize_for_worker()`, `transition_for_worker()`,
 `get_current_state_for_worker()`, `cleanup_worker()` for production multi-worker usage.
 """
+import enum
 import functools
 import inspect
 import logging
@@ -15,14 +16,43 @@ from modules.common.types import State
 
 _logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-ALLOWED_STATES = {"ui_lock", "success", "vbv_3ds", "declined", "vbv_cancelled"}
+
+class PaymentState(enum.StrEnum):
+    """Canonical FSM payment-state identifiers.
+
+    Inheriting from :class:`enum.StrEnum` (Python 3.11+) gives each member a
+    string value identity: ``PaymentState.SUCCESS == "success"`` is ``True``
+    and ``hash(PaymentState.SUCCESS) == hash("success")``. This guarantees
+    backward compatibility with callers that pass raw strings while providing
+    type safety and a single source of truth **for state identifiers**.
+
+    Note: transition topology (:data:`_VALID_PAYMENT_TRANSITIONS`) is still
+    declared separately and is not derived from this enum.
+    """
+
+    UI_LOCK = "ui_lock"
+    SUCCESS = "success"
+    VBV_3DS = "vbv_3ds"
+    DECLINED = "declined"
+    VBV_CANCELLED = "vbv_cancelled"
+
+
+# `ALLOWED_STATES` is a ``frozenset[str]`` of the underlying string values so
+# that existing membership checks (``name in ALLOWED_STATES``) keep working
+# with raw strings AND with :class:`PaymentState` members (StrEnum members
+# hash/compare equal to their string values).
+#
+# Note: the container type changed from a mutable ``set`` (pre-refactor) to
+# an immutable ``frozenset``; callers that mutated it in-place must instead
+# build their own ``set(ALLOWED_STATES)`` copy.
+ALLOWED_STATES: frozenset[str] = frozenset(s.value for s in PaymentState)
 
 _VALID_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
-    "ui_lock": {"success", "declined", "vbv_3ds"},
-    "vbv_3ds": {"success", "declined", "vbv_cancelled"},
-    "success": set(),
-    "declined": set(),
-    "vbv_cancelled": set(),
+    PaymentState.UI_LOCK.value: {PaymentState.SUCCESS.value, PaymentState.DECLINED.value, PaymentState.VBV_3DS.value},
+    PaymentState.VBV_3DS.value: {PaymentState.SUCCESS.value, PaymentState.DECLINED.value, PaymentState.VBV_CANCELLED.value},
+    PaymentState.SUCCESS.value: set(),
+    PaymentState.DECLINED.value: set(),
+    PaymentState.VBV_CANCELLED.value: set(),
 }
 
 # States from which no further transitions are permitted.  Workers that have
@@ -30,7 +60,36 @@ _VALID_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
 # `vbv_cancelled` is terminal at the FSM layer — card-swap/refill is handled
 # by the orchestrator (`handle_outcome`) at a higher level, not via an FSM
 # transition.
-TERMINAL_STATES: frozenset = frozenset({"success", "declined", "vbv_cancelled"})
+#
+# Stored as raw string values so that ``current.name in TERMINAL_STATES``
+# (where ``current.name`` is a plain ``str``) is a direct string-set lookup
+# and does not rely on ``StrEnum`` hash/equality alignment.
+TERMINAL_STATES: frozenset[str] = frozenset(
+    {PaymentState.SUCCESS.value, PaymentState.DECLINED.value, PaymentState.VBV_CANCELLED.value}
+)
+
+
+def _normalize_state(state_name: "str | PaymentState") -> str:
+    """Return the canonical string form of *state_name*.
+
+    Accepts either a raw ``str`` (or ``str`` subclass, including
+    :class:`PaymentState`) and returns a **plain** ``str``. This keeps
+    :class:`State` ``.name`` a plain string and preserves backward
+    compatibility with callers passing raw strings.
+
+    Any input that is not a ``str`` instance is rejected with
+    :class:`TypeError` so foreign objects cannot leak through the
+    membership check and end up stored in :attr:`State.name`.
+    """
+    if isinstance(state_name, PaymentState):
+        return state_name.value
+    if isinstance(state_name, str):
+        # Coerce ``str`` subclasses (e.g. unrelated ``StrEnum`` members) to a
+        # plain ``str`` so downstream consumers always observe ``type(name) is str``.
+        return str(state_name)
+    raise TypeError(
+        f"state_name must be str or PaymentState, got {type(state_name).__name__}"
+    )
 
 # Per-worker registry: worker_id → {"states": {}, "current": None}
 _registry: dict[str, dict] = {}
@@ -55,7 +114,8 @@ def initialize_for_worker(worker_id: str) -> None:
         }
 
 
-def add_state_for_worker(worker_id: str, state_name: str) -> State:
+def add_state_for_worker(worker_id: str, state_name: "str | PaymentState") -> State:
+    state_name = _normalize_state(state_name)
     if state_name not in ALLOWED_STATES:
         raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
     with _registry_lock:
@@ -74,7 +134,13 @@ def get_current_state_for_worker(worker_id: str) -> "State | None":
         return _registry.get(worker_id, {}).get("current")
 
 
-def transition_for_worker(worker_id: str, target_state: str) -> State:
+def transition_for_worker(worker_id: str, target_state: "str | PaymentState") -> State:
+    """Transition *worker_id* to *target_state*.
+
+    *target_state* accepts either a raw ``str`` or a :class:`PaymentState`
+    member; both are accepted for backward compatibility.
+    """
+    target_state = _normalize_state(target_state)
     if target_state not in ALLOWED_STATES:
         raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
     with _registry_lock:
@@ -150,6 +216,7 @@ def add_new_state(state_name):
         DeprecationWarning,
         stacklevel=2,
     )
+    state_name = _normalize_state(state_name)
     with _legacy_global_lock:
         if state_name not in ALLOWED_STATES:
             raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
@@ -189,6 +256,7 @@ def transition_to(target_state):
         DeprecationWarning,
         stacklevel=2,
     )
+    target_state = _normalize_state(target_state)
     with _legacy_global_lock:
         if target_state not in ALLOWED_STATES:
             raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
