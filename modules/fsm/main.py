@@ -58,7 +58,7 @@ TERMINAL_STATES: frozenset = frozenset(
 )
 
 
-def _normalize_state(state_name) -> str:
+def _normalize_state(state_name: "str | PaymentState") -> str:
     """Return the canonical string form of *state_name*.
 
     Accepts either a raw ``str`` or a :class:`PaymentState` member and returns
@@ -92,7 +92,7 @@ def initialize_for_worker(worker_id: str) -> None:
         }
 
 
-def add_state_for_worker(worker_id: str, state_name) -> State:
+def add_state_for_worker(worker_id: str, state_name: "str | PaymentState") -> State:
     state_name = _normalize_state(state_name)
     if state_name not in ALLOWED_STATES:
         raise InvalidStateError(f"state '{state_name}' is not in ALLOWED_STATES")
@@ -112,7 +112,7 @@ def get_current_state_for_worker(worker_id: str) -> "State | None":
         return _registry.get(worker_id, {}).get("current")
 
 
-def transition_for_worker(worker_id: str, target_state) -> State:
+def transition_for_worker(worker_id: str, target_state: "str | PaymentState") -> State:
     """Transition *worker_id* to *target_state*.
 
     *target_state* accepts either a raw ``str`` or a :class:`PaymentState`
