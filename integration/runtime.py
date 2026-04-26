@@ -902,7 +902,7 @@ def get_status():
     with _lock:
         with _trace_lock:
             tid = _trace_id
-        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid, "billing_throttled": _is_billing_throttled(), "consecutive_billing_failures": _consecutive_billing_failures}
+        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid, "billing_throttled": _is_billing_throttled(), "consecutive_billing_failures": _consecutive_billing_failures, "log_sink_errors": _log_sink_error_count}
 def get_deployment_status():
     """Return a comprehensive production deployment health snapshot.
 
@@ -916,6 +916,7 @@ def get_deployment_status():
         active_workers (list[str]): Active worker IDs.
         consecutive_rollbacks (int): Consecutive rollback count.
         trace_id (str | None): Current trace ID.
+        log_sink_errors (int): Cumulative log_sink.emit() failure count.
         metrics (dict | None): Monitor metrics snapshot, or None if
             monitor.get_metrics() is unavailable.
     """
@@ -932,6 +933,7 @@ def get_deployment_status():
         "active_workers": status["active_workers"],
         "consecutive_rollbacks": status["consecutive_rollbacks"],
         "trace_id": status["trace_id"],
+        "log_sink_errors": status["log_sink_errors"],
         "metrics": metrics,
     }
 def verify_deployment():

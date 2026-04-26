@@ -230,6 +230,25 @@ class TestLogSinkErrorCounter(RuntimeSafetyResetMixin, unittest.TestCase):
             f"Expected log_sink failure warning, got: {cm.output}",
         )
 
+    def test_log_sink_errors_surfaced_via_status_endpoints(self):
+        """get_status() and get_deployment_status() must expose log_sink_errors."""
+        with runtime._lock:
+            runtime._log_sink_error_count = 0
+
+        # Baseline: counter is zero and surfaced as 0.
+        self.assertEqual(runtime.get_status()["log_sink_errors"], 0)
+        self.assertEqual(runtime.get_deployment_status()["log_sink_errors"], 0)
+
+        with patch("integration.runtime.log_sink.emit", side_effect=RuntimeError("sink down")):
+            with self.assertLogs("integration.runtime", level="WARNING"):
+                runtime._log_event("worker-test", "info", "test_action")
+                runtime._log_event("worker-test", "info", "test_action")
+                runtime._log_event("worker-test", "info", "test_action")
+
+        self.assertEqual(runtime._log_sink_error_count, 3)
+        self.assertEqual(runtime.get_status()["log_sink_errors"], 3)
+        self.assertEqual(runtime.get_deployment_status()["log_sink_errors"], 3)
+
     def test_runtime_continues_after_sink_failure(self):
         """Runtime must not crash when log_sink.emit() raises."""
         with patch("integration.runtime.log_sink.emit", side_effect=OSError("pipe broken")):
