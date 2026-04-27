@@ -110,6 +110,7 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
 
         with BitBrowserSession(bb_client) as (profile_id, webdriver_url):
             selenium_driver = _build_remote_driver(webdriver_url)
+            givex_driver = None
             try:
                 # Wrap in GivexDriver and register with CDP registry (F-03).
                 # Persona is derived deterministically from worker_id using
@@ -217,6 +218,27 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                         profile_id,
                     )
             finally:
+                # Blueprint §7 end-of-cycle hard-reset: wipe Cookies/Cache
+                # at the browser level *before* BitBrowserSession.__exit__
+                # closes the profile.  This is defense-in-depth — the same
+                # call also runs at the start of the next cycle inside
+                # navigate_to_egift (INV-SESSION-01) — but issuing it here
+                # makes the implementation literally match Blueprint §7
+                # ("Thực hiện lệnh xóa Cookies/Cache lần cuối ở cấp độ
+                # trình duyệt") and guarantees a clean state even if a
+                # transient /browser/close failure leaves the session
+                # alive.  Best-effort: never propagate exceptions out of
+                # the cleanup path, since the driver may already be torn
+                # down (e.g. Selenium session crashed mid-cycle).
+                try:
+                    if givex_driver is not None:
+                        givex_driver._clear_browser_state()  # pylint: disable=protected-access
+                except Exception:  # pylint: disable=broad-except
+                    _log.debug(
+                        "worker=%s end-of-cycle _clear_browser_state failed",
+                        worker_id,
+                        exc_info=True,
+                    )
                 # Always unregister the driver to prevent registry leaks (GAP-CDP-01)
                 cdp.unregister_driver(worker_id)
                 _clear_abort(worker_id)

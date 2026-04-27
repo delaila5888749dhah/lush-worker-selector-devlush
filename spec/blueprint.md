@@ -363,6 +363,15 @@ Ràng buộc bộ đếm swap chung:
 
 · Đóng sập Tab hiện hành. Thực hiện lệnh xóa Cookies/Cache lần cuối ở cấp độ trình duyệt.
 
+  Triển khai (Blueprint §7 literal): trước khi ``BitBrowserSession.__exit__``
+  gọi ``/browser/close``, worker phải gọi ``GivexDriver._clear_browser_state()``
+  một lần ở end-of-cycle (sau khi cycle kết thúc — success, abort, hoặc
+  exception). Đây là hard-reset phòng vệ theo chiều sâu (defense-in-depth):
+  ``_clear_browser_state()`` cũng được gọi ở đầu cycle kế tiếp trong
+  ``navigate_to_egift`` (INV-SESSION-01), nhưng việc thực hiện nó ngay tại
+  cuối cycle đảm bảo mọi cookie/cache còn sót đều bị xóa kể cả nếu BitBrowser
+  giữ session sống giữa các cycle hoặc /browser/close gặp lỗi mạng.
+
 · Trả Profile BitBrowser về trạng thái sạch, tắt luồng.
 
 · Worker quay về đầu OrderQueue, nhận nhiệm vụ mới và bắt đầu một Cycle hoàn toàn mới từ Giai đoạn 0 (Đầu vào & Khởi tạo Worker).
@@ -383,7 +392,13 @@ Mapping giữa Blueprint và Phase 10 Behavior Layer.
     - hesitation_pattern: thời gian ngập ngừng giữa các thao tác (§5: 3–5s)
     - persona_type: mô tả đối tượng (người già, trẻ, phụ nữ, đàn ông — §2)
 
-  · Vòng đời: Cố định suốt cycle. Không thay đổi khi swap thẻ.
+  · Vòng đời: Cố định suốt vòng đời worker (per-worker stable, không reset per-cycle).
+    Seed được dẫn xuất từ ``worker_id`` (``zlib.crc32(worker_id.encode()) & 0xFFFFFFFF``)
+    tại lần ``runtime.start_worker`` đầu tiên và giữ nguyên qua mọi cycle của
+    worker đó (kể cả sau khi đóng/mở lại profile BitBrowser). Không thay đổi
+    khi swap thẻ và KHÔNG reset khi bắt đầu cycle mới — cùng worker_id ⇒ cùng
+    persona, đảm bảo tính reproducible (§10) và tương thích với
+    ``integration.runtime.start_worker`` cũng như Anti-Detection Layer 2.
 
 · AntiDetection Layer:
 
