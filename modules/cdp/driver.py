@@ -416,7 +416,7 @@ THANK_YOU_TEXT_PATTERNS_DEFAULT = (
     THANK_YOU_TEXT_PATTERNS_EN + THANK_YOU_TEXT_PATTERNS_VN
 )
 
-_GREETINGS = [
+_DEFAULT_GREETINGS = [
     "Happy gifting!",
     "Enjoy this little treat!",
     "Thinking of you!",
@@ -427,6 +427,48 @@ _GREETINGS = [
     "Enjoy your gift!",
     "Thank you for being you",
 ]
+
+# Env var pointing to an optional UTF-8 file with one extra greeting per
+# line.  Spec §4 requires _GREETINGS be extensible without code changes.
+_GREETINGS_FILE_ENV = "GIVEX_GREETINGS_FILE"
+
+
+def _load_greetings(path: str | None = None) -> list[str]:
+    """Return greetings = defaults + entries from optional file.
+
+    Reads the path from ``GIVEX_GREETINGS_FILE`` when *path* is None.
+    Each non-empty, stripped line of the UTF-8 file is appended after the
+    defaults; the merged list is deduplicated while preserving order.
+
+    Any I/O or decoding error is logged at WARNING level and the function
+    falls back to the defaults — startup must never be blocked by a bad
+    greetings file.
+    """
+    greetings: list[str] = list(_DEFAULT_GREETINGS)
+    file_path = path if path is not None else os.environ.get(_GREETINGS_FILE_ENV)
+    if not file_path:
+        return greetings
+    try:
+        with open(file_path, "r", encoding="utf-8") as fh:
+            extras = [line.strip() for line in fh.readlines()]
+    except (OSError, UnicodeDecodeError) as exc:
+        _log.warning(
+            "_load_greetings: cannot read %s=%r (%s); using defaults",
+            _GREETINGS_FILE_ENV,
+            file_path,
+            exc,
+        )
+        return greetings
+    seen = set(greetings)
+    for entry in extras:
+        if not entry or entry in seen:
+            continue
+        greetings.append(entry)
+        seen.add(entry)
+    return greetings
+
+
+_GREETINGS = _load_greetings()
 
 def _random_greeting(rnd=None) -> str:
     """Return a greeting message for the eGift form.
