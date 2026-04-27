@@ -52,8 +52,15 @@ class TestLoadGreetings(unittest.TestCase):
         with self.assertLogs(drv._log.name, level=logging.WARNING) as cm:
             merged = drv._load_greetings(missing_path)
         self.assertEqual(merged, list(drv._DEFAULT_GREETINGS))
-        self.assertTrue(any("greetings" in m.lower() or "givex_greetings_file" in m.lower()
-                            for m in cm.output))
+        # WARNING must name the env var and include the offending path so
+        # operators can diagnose misconfiguration from the log.
+        self.assertTrue(
+            any(
+                drv._GREETINGS_FILE_ENV in m and missing_path in m
+                for m in cm.output
+            ),
+            f"expected warning naming {drv._GREETINGS_FILE_ENV} and {missing_path}; got {cm.output!r}",
+        )
 
     def test_empty_file_falls_back_to_defaults(self):
         """empty file → defaults only."""
