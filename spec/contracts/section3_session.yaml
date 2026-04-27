@@ -26,6 +26,28 @@ contracts:
       - tests/test_e2e_integration.py
     fail_severity: block_merge
 
+  - id: INV-SESSION-04
+    priority: MAJOR
+    rule: >
+      End-of-cycle Hard-Reset (Blueprint §7): in addition to the two
+      start-of-cycle wipes (INV-SESSION-01), `integration.worker_task`
+      MUST invoke `GivexDriver._clear_browser_state()` one more time in
+      the cycle-level `finally` block — after `run_cycle` finishes
+      (success / abort / exception) and BEFORE `BitBrowserSession.__exit__`
+      runs `/browser/close`. The call is best-effort (wrapped in
+      try/except) and must never propagate an exception out of cleanup,
+      but it MUST be issued whenever `givex_driver` was successfully
+      constructed for the cycle. This makes the implementation literally
+      match Blueprint §7 ("Thực hiện lệnh xóa Cookies/Cache lần cuối ở
+      cấp độ trình duyệt") and provides defense-in-depth in case
+      `/browser/close` fails or the BitBrowser session is reused.
+    blueprint_ref: "spec/blueprint.md#section-7"
+    source_files:
+      - integration/worker_task.py
+    enforced_by:
+      - tests/test_worker_task.py::TestEndOfCycleHardReset
+    fail_severity: warn
+
   - id: INV-SESSION-02
     priority: MAJOR
     rule: >

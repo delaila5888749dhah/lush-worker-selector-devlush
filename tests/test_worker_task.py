@@ -322,6 +322,160 @@ class TestMakeTaskFnBitBrowserLifecycle(unittest.TestCase):
         bb_client.delete_profile.assert_called_once_with("p1")
 
 
+class TestEndOfCycleHardReset(unittest.TestCase):
+    """Blueprint §7 / INV-SESSION-04: end-of-cycle hard-reset.
+
+    ``GivexDriver._clear_browser_state()`` must be invoked in the cycle's
+    finally block — after run_cycle finishes (success / abort / exception)
+    and BEFORE BitBrowserSession.__exit__ closes the profile — in addition
+    to the two start-of-cycle wipes inside ``navigate_to_egift``.
+    """
+
+    def _run(self, probe_side_effect=None):
+        bb_client = MagicMock()
+        bb_client.create_profile.return_value = "p1"
+        bb_client.launch_profile.return_value = {
+            "webdriver": "ws://127.0.0.1:9222/p1"
+        }
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+
+        # Track ordering of end-of-cycle cleanup vs. BitBrowser close.
+        call_log = []
+        givex_drv._clear_browser_state.side_effect = (
+            lambda: call_log.append("clear_browser_state")
+        )
+        bb_client.close_profile.side_effect = (
+            lambda pid: call_log.append("close_profile")
+        )
+        bb_client.delete_profile.side_effect = (
+            lambda pid: call_log.append("delete_profile")
+        )
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch(
+                "integration.runtime.probe_cdp_listener_support",
+                side_effect=probe_side_effect,
+            ),
+        ):
+            from integration.worker_task import make_task_fn
+            try:
+                make_task_fn()("worker-1")
+            except Exception:  # pylint: disable=broad-except
+                pass
+        return givex_drv, call_log
+
+    def test_clear_browser_state_called_at_end_of_cycle(self):
+        """``_clear_browser_state`` must be invoked once in cycle finally."""
+        givex_drv, _ = self._run()
+        givex_drv._clear_browser_state.assert_called_once()
+
+    def test_clear_browser_state_runs_before_browser_close(self):
+        """End-of-cycle wipe must precede ``/browser/close`` (Blueprint §7)."""
+        _, call_log = self._run()
+        self.assertIn("clear_browser_state", call_log)
+        self.assertIn("close_profile", call_log)
+        self.assertLess(
+            call_log.index("clear_browser_state"),
+            call_log.index("close_profile"),
+            "_clear_browser_state must run before close_profile",
+        )
+
+    def test_clear_browser_state_called_even_on_exception(self):
+        """End-of-cycle wipe runs even when the cycle aborts via exception."""
+        givex_drv, call_log = self._run(
+            probe_side_effect=RuntimeError("probe failed")
+        )
+        givex_drv._clear_browser_state.assert_called_once()
+        self.assertIn("close_profile", call_log)
+        self.assertLess(
+            call_log.index("clear_browser_state"),
+            call_log.index("close_profile"),
+        )
+
+    def test_clear_browser_state_failure_does_not_propagate(self):
+        """A raise from ``_clear_browser_state`` must not break cleanup."""
+        bb_client = MagicMock()
+        bb_client.create_profile.return_value = "p1"
+        bb_client.launch_profile.return_value = {
+            "webdriver": "ws://127.0.0.1:9222/p1"
+        }
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+        givex_drv._clear_browser_state.side_effect = RuntimeError(
+            "selenium session gone"
+        )
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp") as mock_cdp,
+            patch("integration.runtime.probe_cdp_listener_support"),
+        ):
+            from integration.worker_task import make_task_fn
+            # Must NOT raise — cleanup is best-effort.
+            make_task_fn()("worker-1")
+
+        givex_drv._clear_browser_state.assert_called_once()
+        # Driver still unregistered, profile still released.
+        mock_cdp.unregister_driver.assert_called_once_with("worker-1")
+        bb_client.close_profile.assert_called_once_with("p1")
+
+    def test_no_clear_when_givex_driver_construction_fails(self):
+        """If ``GivexDriver(...)`` raises, no ``_clear_browser_state`` call.
+
+        ``givex_driver`` is None when construction fails, so the cleanup
+        guard must skip the call (no ``NameError``, no spurious call).
+        """
+        bb_client = MagicMock()
+        bb_client.create_profile.return_value = "p1"
+        bb_client.launch_profile.return_value = {
+            "webdriver": "ws://127.0.0.1:9222/p1"
+        }
+        selenium_drv = _make_selenium_driver()
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch(
+                "modules.cdp.driver.GivexDriver",
+                side_effect=RuntimeError("driver init failed"),
+            ),
+            patch("integration.worker_task.cdp") as mock_cdp,
+            patch("integration.runtime.probe_cdp_listener_support"),
+        ):
+            from integration.worker_task import make_task_fn
+            with self.assertRaises(RuntimeError):
+                make_task_fn()("worker-1")
+
+        # Cleanup path still ran.
+        mock_cdp.unregister_driver.assert_called_once_with("worker-1")
+        bb_client.close_profile.assert_called_once_with("p1")
+
+
 # ── _get_browser_pid tests ─────────────────────────────────────────────────────
 
 
