@@ -76,6 +76,12 @@ _BILLING_CB_PAUSE = max(1, int(os.environ.get("BILLING_CB_PAUSE", "120")))
 _consecutive_billing_failures = 0
 _billing_throttled_until: float = 0.0
 _log_sink_error_count = 0  # incremented on log_sink.emit() failure
+# Dedicated lock for _log_sink_error_count — used consistently across all
+# access paths (_log_event() write, get_status() read, reset() clear). Must
+# not nest under _lock because _log_event() may be invoked while _lock is
+# already held (e.g. billing circuit-breaker path); using a separate lock
+# avoids self-deadlock on the non-reentrant _lock.
+_log_sink_error_lock = threading.Lock()
 
 # ── C1 — Stagger-start between worker launches (Blueprint §1, §8.4) ──
 # Blueprint §1 requires random.uniform(12, 25) seconds between consecutive
@@ -150,12 +156,17 @@ def _log_event(worker_id, state, action, metrics=None) -> None:
             "event": action,
             "data": metrics if isinstance(metrics, dict) else {},
         })
-    except Exception:  # pylint: disable=broad-except  # prevent runtime crash on sink failure
-        with _lock:
+    except Exception as sink_exc:  # pylint: disable=broad-except  # prevent runtime crash on sink failure
+        # Use a dedicated lock to avoid re-entering _lock — _log_event() may be
+        # invoked while _lock is already held (e.g. billing circuit-breaker
+        # path), so nesting on the non-reentrant _lock would self-deadlock.
+        with _log_sink_error_lock:
             _log_sink_error_count += 1
             sink_fail_count = _log_sink_error_count
         _logger.warning(
-            "log_sink.emit() failed (total sink failures: %d)", sink_fail_count, exc_info=True
+            "log_sink.emit() failed (total sink failures: %d): %s",
+            sink_fail_count,
+            _sanitize_error(sink_exc),
         )
 def _sanitize_error(exc: Exception) -> str:
     """Redact PII from exception messages before logging.
@@ -899,10 +910,14 @@ def is_running() -> bool:
         return _state == "RUNNING"
 def get_status():
     """Return a snapshot of the runtime state."""
+    # Read _log_sink_error_count under its dedicated lock (consistent with
+    # _log_event() write path and reset() clear path).
+    with _log_sink_error_lock:
+        sink_errors = _log_sink_error_count
     with _lock:
         with _trace_lock:
             tid = _trace_id
-        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid, "billing_throttled": _is_billing_throttled(), "consecutive_billing_failures": _consecutive_billing_failures}
+        return {"running": _state == "RUNNING", "state": _state, "active_workers": list(_workers.keys()), "worker_count": len(_workers), "consecutive_rollbacks": _consecutive_rollbacks, "trace_id": tid, "billing_throttled": _is_billing_throttled(), "consecutive_billing_failures": _consecutive_billing_failures, "log_sink_errors": sink_errors}
 def get_deployment_status():
     """Return a comprehensive production deployment health snapshot.
 
@@ -916,6 +931,7 @@ def get_deployment_status():
         active_workers (list[str]): Active worker IDs.
         consecutive_rollbacks (int): Consecutive rollback count.
         trace_id (str | None): Current trace ID.
+        log_sink_errors (int): Cumulative log_sink.emit() failure count.
         metrics (dict | None): Monitor metrics snapshot, or None if
             monitor.get_metrics() is unavailable.
     """
@@ -932,6 +948,7 @@ def get_deployment_status():
         "active_workers": status["active_workers"],
         "consecutive_rollbacks": status["consecutive_rollbacks"],
         "trace_id": status["trace_id"],
+        "log_sink_errors": status["log_sink_errors"],
         "metrics": metrics,
     }
 def verify_deployment():
@@ -1042,6 +1059,9 @@ def reset():
         _stagger_enabled = False
         _loop_error_count = 0; _restart_delay = 0
         _consecutive_billing_failures = 0; _billing_throttled_until = 0.0
+    # Clear _log_sink_error_count under its dedicated lock (consistent with
+    # _log_event() write path and get_status() read path).
+    with _log_sink_error_lock:
         _log_sink_error_count = 0
     with _stagger_lock:
         _last_worker_launch_ts = 0.0

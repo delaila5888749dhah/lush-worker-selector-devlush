@@ -24,6 +24,7 @@ error rates once the system is deployed to production.
 | `active_workers` | `list[str]` | List of active worker IDs |
 | `consecutive_rollbacks` | `int` | Count of consecutive rollback events |
 | `trace_id` | `str \| None` | Current trace ID for log correlation |
+| `log_sink_errors` | `int` | Cumulative `log_sink.emit()` failure count since process start / last `reset()` |
 | `metrics` | `dict \| None` | Monitor metrics snapshot (see below), or `None` if monitor is unavailable |
 
 ### Monitor Metrics (from `modules.monitor`)

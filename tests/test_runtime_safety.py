@@ -216,7 +216,7 @@ class TestLogSinkErrorCounter(RuntimeSafetyResetMixin, unittest.TestCase):
 
     def test_error_counter_increments_on_sink_failure(self):
         """_log_sink_error_count should increment each time log_sink.emit() raises."""
-        with runtime._lock:
+        with runtime._log_sink_error_lock:
             runtime._log_sink_error_count = 0
 
         with patch("integration.runtime.log_sink.emit", side_effect=RuntimeError("sink down")):
@@ -230,11 +230,67 @@ class TestLogSinkErrorCounter(RuntimeSafetyResetMixin, unittest.TestCase):
             f"Expected log_sink failure warning, got: {cm.output}",
         )
 
+    def test_log_sink_errors_surfaced_via_status_endpoints(self):
+        """get_status() and get_deployment_status() must expose log_sink_errors."""
+        with runtime._log_sink_error_lock:
+            runtime._log_sink_error_count = 0
+
+        # Baseline: counter is zero and surfaced as 0.
+        self.assertEqual(runtime.get_status()["log_sink_errors"], 0)
+        self.assertEqual(runtime.get_deployment_status()["log_sink_errors"], 0)
+
+        with patch("integration.runtime.log_sink.emit", side_effect=RuntimeError("sink down")):
+            with self.assertLogs("integration.runtime", level="WARNING"):
+                runtime._log_event("worker-test", "info", "test_action")
+                runtime._log_event("worker-test", "info", "test_action")
+                runtime._log_event("worker-test", "info", "test_action")
+
+        self.assertEqual(runtime._log_sink_error_count, 3)
+        self.assertEqual(runtime.get_status()["log_sink_errors"], 3)
+        self.assertEqual(runtime.get_deployment_status()["log_sink_errors"], 3)
+
     def test_runtime_continues_after_sink_failure(self):
         """Runtime must not crash when log_sink.emit() raises."""
         with patch("integration.runtime.log_sink.emit", side_effect=OSError("pipe broken")):
             # _log_event should not raise
             runtime._log_event("worker-test", "info", "test_action")
+
+    def test_log_event_no_deadlock_when_lock_held_and_sink_fails(self):
+        """Regression: _log_event() must not re-acquire _lock on sink failure.
+
+        The billing circuit-breaker path invokes _log_event() while holding
+        runtime._lock; if the sink fails, the sink-failure handler must use a
+        dedicated lock rather than nesting on the non-reentrant _lock.
+        """
+        completed = threading.Event()
+
+        def _call_under_lock():
+            with runtime._lock:
+                with patch("integration.runtime.log_sink.emit",
+                           side_effect=RuntimeError("sink down")):
+                    runtime._log_event("worker-deadlock", "info", "nested")
+            completed.set()
+
+        t = threading.Thread(target=_call_under_lock, daemon=True)
+        t.start()
+        t.join(timeout=2.0)
+        self.assertTrue(
+            completed.is_set(),
+            "_log_event() deadlocked when invoked under _lock with a failing sink",
+        )
+
+    def test_sink_failure_log_message_is_sanitized(self):
+        """Sink failure path must use sanitized error string, not raw exc_info."""
+        with patch("integration.runtime.log_sink.emit",
+                   side_effect=RuntimeError("contact user@example.com")):
+            with self.assertLogs("integration.runtime", level="WARNING") as cm:
+                runtime._log_event("worker-test", "info", "test_action")
+
+        joined = "\n".join(cm.output)
+        # Traceback marker from exc_info=True must not appear.
+        self.assertNotIn("Traceback", joined)
+        # Sanitizer must redact PII tokens (proves _sanitize_error is applied).
+        self.assertNotIn("user@example.com", joined)
 
 
 # ── metrics unavailable logging ───────────────────────────────────

@@ -159,7 +159,7 @@ SPEC-6 EXECUTION WORKFLOW (Native AI)
     │   ├── get_deployment_status() — comprehensive health snapshot:
     │   │   ├── Combines runtime state + monitor metrics
     │   │   ├── Returns: running, state, worker_count, active_workers,
-    │   │   │   consecutive_rollbacks, trace_id, metrics
+    │   │   │   consecutive_rollbacks, trace_id, log_sink_errors, metrics
     │   │   ├── Resilient: returns metrics=None if monitor unavailable
     │   │   └── Thread-safe via existing Lock guards
     │   └── CI fixes cho production readiness:
