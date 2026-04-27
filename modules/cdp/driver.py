@@ -1255,12 +1255,6 @@ class GivexDriver:
         self._strict = strict
         self._rnd = persona._rnd if persona is not None else None
         self._utc_offset_hours: int = 0
-        # Per-cycle de-dup flag for preflight_geo_check: set to True after a
-        # successful geo-check so that downstream callers (orchestrator
-        # ``run_preflight_and_fill``, ``run_full_cycle``) can skip the
-        # redundant second call.  See issue: geo-check should run immediately
-        # after BitBrowserSession.__enter__ (not inside run_preflight_and_fill).
-        self._geo_checked_this_cycle: bool = False
         if persona is not None and _BehaviorStateMachine is not None:
             # Phase 5A Task 1: prefer the SM published by the behaviour
             # wrapper (via :func:`modules.delay.state.set_current_sm`)
@@ -1932,12 +1926,6 @@ class GivexDriver:
                         f"Geo-check failed: expected country 'US', "
                         f"got {country!r}"
                     )
-                # Per-cycle de-dup: subsequent callers (e.g. orchestrator
-                # ``run_preflight_and_fill``, ``run_full_cycle``) skip when
-                # the flag is set.  Only set on a successful US confirm so
-                # any failure path still allows a retry within the same
-                # cycle if the caller chooses.
-                self._geo_checked_this_cycle = True
                 return country
             except Exception as exc:  # pylint: disable=broad-except
                 last_exc = exc
@@ -2344,12 +2332,7 @@ class GivexDriver:
             )
         if self._persona is not None:
             _log.debug("run_full_cycle: persona_type=%s", self._persona.persona_type)
-        # Geo-check is a per-cycle invariant: skip when the worker entrypoint
-        # (``integration.worker_task``) already ran it immediately after
-        # ``BitBrowserSession.__enter__``.  The flag is reset implicitly per
-        # cycle because a fresh ``GivexDriver`` is constructed per cycle.
-        if self._geo_checked_this_cycle is not True:
-            self.preflight_geo_check()
+        self.preflight_geo_check()
         self.navigate_to_egift()
         self.fill_egift_form(task, billing_profile)
         self.add_to_cart_and_checkout()

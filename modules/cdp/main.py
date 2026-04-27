@@ -281,15 +281,7 @@ def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
             "billing_profile.email must not be None for guest checkout"
         )
     driver = _get_driver(worker_id)
-    # Geo-check is a per-cycle invariant.  When the worker entrypoint
-    # (``integration.worker_task``) has already executed it immediately after
-    # ``BitBrowserSession.__enter__`` it sets ``_geo_checked_this_cycle`` to
-    # ``True`` on the driver — skip here to avoid a redundant second call.
-    # ``getattr(..., False) is True`` is intentional: ``MagicMock`` stub
-    # drivers in tests return a truthy ``Mock`` for any unset attribute, so
-    # the strict identity check ensures only a real ``True`` short-circuits.
-    if getattr(driver, "_geo_checked_this_cycle", False) is not True:
-        driver.preflight_geo_check()
+    driver.preflight_geo_check()
     driver.navigate_to_egift()
     driver.fill_egift_form(task, billing_profile)
     driver.add_to_cart_and_checkout()
