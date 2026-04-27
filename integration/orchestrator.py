@@ -1230,7 +1230,8 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                     is_dom_only_watchdog_allowed as _is_dom_only_watchdog_allowed,
                 )
             except ImportError:  # pragma: no cover — defensive only
-                _is_dom_only_watchdog_allowed = lambda: False  # noqa: E731
+                def _is_dom_only_watchdog_allowed() -> bool:
+                    return False
             if _is_dom_only_watchdog_allowed():
                 _logger.warning(
                     "[trace=%s] Driver lacks add_cdp_listener; "
