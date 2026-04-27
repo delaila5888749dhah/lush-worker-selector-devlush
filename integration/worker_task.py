@@ -235,10 +235,13 @@ def _build_remote_driver(webdriver_url: str):
     options = ChromeOptions()
     try:
         return Remote(command_executor=webdriver_url, options=options)
-    except TypeError:
+    except TypeError as exc:
         # Legacy fallback for Selenium clients that don't accept ``options=``.
         # Selenium >= 4.10 has removed ``desired_capabilities=``, so this branch
         # is only taken on older installs where ``options=`` is unsupported.
+        # Re-raise unrelated TypeErrors so callers see the original failure.
+        if "options" not in str(exc):
+            raise
         capabilities_module = importlib.import_module(
             "selenium.webdriver.common.desired_capabilities"
         )
