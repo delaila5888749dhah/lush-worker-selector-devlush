@@ -96,6 +96,10 @@ class UrlAllowlistTest(unittest.TestCase):
             })
         self.assertEqual(drv.URL_EGIFT, _FOREIGN_EGIFT)
         self.assertEqual(drv.URL_PAYMENT, _FOREIGN_PAYMENT)
+        self.assertEqual(
+            len(cap.records), 2,
+            f"expected one WARNING per validated URL, got: {cap.output}",
+        )
         joined = "\n".join(cap.output)
         self.assertIn("GIVEX_EGIFT_URL", joined)
         self.assertIn("GIVEX_PAYMENT_URL", joined)
