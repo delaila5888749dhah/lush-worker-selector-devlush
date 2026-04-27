@@ -216,7 +216,7 @@ class TestLogSinkErrorCounter(RuntimeSafetyResetMixin, unittest.TestCase):
 
     def test_error_counter_increments_on_sink_failure(self):
         """_log_sink_error_count should increment each time log_sink.emit() raises."""
-        with runtime._lock:
+        with runtime._log_sink_error_lock:
             runtime._log_sink_error_count = 0
 
         with patch("integration.runtime.log_sink.emit", side_effect=RuntimeError("sink down")):
@@ -232,7 +232,7 @@ class TestLogSinkErrorCounter(RuntimeSafetyResetMixin, unittest.TestCase):
 
     def test_log_sink_errors_surfaced_via_status_endpoints(self):
         """get_status() and get_deployment_status() must expose log_sink_errors."""
-        with runtime._lock:
+        with runtime._log_sink_error_lock:
             runtime._log_sink_error_count = 0
 
         # Baseline: counter is zero and surfaced as 0.
