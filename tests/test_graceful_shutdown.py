@@ -516,18 +516,49 @@ class TestStopBudgetSplit(GracefulShutdownResetMixin, unittest.TestCase):
         total = loop_join_timeout + sum(t for _, t in captured)
         self.assertAlmostEqual(total, T, delta=0.05 * T)
 
-    def test_budget_split_fails_for_50_50_drift(self):
-        """Sanity check: a 50/50 split would not satisfy the 30/70 assertions.
+    def test_real_stop_worker_receives_70pct_budget(self):
+        """End-to-end guard: real ``stop_worker`` join path receives the
+        70 %/N slice, and real workers actually exit within budget.
 
-        Documents the regression intent — if the implementation drifts to a
-        balanced split, the assertions in ``test_loop_join_uses_30pct_of_timeout``
-        would fail.
+        Complements the mocked numeric guards above by exercising the
+        real ``stop_worker`` code path rather than only inspecting the
+        budgeting arithmetic inside ``stop()``.
         """
-        T = 10.0
-        # Simulated 50/50 budget — must not pass the ±5 % tolerance for 30/70.
-        fake_loop = 0.50 * T
-        with self.assertRaises(AssertionError):
-            self.assertAlmostEqual(fake_loop, 0.30 * T, delta=0.05 * T)
+        runtime._state = "RUNNING"
+        barrier = threading.Event()
+        n = 3
+        for _ in range(n):
+            start_worker(lambda _: barrier.wait(timeout=2))
+        barrier.set()
+        self.assertTrue(
+            _wait_until(lambda: len(runtime._workers) == n, timeout=2),
+            "workers did not register before stop()",
+        )
+
+        captured = []
+        real_stop_worker = runtime.stop_worker
+
+        def spy(wid, timeout=None):
+            captured.append((wid, timeout))
+            return real_stop_worker(wid, timeout=timeout)
+
+        T = 2.0
+        with patch.object(runtime, "stop_worker", side_effect=spy):
+            runtime.stop(timeout=T)
+
+        # Real workers actually exited via the real stop_worker path.
+        self.assertEqual(get_all_worker_states(), {})
+        self.assertEqual(
+            len(captured), n,
+            "every active worker should be stopped via real stop_worker",
+        )
+        expected_per_worker = (0.70 * T) / n
+        for wid, t in captured:
+            self.assertAlmostEqual(
+                t, expected_per_worker,
+                delta=0.05 * expected_per_worker,
+                msg=f"per-worker timeout for {wid} drifted from 70%/N split",
+            )
 
 
 if __name__ == "__main__":
