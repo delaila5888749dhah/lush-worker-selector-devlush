@@ -501,6 +501,14 @@ def _apply_scale(target_count, task_fn):
             {"requested": target_count, "cap": cap},
         )
         target_count = cap
+    # Invariant: _apply_scale is only invoked from the runtime loop
+    # (_runtime_loop) which is single-threaded, and every mutation of
+    # _workers (start_worker / stop_worker / dict assignment) happens under
+    # _lock. We snapshot the keys under _lock here, then read len() on that
+    # local snapshot — so the subsequent unguarded len() is a read of an
+    # immutable local list, not of _workers itself. The defensive cap clamp
+    # above is the safety net if any caller ever passes an out-of-range
+    # target_count despite this assumption.
     with _lock: current_ids = list(_workers.keys())
     current_count = len(current_ids)
     if target_count > current_count:

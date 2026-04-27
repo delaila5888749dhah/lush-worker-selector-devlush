@@ -340,6 +340,32 @@ class TestRegisterSignalHandlersNonMainThread(RuntimeSafetyResetMixin, unittest.
         self.assertFalse(t.is_alive(), "thread should have completed")
         self.assertEqual(errors, [], f"unexpected errors: {errors}")
 
+    def test_non_main_thread_emits_debug_log(self):
+        """register_signal_handlers() on a non-main thread must emit a debug log."""
+        errors = []
+
+        def call_from_thread():
+            try:
+                runtime.register_signal_handlers()
+            except Exception as exc:  # pylint: disable=broad-except
+                errors.append(exc)
+
+        with self.assertLogs(runtime._logger, level="DEBUG") as cm:
+            t = threading.Thread(target=call_from_thread, daemon=True)
+            t.start()
+            t.join(timeout=2)
+        self.assertFalse(t.is_alive(), "thread should have completed")
+        self.assertEqual(errors, [], f"unexpected errors: {errors}")
+        self.assertTrue(
+            any(
+                "register_signal_handlers() called from non-main thread"
+                in record.getMessage()
+                and record.levelname == "DEBUG"
+                for record in cm.records
+            ),
+            f"expected non-main-thread debug log, got: {[r.getMessage() for r in cm.records]}",
+        )
+
 
 # ── _ensure_rollout_configured ────────────────────────────────────
 
