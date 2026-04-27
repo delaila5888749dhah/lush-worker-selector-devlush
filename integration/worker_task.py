@@ -227,26 +227,43 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
 def _build_remote_driver(webdriver_url: str):
     """Build a Selenium Remote WebDriver against *webdriver_url*.
 
+    Forward-compatible with Selenium >= 4.10 by passing ``options=ChromeOptions()``
+    instead of the deprecated/removed ``desired_capabilities=`` keyword argument.
+    Falls back to ``desired_capabilities=`` only if the installed Selenium build
+    rejects ``options=`` (i.e. very old pre-4.x clients).
+
     Raises:
         RuntimeError: if selenium is not installed.
     """
     try:
         remote_module = importlib.import_module("selenium.webdriver")
+        Remote = remote_module.Remote
+        ChromeOptions = remote_module.ChromeOptions
+    except ImportError as exc:
+        raise RuntimeError(
+            "selenium is not installed; cannot build Remote driver. "
+            "Install selenium-wire==5.1.0 for production use."
+        ) from exc
+
+    options = ChromeOptions()
+    try:
+        return Remote(command_executor=webdriver_url, options=options)
+    except TypeError as exc:
+        # Legacy fallback for Selenium clients that don't accept ``options=``.
+        # Selenium >= 4.10 has removed ``desired_capabilities=``, so this branch
+        # is only taken on older installs where ``options=`` is unsupported.
+        # Re-raise unrelated TypeErrors so callers see the original failure.
+        if "options" not in str(exc):
+            raise
         capabilities_module = importlib.import_module(
             "selenium.webdriver.common.desired_capabilities"
         )
-        Remote = remote_module.Remote
         DesiredCapabilities = capabilities_module.DesiredCapabilities
         capabilities = dict(DesiredCapabilities.CHROME)
         return Remote(
             command_executor=webdriver_url,
             desired_capabilities=capabilities,
         )
-    except ImportError as exc:
-        raise RuntimeError(
-            "selenium is not installed; cannot build Remote driver. "
-            "Install selenium-wire==5.1.0 for production use."
-        ) from exc
 
 
 def _get_browser_pid(driver) -> Optional[int]:
