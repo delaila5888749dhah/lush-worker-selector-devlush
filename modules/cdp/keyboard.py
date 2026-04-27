@@ -2,6 +2,8 @@ from __future__ import annotations
 import logging
 import time
 from typing import Dict, Set
+
+from modules.common.exceptions import CDPCommandError
 _log = logging.getLogger(__name__)
 _ADJACENT = {'a':'sqwz','b':'vghn','c':'xdfv','d':'erfcs','e':'rdsw','f':'rtgvd','g':'tyhbf','h':'yujng','i':'uojk','j':'uikmh','k':'iolmj','l':'opk','m':'nkj','n':'bhjm','o':'iplk','p':'ol','q':'wa','r':'etdf','s':'wedaz','t':'ryfg','u':'yhij','v':'cfgb','w':'qase','x':'zsdc','y':'tugi','z':'asx','0':'9','1':'2','2':'13','3':'24','4':'35','5':'46','6':'57','7':'68','8':'79','9':'80'}
 _BACKSPACE, _MAX_TYPO_RATE = '\b', 0.06
@@ -53,7 +55,17 @@ def _dispatch(drv, el, ch, strict):
                 "isKeypad": False,
             })
         return True
-    except Exception:
+    except Exception as exc:
+        # Strict mode (anti-detect): never fall back to ``el.send_keys``
+        # because Selenium-native key events are ``isTrusted=False`` and
+        # are flaggable. Symmetric with ``bounding_box_click``'s
+        # ``CDPClickError`` policy. Raise an exception that the runtime
+        # treats as a flagged session (subclass of ``SessionFlaggedError``).
+        if strict:
+            raise CDPCommandError(
+                "Input.dispatchKeyEvent",
+                f"{type(exc).__name__}: {exc}",
+            ) from exc
         _log.debug("keyboard: CDP dispatch skipped, trying send_keys", exc_info=True)
     try:
         el.send_keys(ch)
