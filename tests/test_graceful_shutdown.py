@@ -499,7 +499,7 @@ class TestStopBudgetSplit(GracefulShutdownResetMixin, unittest.TestCase):
             self.assertAlmostEqual(
                 per_worker_timeout,
                 expected_per_worker,
-                delta=0.05 * T,
+                delta=0.05 * expected_per_worker,
                 msg=f"per-worker timeout for {wid} drifted from 70%/N split",
             )
         # The aggregate worker budget must be ≈ 0.70 * T (±5 %).
