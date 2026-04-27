@@ -209,6 +209,60 @@ class TestPoolEvict404(unittest.TestCase):
         client.release_profile(next_pid)
 
 
+class TestPoolMalformedWebdriver(unittest.TestCase):
+    """/browser/open returns 200 but webdriver field is malformed/empty.
+
+    Production code (modules/cdp/fingerprint.py:267-276) raises RuntimeError
+    and releases the profile back to the pool — BUSY must be cleared and
+    POOL-NO-DELETE must hold (no /browser/delete is ever issued).
+    """
+
+    def _assert_busy_cleared_no_delete(self, client, rec):
+        # __enter__ raised, so the with-block body never ran; __exit__ is
+        # NOT invoked when __enter__ raises, so the in-line release inside
+        # _enter_pool_or_legacy is the only thing that can clear BUSY.
+        self.assertEqual(client._busy, set(),
+                         f"BUSY not cleared: {client._busy}")
+        # POOL-NO-DELETE: no /browser/delete on any path variant.
+        for p in rec.paths():
+            self.assertNotIn("delete", p)
+        # /browser/open was reached; /browser/close releases BUSY.
+        self.assertIn("/browser/open", rec.paths())
+        self.assertIn("/browser/close", rec.paths())
+        # Pool must NOT shrink (this is not a 404 evict, just a release).
+        self.assertEqual(len(client._pool), 1)
+
+    def test_empty_webdriver_releases_busy_no_delete(self):
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(responses={"/browser/open": {"webdriver": ""}})
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with self.assertRaises(RuntimeError) as ctx:
+                with BitBrowserSession(client):
+                    pass  # pragma: no cover - __enter__ must raise
+        self.assertIn("webdriver", str(ctx.exception))
+        self._assert_busy_cleared_no_delete(client, rec)
+
+    def test_missing_webdriver_releases_busy_no_delete(self):
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(responses={"/browser/open": {}})
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with self.assertRaises(RuntimeError) as ctx:
+                with BitBrowserSession(client):
+                    pass  # pragma: no cover - __enter__ must raise
+        self.assertIn("webdriver", str(ctx.exception))
+        self._assert_busy_cleared_no_delete(client, rec)
+
+    def test_non_string_webdriver_releases_busy_no_delete(self):
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(responses={"/browser/open": {"webdriver": 12345}})
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with self.assertRaises(RuntimeError) as ctx:
+                with BitBrowserSession(client):
+                    pass  # pragma: no cover - __enter__ must raise
+        self.assertIn("webdriver", str(ctx.exception))
+        self._assert_busy_cleared_no_delete(client, rec)
+
+
 class TestWorkerCountExceedsPoolSize(unittest.TestCase):
     """When N workers contend over M<N profiles, excess workers must time out."""
 
