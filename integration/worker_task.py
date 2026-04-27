@@ -10,9 +10,11 @@ returned callable wires the full browser lifecycle for one work cycle:
   4. Wrap in ``GivexDriver``.
   5. Register driver + PID + profile with the CDP registry (F-03).
   6. Probe ``add_cdp_listener`` availability (U-06 guard).
-  7. Resolve proxy IP → zip code via MaxMind (F-07).
-  8. Execute purchase cycle via ``run_cycle`` when a task_source is wired.
-  9. On **all** exits: ``cdp.unregister_driver()`` (GAP-CDP-01).
+  7. Run ``preflight_geo_check`` to fail fast on a non-US proxy BEFORE any
+     MaxMind/persona/run_cycle work (Blueprint §2).
+  8. Resolve proxy IP → zip code via MaxMind (F-07).
+  9. Execute purchase cycle via ``run_cycle`` when a task_source is wired.
+  10. On **all** exits: ``cdp.unregister_driver()`` (GAP-CDP-01).
 
 Feature flag: ``ENABLE_PRODUCTION_TASK_FN`` (default OFF) — the gate is
 enforced by the caller (``app/__main__.py``).  This module does **not** read
@@ -131,6 +133,17 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 # Guard: verify driver exposes add_cdp_listener (U-06)
                 from integration.runtime import probe_cdp_listener_support  # noqa: PLC0415
                 probe_cdp_listener_support(selenium_driver)
+
+                # Geo pre-flight (Blueprint §2): run immediately after the
+                # browser/session is up — before MaxMind, persona, and any
+                # purchase/run_cycle logic.  A non-US proxy must abort the
+                # cycle here so we don't waste MaxMind/zip work or seed a
+                # persona for a session that will never proceed.  On
+                # failure, the raised RuntimeError propagates out of the
+                # ``with BitBrowserSession(...)`` block whose ``__exit__``
+                # releases the profile (POOL-NO-DELETE: pool mode does
+                # NOT delete the profile, legacy mode runs close+delete).
+                givex_driver.preflight_geo_check()
 
                 # Resolve proxy IP → zip code via MaxMind (F-07).
                 # The proxy IP is extracted from the PROXY_SERVER env var or

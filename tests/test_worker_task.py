@@ -797,6 +797,15 @@ class TestMakeTaskFnPersonaInjection(unittest.TestCase):
             ),
             patch("integration.worker_task.cdp") as mock_cdp,
             patch("integration.runtime.probe_cdp_listener_support"),
+            # Geo-check is now invoked from worker_task right after the CDP
+            # listener probe (Blueprint §2).  This regression guard cares
+            # only about Layer 2 wiring, so stub the geo-check on the real
+            # GivexDriver class to avoid touching the mock selenium driver.
+            patch.object(
+                __import__("modules.cdp.driver", fromlist=["GivexDriver"]).GivexDriver,
+                "preflight_geo_check",
+                return_value="US",
+            ),
         ):
             mock_cdp.register_driver.side_effect = _capture_register
             from integration.worker_task import make_task_fn
@@ -811,6 +820,242 @@ class TestMakeTaskFnPersonaInjection(unittest.TestCase):
         self.assertIsNotNone(real_driver._temporal, "TemporalModel must be active")
         self.assertIsNotNone(real_driver._bio, "BiometricProfile must be active")
         self.assertIsNotNone(real_driver._cursor, "GhostCursor must be active")
+
+
+# ── Geo-check ordering tests (immediately after BitBrowserSession.__enter__) ──
+
+
+class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
+    """preflight_geo_check must run immediately after the CDP listener probe,
+    BEFORE MaxMind/zip resolution, persona work, or run_cycle.
+
+    See issue: "Geo-check should run immediately after BitBrowserSession.__enter__
+    (not inside run_preflight_and_fill)".
+    """
+
+    def _build_call_log(self, geo_side_effect=None, task_source=None):
+        """Run task_fn with patches that record the order of relevant calls."""
+        call_log: list[str] = []
+
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver(pid=12345)
+        givex_drv = MagicMock()
+        if geo_side_effect is not None:
+            givex_drv.preflight_geo_check.side_effect = geo_side_effect
+
+        def _record(name):
+            def _fn(*_a, **_kw):
+                call_log.append(name)
+                return None
+            return _fn
+
+        givex_drv.preflight_geo_check.side_effect = (
+            geo_side_effect
+            if geo_side_effect is not None
+            else lambda: (call_log.append("preflight_geo_check"), "US")[-1]
+        )
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=bb_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch(
+                "integration.runtime.probe_cdp_listener_support",
+                side_effect=_record("probe_cdp_listener"),
+            ),
+            patch(
+                "integration.worker_task._get_current_ip_best_effort",
+                side_effect=_record("get_current_ip"),
+            ),
+            patch(
+                "integration.worker_task.maxmind_lookup_zip",
+                side_effect=_record("maxmind_lookup_zip"),
+            ),
+            patch(
+                "integration.worker_task._lookup_maxmind_utc_offset",
+                side_effect=_record("maxmind_utc_offset"),
+            ),
+        ):
+            from integration.worker_task import make_task_fn
+            try:
+                make_task_fn(task_source=task_source)("worker-geo")
+            except RuntimeError:
+                pass
+        return call_log, bb_client, givex_drv
+
+    def test_geo_check_runs_before_maxmind(self):
+        """preflight_geo_check runs immediately after probe, before MaxMind work."""
+        call_log, _, _ = self._build_call_log()
+        self.assertIn("probe_cdp_listener", call_log)
+        self.assertIn("preflight_geo_check", call_log)
+        # MaxMind helpers run after geo-check on the success path.
+        self.assertIn("get_current_ip", call_log)
+        self.assertLess(
+            call_log.index("probe_cdp_listener"),
+            call_log.index("preflight_geo_check"),
+            "geo-check must run after the CDP listener probe",
+        )
+        self.assertLess(
+            call_log.index("preflight_geo_check"),
+            call_log.index("get_current_ip"),
+            "geo-check must run BEFORE MaxMind IP resolution",
+        )
+
+    def test_geo_check_failure_aborts_before_maxmind_and_run_cycle(self):
+        """Non-US geo-check raises before MaxMind / run_cycle work runs."""
+        task_source = MagicMock()
+        # Geo-check raising propagates out of the worker_task body BEFORE
+        # MaxMind helpers are invoked and BEFORE run_cycle is dispatched.
+        # We therefore don't need to patch ``importlib.import_module`` —
+        # that code path is never reached.
+        call_log, bb_client, givex_drv = self._build_call_log(
+            geo_side_effect=RuntimeError("Geo-check failed: got 'CA'"),
+            task_source=task_source,
+        )
+
+        # Geo-check was attempted; MaxMind work was NOT.
+        givex_drv.preflight_geo_check.assert_called_once()
+        self.assertNotIn("get_current_ip", call_log)
+        self.assertNotIn("maxmind_lookup_zip", call_log)
+        # task_source must not have been touched (run_cycle never reached).
+        task_source.assert_not_called()
+        # POOL-NO-DELETE in legacy mode means close + delete still run via
+        # BitBrowserSession.__exit__; verify close_profile was called so the
+        # session was released (not leaked).
+        bb_client.close_profile.assert_called_once()
+
+
+class TestMakeTaskFnGeoCheckPropagatesPoolNoDelete(unittest.TestCase):
+    """Geo-check failure must propagate so BitBrowserSession.__exit__ runs.
+
+    In pool mode (POOL-NO-DELETE) ``__exit__`` releases the profile via
+    ``release_profile`` (which posts ``/browser/close``) and never calls
+    ``delete_profile``.  This test asserts pool-mode release semantics.
+    """
+
+    def test_pool_mode_releases_without_delete_on_geo_failure(self):
+        from modules.cdp.fingerprint import (
+            BitBrowserPoolClient,
+            BitBrowserSession,
+        )
+
+        # Construct a pool-mode-capable client mock (spec → isinstance check
+        # in BitBrowserSession flips ``_pool_mode`` to True).
+        pool_client = MagicMock(spec=BitBrowserPoolClient)
+        pool_client.acquire_profile.return_value = "pool-profile-1"
+        pool_client.launch_profile.return_value = {
+            "webdriver": "ws://127.0.0.1:9222/pool"
+        }
+
+        selenium_drv = _make_selenium_driver(pid=99)
+        givex_drv = MagicMock()
+        givex_drv.preflight_geo_check.side_effect = RuntimeError(
+            "Geo-check failed: expected 'US', got 'GB'"
+        )
+
+        with (
+            patch(
+                "integration.worker_task.get_bitbrowser_client",
+                return_value=pool_client,
+            ),
+            patch(
+                "integration.worker_task._build_remote_driver",
+                return_value=selenium_drv,
+            ),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch("integration.runtime.probe_cdp_listener_support"),
+        ):
+            # Sanity: BitBrowserSession detects pool mode for this client —
+            # if pool detection breaks, POOL-NO-DELETE assertions become
+            # vacuous, so guard against that here.
+            self.assertTrue(
+                BitBrowserSession(pool_client)._pool_mode,
+                "Test fixture did not flip BitBrowserSession into pool mode",
+            )
+
+            from integration.worker_task import make_task_fn
+            with self.assertRaises(RuntimeError):
+                make_task_fn()("worker-geo-pool")
+
+        # Geo-check was the one attempted (no MaxMind/run_cycle work).
+        givex_drv.preflight_geo_check.assert_called_once()
+        # POOL-NO-DELETE: profile released via release_profile, never deleted.
+        pool_client.release_profile.assert_called_once()
+        self.assertFalse(
+            pool_client.delete_profile.called,
+            "POOL-NO-DELETE violated: delete_profile was called on geo-check failure",
+        )
+
+
+# ── De-duplication: orchestrator skips geo-check when worker_task ran it ─────
+
+
+class TestRunPreflightAndFillGeoDedupe(unittest.TestCase):
+    """When ``_geo_checked_this_cycle`` is True, run_preflight_and_fill skips
+    the redundant ``preflight_geo_check`` call.
+    """
+
+    def test_skips_geo_check_when_flag_true(self):
+        import modules.cdp.main as cdp_main
+
+        driver = MagicMock()
+        driver._geo_checked_this_cycle = True
+        cdp_main.register_driver("dedupe-worker", driver)
+        try:
+            profile = MagicMock()
+            profile.email = "x@example.com"
+            task = MagicMock()
+            cdp_main.run_preflight_and_fill(task, profile, "dedupe-worker")
+            driver.preflight_geo_check.assert_not_called()
+            driver.navigate_to_egift.assert_called_once()
+        finally:
+            cdp_main.unregister_driver("dedupe-worker")
+
+    def test_runs_geo_check_when_flag_absent(self):
+        """Stub drivers without the flag fall through to running geo-check."""
+        import modules.cdp.main as cdp_main
+
+        # Plain object → ``_geo_checked_this_cycle`` not present.
+        class _Stub:
+            def __init__(self):
+                self.calls = []
+
+            def preflight_geo_check(self):
+                self.calls.append("geo")
+
+            def navigate_to_egift(self):
+                self.calls.append("nav")
+
+            def fill_egift_form(self, _t, _p):
+                self.calls.append("fill")
+
+            def add_to_cart_and_checkout(self):
+                self.calls.append("cart")
+
+            def select_guest_checkout(self, _e):
+                self.calls.append("guest")
+
+            def fill_payment_and_billing(self, _c, _p):
+                self.calls.append("pay")
+
+        stub = _Stub()
+        cdp_main.register_driver("dedupe-worker-2", stub)
+        try:
+            profile = MagicMock()
+            profile.email = "x@example.com"
+            task = MagicMock()
+            cdp_main.run_preflight_and_fill(task, profile, "dedupe-worker-2")
+            self.assertEqual(stub.calls[0], "geo")
+        finally:
+            cdp_main.unregister_driver("dedupe-worker-2")
 
 
 if __name__ == "__main__":
