@@ -236,16 +236,50 @@ def stop_maxmind_auto_reload() -> None:
 # ── URL constants ─────────────────────────────────────────────────────────
 URL_GEO_CHECK = "https://lumtest.com/myip.json"
 URL_BASE      = "https://wwws-usa2.givex.com/cws4.0/lushusa/"
-URL_EGIFT     = os.getenv(
+
+# Allowlist of hosts permitted for Givex URL env overrides. A misconfigured
+# or malicious env override could otherwise redirect the bot to a wrong host
+# (typo-squat / phishing / staging leak into prod). Foreign hosts are only
+# accepted when ``ALLOW_NON_PROD_GIVEX_HOSTS=1`` is set, in which case a
+# WARNING is logged. See issue [P2] A3 audit.
+_ALLOWED_GIVEX_HOSTS = ("wwws-usa2.givex.com",)
+
+
+def _validate_url(name: str, url: str) -> str:
+    """Validate ``url`` against :data:`_ALLOWED_GIVEX_HOSTS`.
+
+    Returns ``url`` unchanged when the parsed hostname is in the allowlist.
+    If the host is foreign and ``ALLOW_NON_PROD_GIVEX_HOSTS=1`` is set in
+    the environment, a WARNING is logged and ``url`` is returned. Otherwise
+    a :class:`RuntimeError` is raised at module import time.
+    """
+    host = urllib.parse.urlparse(url).hostname or ""
+    if host in _ALLOWED_GIVEX_HOSTS:
+        return url
+    if os.getenv("ALLOW_NON_PROD_GIVEX_HOSTS") == "1":
+        _log.warning(
+            "%s host %r is not in Givex allowlist %r; allowed by "
+            "ALLOW_NON_PROD_GIVEX_HOSTS=1",
+            name, host, _ALLOWED_GIVEX_HOSTS,
+        )
+        return url
+    raise RuntimeError(
+        f"{name} host {host!r} is not in the Givex host allowlist "
+        f"{_ALLOWED_GIVEX_HOSTS!r}. Set ALLOW_NON_PROD_GIVEX_HOSTS=1 to "
+        f"override (non-prod only)."
+    )
+
+
+URL_EGIFT     = _validate_url("GIVEX_EGIFT_URL", os.getenv(
     "GIVEX_EGIFT_URL",
     "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/",
-)
+))
 URL_CART      = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/shopping-cart.html"
 URL_CHECKOUT  = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/checkout.html"
-URL_PAYMENT   = os.getenv(
+URL_PAYMENT   = _validate_url("GIVEX_PAYMENT_URL", os.getenv(
     "GIVEX_PAYMENT_URL",
     "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html",
-)
+))
 
 # ── URL fragments used to detect order confirmation ─────────────────────────
 URL_CONFIRM_FRAGMENTS = ("/confirmation", "/order-confirmation", "order-confirm")
