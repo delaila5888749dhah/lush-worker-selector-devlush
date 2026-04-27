@@ -363,14 +363,15 @@ class TestGetBrowserPid(unittest.TestCase):
 
 
 class TestBuildRemoteDriver(unittest.TestCase):
-    """_build_remote_driver raises RuntimeError when selenium is absent."""
+    """Tests for ``_build_remote_driver``.
+
+    Verifies forward-compat with Selenium >= 4.10 (``options=`` kwarg) and
+    a graceful fallback to ``desired_capabilities=`` for legacy clients.
+    """
 
     def test_raises_runtime_error_when_selenium_missing(self):
         def _block_selenium(name):
-            if name in {
-                "selenium.webdriver",
-                "selenium.webdriver.common.desired_capabilities",
-            }:
+            if name == "selenium.webdriver":
                 raise ImportError("no module named selenium")
             raise AssertionError(f"unexpected import: {name}")
 
@@ -382,6 +383,78 @@ class TestBuildRemoteDriver(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 _build_remote_driver("ws://127.0.0.1:9222/x")
         self.assertIn("selenium is not installed", str(ctx.exception))
+
+    def test_uses_options_kwarg_for_selenium_4_10_plus(self):
+        """Modern Selenium accepts ``options=ChromeOptions()``."""
+        sentinel_driver = object()
+        options_instance = MagicMock(name="ChromeOptionsInstance")
+        ChromeOptions = MagicMock(return_value=options_instance)
+        Remote = MagicMock(return_value=sentinel_driver)
+        fake_webdriver = MagicMock(Remote=Remote, ChromeOptions=ChromeOptions)
+
+        def _import(name):
+            if name == "selenium.webdriver":
+                return fake_webdriver
+            raise AssertionError(f"unexpected import: {name}")
+
+        with patch(
+            "integration.worker_task.importlib.import_module",
+            side_effect=_import,
+        ):
+            from integration.worker_task import _build_remote_driver
+            result = _build_remote_driver("ws://127.0.0.1:9222/x")
+
+        self.assertIs(result, sentinel_driver)
+        Remote.assert_called_once_with(
+            command_executor="ws://127.0.0.1:9222/x",
+            options=options_instance,
+        )
+        # Must not pass deprecated kwarg.
+        _, kwargs = Remote.call_args
+        self.assertNotIn("desired_capabilities", kwargs)
+
+    def test_falls_back_to_desired_capabilities_on_typeerror(self):
+        """Legacy Selenium that rejects ``options=`` falls back gracefully."""
+        sentinel_driver = object()
+        options_instance = MagicMock(name="ChromeOptionsInstance")
+        ChromeOptions = MagicMock(return_value=options_instance)
+
+        def _remote(*_args, **kwargs):
+            if "options" in kwargs:
+                raise TypeError("unexpected keyword argument 'options'")
+            return sentinel_driver
+
+        Remote = MagicMock(side_effect=_remote)
+        fake_webdriver = MagicMock(Remote=Remote, ChromeOptions=ChromeOptions)
+
+        fake_caps = MagicMock()
+        fake_caps.DesiredCapabilities.CHROME = {"browserName": "chrome"}
+
+        def _import(name):
+            if name == "selenium.webdriver":
+                return fake_webdriver
+            if name == "selenium.webdriver.common.desired_capabilities":
+                return fake_caps
+            raise AssertionError(f"unexpected import: {name}")
+
+        with patch(
+            "integration.worker_task.importlib.import_module",
+            side_effect=_import,
+        ):
+            from integration.worker_task import _build_remote_driver
+            result = _build_remote_driver("ws://127.0.0.1:9222/x")
+
+        self.assertIs(result, sentinel_driver)
+        # Two calls: first with options= (raises TypeError), then with
+        # desired_capabilities= (succeeds).
+        self.assertEqual(Remote.call_count, 2)
+        first_kwargs = Remote.call_args_list[0].kwargs
+        second_kwargs = Remote.call_args_list[1].kwargs
+        self.assertIn("options", first_kwargs)
+        self.assertIn("desired_capabilities", second_kwargs)
+        self.assertEqual(
+            second_kwargs["desired_capabilities"], {"browserName": "chrome"}
+        )
 
 
 # ── app/__main__.py tests ─────────────────────────────────────────────────────
