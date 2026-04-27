@@ -501,6 +501,24 @@ def _apply_scale(target_count, task_fn):
             {"requested": target_count, "cap": cap},
         )
         target_count = cap
+    # Concurrency invariant for the worker-count comparisons below:
+    # all mutations of ``_workers`` (start_worker / stop_worker / dict
+    # assignment) happen under ``_lock``. We take a snapshot of the keys
+    # under ``_lock`` into ``current_ids``; ``current_count`` and every
+    # subsequent ``len()``/iteration in this function operate on that local
+    # immutable list, never on ``_workers`` directly, so they are race-free
+    # by construction regardless of the caller.
+    #
+    # In production the sole caller is the single-threaded ``_runtime_loop``,
+    # so target_count itself is also stable across the call. Tests
+    # (e.g. ``tests/test_runtime.py``, ``tests/test_phase1_runtime_bringup.py``)
+    # invoke ``_apply_scale`` directly; they own concurrency in their own
+    # setup and the snapshot above keeps the worker-count reads correct
+    # there as well.
+    #
+    # The cap clamp above is an independent safeguard that bounds
+    # ``target_count`` against ``SCALE_STEPS[-1]``; it does not protect the
+    # worker-count read — that protection comes from the snapshot below.
     with _lock: current_ids = list(_workers.keys())
     current_count = len(current_ids)
     if target_count > current_count:

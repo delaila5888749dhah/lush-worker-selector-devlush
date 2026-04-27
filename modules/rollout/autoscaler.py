@@ -145,6 +145,17 @@ class AutoScaler:
         with self._lock:
             return self._consecutive_failures.get(worker_id, 0)
 
+    def reset_state(self) -> None:
+        """Clear consecutive-failure counters under the instance lock.
+
+        Public reset entry point used by the module-level ``reset()`` and by
+        tests / runtime lifecycle restarts that need a clean autoscaler.
+        Exposed publicly so callers do not need to reach into protected
+        attributes from outside the class.
+        """
+        with self._lock:
+            self._consecutive_failures.clear()
+
 
 _autoscaler_instance: Optional["AutoScaler"] = None  # pylint: disable=invalid-name
 _autoscaler_lock = threading.Lock()
@@ -164,5 +175,4 @@ def reset() -> None:
     with _autoscaler_lock:
         instance = _autoscaler_instance
     if instance is not None:
-        with instance._lock:  # pylint: disable=protected-access
-            instance._consecutive_failures.clear()  # pylint: disable=protected-access
+        instance.reset_state()
