@@ -8,10 +8,12 @@ Validates:
   - _worker_fn checks _should_stop_worker at safe point after task completion
   - stop() hard-timeout force-cleans straggler workers
   - stop() sets STOPPING so workers break at safe points
+  - stop() splits its timeout budget 30 % loop / 70 % workers
 """
 import threading
 import time
 import unittest
+from unittest.mock import MagicMock, patch
 
 from integration import runtime
 from integration.runtime import (
@@ -411,6 +413,152 @@ class TestStopWorkerEdgeCases(GracefulShutdownResetMixin, unittest.TestCase):
             any("awaiting_critical_section" in msg for msg in cm.output),
             f"Expected 'awaiting_critical_section' in logs, got: {cm.output}",
         )
+
+
+class TestStopBudgetSplit(GracefulShutdownResetMixin, unittest.TestCase):
+    """Regression guard for the 30/70 stop/join timeout budget split.
+
+    The graceful ``stop()`` divides its timeout ``T`` into:
+
+      * ``0.30 * T`` reserved for joining the runtime loop thread.
+      * ``0.70 * T`` distributed evenly across active workers.
+
+    A drift to 40/60 or 50/50 must fail this test.
+    """
+
+    def _run_stop_with_mocked_clock(self, timeout, worker_ids, monotonic_value=1000.0):
+        """Drive ``runtime.stop()`` with a frozen clock and mocked threads.
+
+        Returns ``(loop_join_timeout, [(wid, per_worker_timeout), ...])``.
+        """
+        # Freeze time.monotonic so elapsed-time deltas are exactly zero and the
+        # observed timeouts equal the budget split arithmetic.
+        loop_thread = MagicMock(spec=threading.Thread)
+        # Alive on the first is_alive() check (so .join is invoked); dead
+        # afterwards so the second-join branch is skipped and the test
+        # observes only the 30 % loop budget.
+        loop_thread.is_alive.side_effect = [True, False, False, False]
+
+        worker_threads = {}
+        for wid in worker_ids:
+            wt = MagicMock(spec=threading.Thread)
+            wt.is_alive.return_value = False
+            wt.ident = 1
+            worker_threads[wid] = wt
+
+        captured_worker_calls = []
+
+        def fake_stop_worker(wid, timeout=None):
+            captured_worker_calls.append((wid, timeout))
+            with runtime._lock:
+                runtime._workers.pop(wid, None)
+                runtime._worker_states.pop(wid, None)
+            return True
+
+        with runtime._lock:
+            runtime._state = "RUNNING"
+            runtime._loop_thread = loop_thread
+            runtime._workers.update(worker_threads)
+            runtime._worker_states.update({wid: "IDLE" for wid in worker_ids})
+
+        with patch.object(runtime.time, "monotonic", return_value=monotonic_value), \
+             patch.object(runtime, "stop_worker", side_effect=fake_stop_worker):
+            runtime.stop(timeout=timeout)
+
+        # Extract the timeout argument passed to the loop-thread join.
+        self.assertTrue(
+            loop_thread.join.called,
+            "stop() did not join the runtime loop thread",
+        )
+        first_call = loop_thread.join.call_args_list[0]
+        loop_join_timeout = first_call.kwargs.get("timeout")
+        if loop_join_timeout is None and first_call.args:
+            loop_join_timeout = first_call.args[0]
+        return loop_join_timeout, captured_worker_calls
+
+    def test_loop_join_uses_30pct_of_timeout(self):
+        T = 10.0
+        loop_join_timeout, _ = self._run_stop_with_mocked_clock(
+            timeout=T, worker_ids=["w1", "w2", "w3"]
+        )
+        # Loop join receives ≈ 0.30 * T (±5 %).
+        self.assertAlmostEqual(loop_join_timeout, 0.30 * T, delta=0.05 * T)
+
+    def test_per_worker_join_uses_70pct_of_timeout(self):
+        T = 10.0
+        worker_ids = ["w1", "w2", "w3", "w4"]
+        _, captured = self._run_stop_with_mocked_clock(timeout=T, worker_ids=worker_ids)
+
+        self.assertEqual(
+            [wid for wid, _ in captured],
+            worker_ids,
+            "every active worker should be stopped",
+        )
+        expected_per_worker = (0.70 * T) / len(worker_ids)
+        for wid, per_worker_timeout in captured:
+            self.assertAlmostEqual(
+                per_worker_timeout,
+                expected_per_worker,
+                delta=0.05 * expected_per_worker,
+                msg=f"per-worker timeout for {wid} drifted from 70%/N split",
+            )
+        # The aggregate worker budget must be ≈ 0.70 * T (±5 %).
+        total_worker_budget = sum(t for _, t in captured)
+        self.assertAlmostEqual(total_worker_budget, 0.70 * T, delta=0.05 * T)
+
+    def test_loop_and_worker_budgets_sum_to_total(self):
+        """The 30 % loop slice plus the 70 % worker slice must sum to T."""
+        T = 20.0
+        worker_ids = ["w1", "w2"]
+        loop_join_timeout, captured = self._run_stop_with_mocked_clock(
+            timeout=T, worker_ids=worker_ids
+        )
+        total = loop_join_timeout + sum(t for _, t in captured)
+        self.assertAlmostEqual(total, T, delta=0.05 * T)
+
+    def test_real_stop_worker_receives_70pct_budget(self):
+        """End-to-end guard: real ``stop_worker`` join path receives the
+        70 %/N slice, and real workers actually exit within budget.
+
+        Complements the mocked numeric guards above by exercising the
+        real ``stop_worker`` code path rather than only inspecting the
+        budgeting arithmetic inside ``stop()``.
+        """
+        runtime._state = "RUNNING"
+        barrier = threading.Event()
+        n = 3
+        for _ in range(n):
+            start_worker(lambda _: barrier.wait(timeout=2))
+        barrier.set()
+        self.assertTrue(
+            _wait_until(lambda: len(runtime._workers) == n, timeout=2),
+            "workers did not register before stop()",
+        )
+
+        captured = []
+        real_stop_worker = runtime.stop_worker
+
+        def spy(wid, timeout=None):
+            captured.append((wid, timeout))
+            return real_stop_worker(wid, timeout=timeout)
+
+        T = 2.0
+        with patch.object(runtime, "stop_worker", side_effect=spy):
+            runtime.stop(timeout=T)
+
+        # Real workers actually exited via the real stop_worker path.
+        self.assertEqual(get_all_worker_states(), {})
+        self.assertEqual(
+            len(captured), n,
+            "every active worker should be stopped via real stop_worker",
+        )
+        expected_per_worker = (0.70 * T) / n
+        for wid, t in captured:
+            self.assertAlmostEqual(
+                t, expected_per_worker,
+                delta=0.05 * expected_per_worker,
+                msg=f"per-worker timeout for {wid} drifted from 70%/N split",
+            )
 
 
 if __name__ == "__main__":
