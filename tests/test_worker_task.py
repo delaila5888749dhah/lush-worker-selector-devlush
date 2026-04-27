@@ -840,8 +840,6 @@ class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
         bb_client = _make_bitbrowser_client()
         selenium_drv = _make_selenium_driver(pid=12345)
         givex_drv = MagicMock()
-        if geo_side_effect is not None:
-            givex_drv.preflight_geo_check.side_effect = geo_side_effect
 
         def _record(name):
             def _fn(*_a, **_kw):
