@@ -76,6 +76,7 @@ _BILLING_CB_PAUSE = max(1, int(os.environ.get("BILLING_CB_PAUSE", "120")))
 _consecutive_billing_failures = 0
 _billing_throttled_until: float = 0.0
 _log_sink_error_count = 0  # incremented on log_sink.emit() failure
+_log_sink_error_lock = threading.Lock()  # dedicated lock — must not nest under _lock
 
 # ── C1 — Stagger-start between worker launches (Blueprint §1, §8.4) ──
 # Blueprint §1 requires random.uniform(12, 25) seconds between consecutive
@@ -150,12 +151,17 @@ def _log_event(worker_id, state, action, metrics=None) -> None:
             "event": action,
             "data": metrics if isinstance(metrics, dict) else {},
         })
-    except Exception:  # pylint: disable=broad-except  # prevent runtime crash on sink failure
-        with _lock:
+    except Exception as sink_exc:  # pylint: disable=broad-except  # prevent runtime crash on sink failure
+        # Use a dedicated lock to avoid re-entering _lock — _log_event() may be
+        # invoked while _lock is already held (e.g. billing circuit-breaker
+        # path), so nesting on the non-reentrant _lock would self-deadlock.
+        with _log_sink_error_lock:
             _log_sink_error_count += 1
             sink_fail_count = _log_sink_error_count
         _logger.warning(
-            "log_sink.emit() failed (total sink failures: %d)", sink_fail_count, exc_info=True
+            "log_sink.emit() failed (total sink failures: %d): %s",
+            sink_fail_count,
+            _sanitize_error(sink_exc),
         )
 def _sanitize_error(exc: Exception) -> str:
     """Redact PII from exception messages before logging.
