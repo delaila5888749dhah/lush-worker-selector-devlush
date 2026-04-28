@@ -93,9 +93,10 @@ Error:
   - Raise InvalidTransitionError if target_state is not registered for worker_id
   - Raise ValueError if the transition is not permitted by the payment transition graph
 Notes:
-  - Emits structured INFO log "FSM_TRANSITION worker_id=… from=… to=… trace_id=…" on every successful transition
-  - Emits structured WARN log "FSM_TRANSITION_REJECTED … reason=out_of_band|terminal trace_id=…" when a transition is rejected by the payment transition graph or by the terminal-state guard
-  - trace_id is an optional correlation identifier included verbatim in the structured log; when omitted it is logged as "-"
+  - Emits a structured log line in the canonical 6-field pipe-delimited format `timestamp | worker_id | trace_id | state | action | status` (matches `integration/runtime.py::_log_event` and `.github/AI_CONTEXT.md`) on every transition attempt
+  - Successful transitions log at INFO with action=`FSM_TRANSITION` and status field `status=success from=<prev> to=<target>`
+  - Transitions rejected by the payment transition graph or by the terminal-state guard log at WARN with action=`FSM_TRANSITION_REJECTED` and status field `status=rejected from=<prev> to=<target> reason=out_of_band|terminal`
+  - trace_id is an optional correlation identifier emitted verbatim in field 3; when omitted it is logged as `-`
 
 Function: cleanup_worker
 Input:
