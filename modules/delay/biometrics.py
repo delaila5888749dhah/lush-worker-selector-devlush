@@ -21,8 +21,11 @@ from modules.delay.config import MIN_TYPING_DELAY, MAX_TYPING_DELAY
 
 _KEYSTROKE_MAX: float = 0.3
 
-# Log-normal parameters for fast burst keystrokes (Blueprint §9):
-# matches real typing biomechanics. exp(_LOGNORM_FAST_MU) ≈ 0.05s median.
+# Log-normal parameter centers (Blueprint §9 / K2). Per-persona variance is
+# layered on top of these in :class:`BiometricProfile.__init__`.
+# exp(_LOGNORM_FAST_MU) ≈ 0.05s median for fast burst keystrokes.
+_LOGNORM_MU: float = -2.5
+_LOGNORM_SIGMA: float = 0.4
 _LOGNORM_FAST_MU: float = -3.0
 _LOGNORM_FAST_SIGMA: float = 0.35
 # Clamp bounds for fast keystrokes — keep distribution scale consistent with
@@ -39,11 +42,23 @@ class BiometricProfile:
         # seed+2: independent from persona (seed) and temporal (seed+1).
         self._rnd = random.Random(persona._seed + 2)
         self._rnd_lock = threading.Lock()
+        # Per-persona log-normal parameters (Blueprint §9 / K2): each persona
+        # gets its own keystroke-distribution shape, not just its own RNG
+        # stream. µ is jittered additively, σ multiplicatively, so the
+        # distribution location and scale both vary across seeds.
+        self._lognorm_mu = _LOGNORM_MU + self._rnd.uniform(-0.2, 0.2)
+        self._lognorm_sigma = _LOGNORM_SIGMA * self._rnd.uniform(0.85, 1.15)
+        self._lognorm_fast_mu = _LOGNORM_FAST_MU + self._rnd.uniform(-0.2, 0.2)
+        self._lognorm_fast_sigma = (
+            _LOGNORM_FAST_SIGMA * self._rnd.uniform(0.85, 1.15)
+        )
 
     def generate_keystroke_delay(self, char_index: int) -> float:
         """Inter-keystroke delay, log-normal distribution, clamped."""
         with self._rnd_lock:
-            raw = self._rnd.lognormvariate(-2.5, 0.4)
+            raw = self._rnd.lognormvariate(
+                self._lognorm_mu, self._lognorm_sigma
+            )
         return max(0.0, min(raw, _KEYSTROKE_MAX))
 
     def generate_burst_pattern(self, total_chars: int) -> list[float]:
@@ -58,7 +73,7 @@ class BiometricProfile:
         for _ in range(total_chars):
             with self._rnd_lock:
                 raw = self._rnd.lognormvariate(
-                    _LOGNORM_FAST_MU, _LOGNORM_FAST_SIGMA
+                    self._lognorm_fast_mu, self._lognorm_fast_sigma
                 )
             delay = min(max(raw, _FAST_MIN), _FAST_MAX)
             delay = min(delay, MAX_TYPING_DELAY)

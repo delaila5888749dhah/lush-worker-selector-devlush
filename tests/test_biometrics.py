@@ -128,6 +128,49 @@ class TestDeterminism(_BioSetup):
         self.assertEqual(p1, p2)
 
 
+class TestPerPersonaLognormParams(unittest.TestCase):
+    """K2 — log-normal µ/σ must vary per persona, not just the RNG stream."""
+
+    def test_lognorm_params_vary_per_seed(self):
+        """Distribution shape (µ/σ) and empirical mean differ across seeds."""
+        import statistics
+
+        seeds = (1, 2, 3, 7, 42, 123, 999)
+        mus = set()
+        sigmas = set()
+        fast_mus = set()
+        fast_sigmas = set()
+        means = []
+        for s in seeds:
+            bio = BiometricProfile(PersonaProfile(s))
+            mus.add(round(bio._lognorm_mu, 9))
+            sigmas.add(round(bio._lognorm_sigma, 9))
+            fast_mus.add(round(bio._lognorm_fast_mu, 9))
+            fast_sigmas.add(round(bio._lognorm_fast_sigma, 9))
+            means.append(statistics.fmean(bio.generate_burst_pattern(2_000)))
+
+        # Per-persona variance: each parameter is sampled independently per
+        # seed, so all seven seeds should yield distinct values.
+        self.assertEqual(len(mus), len(seeds))
+        self.assertEqual(len(sigmas), len(seeds))
+        self.assertEqual(len(fast_mus), len(seeds))
+        self.assertEqual(len(fast_sigmas), len(seeds))
+
+        # Empirical distribution mean must differ across seeds (not just RNG
+        # stream offset). Spread of empirical means must be non-trivial.
+        self.assertEqual(len(set(round(m, 6) for m in means)), len(seeds))
+        self.assertGreater(max(means) - min(means), 1e-3)
+
+    def test_lognorm_params_stable_per_seed(self):
+        """Same seed → identical µ/σ (per-persona, deterministic)."""
+        a = BiometricProfile(PersonaProfile(42))
+        b = BiometricProfile(PersonaProfile(42))
+        self.assertEqual(a._lognorm_mu, b._lognorm_mu)
+        self.assertEqual(a._lognorm_sigma, b._lognorm_sigma)
+        self.assertEqual(a._lognorm_fast_mu, b._lognorm_fast_mu)
+        self.assertEqual(a._lognorm_fast_sigma, b._lognorm_fast_sigma)
+
+
 class BiometricProductionPathTests(unittest.TestCase):
     """Verify BiometricProfile is reachable from the delay module public API."""
 
