@@ -236,16 +236,95 @@ def stop_maxmind_auto_reload() -> None:
 # ── URL constants ─────────────────────────────────────────────────────────
 URL_GEO_CHECK = "https://lumtest.com/myip.json"
 URL_BASE      = "https://wwws-usa2.givex.com/cws4.0/lushusa/"
-URL_EGIFT     = os.getenv(
+
+# Allowlist of hosts permitted for Givex URL env overrides. A misconfigured
+# or malicious env override could otherwise redirect the bot to a wrong host
+# (typo-squat / phishing / staging leak into prod). Foreign hosts are only
+# accepted when ``ALLOW_NON_PROD_GIVEX_HOSTS`` is truthy (``1``/``true``/
+# ``yes``, case-insensitive — same convention as other repo flags such as
+# ``ENABLE_PRODUCTION_TASK_FN`` and ``BITBROWSER_POOL_MODE``), in which
+# case a WARNING is logged. See issue [P2] A3 audit.
+_ALLOWED_GIVEX_HOSTS = ("wwws-usa2.givex.com",)
+_ALLOWED_GIVEX_SCHEMES = ("https",)
+
+
+def _allow_non_prod_givex_hosts() -> bool:
+    """Return True when the bypass flag is set to a truthy value.
+
+    Truthy values: ``"1"``, ``"true"``, ``"yes"`` (case-insensitive,
+    surrounding whitespace ignored).  Anything else — including unset,
+    ``"0"``, ``"false"`` — denies the bypass.  The accepted set matches
+    other boolean env flags in this repo so operators see one convention.
+    """
+    return os.getenv("ALLOW_NON_PROD_GIVEX_HOSTS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _validate_url(name: str, url: str) -> str:
+    """Validate ``url`` against :data:`_ALLOWED_GIVEX_HOSTS`.
+
+    Returns ``url`` unchanged when the parsed hostname is in the allowlist
+    **and** the scheme is ``https`` (no http downgrade, no ``javascript:``
+    scheme, no scheme-less / hostname-less path).  If the host is foreign
+    and the bypass flag :func:`_allow_non_prod_givex_hosts` is set, a
+    WARNING is logged and ``url`` is returned — but the scheme must still
+    be ``https``.  Otherwise a :class:`RuntimeError` is raised at module
+    import time, with a message naming the offending env var, host and
+    scheme so the operator can fix the override quickly.
+    """
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    scheme = (parsed.scheme or "").lower()
+
+    if scheme not in _ALLOWED_GIVEX_SCHEMES:
+        # SECURITY: refuse http downgrade, javascript:, file:, scheme-less
+        # paths, etc., regardless of the bypass flag — the bypass is for
+        # non-prod *hosts*, never for non-https schemes.
+        _log.error(
+            "SECURITY: %s rejected — scheme %r not in %r (url=%r)",
+            name, scheme, _ALLOWED_GIVEX_SCHEMES, url,
+        )
+        raise RuntimeError(
+            f"{name} scheme {scheme!r} is not allowed; only "
+            f"{_ALLOWED_GIVEX_SCHEMES!r} are accepted (url={url!r})."
+        )
+
+    if host in _ALLOWED_GIVEX_HOSTS:
+        return url
+
+    if _allow_non_prod_givex_hosts():
+        _log.warning(
+            "INSECURE/DEGRADED: %s host %r is not in Givex allowlist %r; "
+            "accepted because ALLOW_NON_PROD_GIVEX_HOSTS is truthy. "
+            "This MUST NOT be set in production.",
+            name, host, _ALLOWED_GIVEX_HOSTS,
+        )
+        return url
+
+    _log.error(
+        "SECURITY: %s rejected — host %r not in allowlist %r (url=%r)",
+        name, host, _ALLOWED_GIVEX_HOSTS, url,
+    )
+    raise RuntimeError(
+        f"{name} host {host!r} is not in the Givex host allowlist "
+        f"{_ALLOWED_GIVEX_HOSTS!r}. Set ALLOW_NON_PROD_GIVEX_HOSTS=1 to "
+        f"override (non-prod only)."
+    )
+
+
+URL_EGIFT     = _validate_url("GIVEX_EGIFT_URL", os.getenv(
     "GIVEX_EGIFT_URL",
     "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/",
-)
+))
 URL_CART      = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/shopping-cart.html"
 URL_CHECKOUT  = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/checkout.html"
-URL_PAYMENT   = os.getenv(
+URL_PAYMENT   = _validate_url("GIVEX_PAYMENT_URL", os.getenv(
     "GIVEX_PAYMENT_URL",
     "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html",
-)
+))
 
 # ── URL fragments used to detect order confirmation ─────────────────────────
 URL_CONFIRM_FRAGMENTS = ("/confirmation", "/order-confirmation", "order-confirm")

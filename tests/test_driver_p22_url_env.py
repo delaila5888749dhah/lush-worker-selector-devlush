@@ -51,12 +51,20 @@ class UrlEnvOverrideTest(unittest.TestCase):
 
     def test_payment_url_override(self):
         """Setting GIVEX_PAYMENT_URL overrides URL_PAYMENT."""
-        drv = self._load_driver({"GIVEX_PAYMENT_URL": _STAGING_PAYMENT, "GIVEX_EGIFT_URL": None})
+        drv = self._load_driver({
+            "GIVEX_PAYMENT_URL": _STAGING_PAYMENT,
+            "GIVEX_EGIFT_URL": None,
+            "ALLOW_NON_PROD_GIVEX_HOSTS": "1",
+        })
         self.assertEqual(drv.URL_PAYMENT, _STAGING_PAYMENT)
 
     def test_egift_url_override(self):
         """Setting GIVEX_EGIFT_URL overrides URL_EGIFT."""
-        drv = self._load_driver({"GIVEX_PAYMENT_URL": None, "GIVEX_EGIFT_URL": _STAGING_EGIFT})
+        drv = self._load_driver({
+            "GIVEX_PAYMENT_URL": None,
+            "GIVEX_EGIFT_URL": _STAGING_EGIFT,
+            "ALLOW_NON_PROD_GIVEX_HOSTS": "1",
+        })
         self.assertEqual(drv.URL_EGIFT, _STAGING_EGIFT)
 
 
