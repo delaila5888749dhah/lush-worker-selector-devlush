@@ -31,32 +31,43 @@ class FSMTransitionLoggingTests(unittest.TestCase):
         with self.assertLogs("modules.fsm.main", level="INFO") as cm:
             transition_for_worker(_WID, "ui_lock", trace_id="abc-123")
         # Find the FSM_TRANSITION record
-        matches = [r for r in cm.records if "FSM_TRANSITION " in r.getMessage()
+        matches = [r for r in cm.records if "FSM_TRANSITION" in r.getMessage()
                    and "REJECTED" not in r.getMessage()]
         self.assertEqual(len(matches), 1)
         msg = matches[0].getMessage()
         self.assertEqual(matches[0].levelno, logging.INFO)
-        self.assertIn(f"worker_id={_WID}", msg)
-        self.assertIn("from=-", msg)  # no prior state
-        self.assertIn("to=ui_lock", msg)
-        self.assertIn("trace_id=abc-123", msg)
+        # Canonical 6-field pipe-delimited format:
+        #   timestamp | worker_id | trace_id | state | action | status
+        parts = [p.strip() for p in msg.split("|")]
+        self.assertEqual(len(parts), 6)
+        self.assertEqual(parts[1], _WID)
+        self.assertEqual(parts[2], "abc-123")
+        self.assertEqual(parts[3], "ui_lock")
+        self.assertEqual(parts[4], "FSM_TRANSITION")
+        self.assertIn("status=success", parts[5])
+        self.assertIn("from=-", parts[5])  # no prior state
+        self.assertIn("to=ui_lock", parts[5])
 
     def test_successful_transition_includes_prev_state(self):
         transition_for_worker(_WID, "ui_lock", trace_id="t1")
         with self.assertLogs("modules.fsm.main", level="INFO") as cm:
             transition_for_worker(_WID, "success", trace_id="t1")
         msg = next(r.getMessage() for r in cm.records
-                   if "FSM_TRANSITION " in r.getMessage() and "REJECTED" not in r.getMessage())
-        self.assertIn("from=ui_lock", msg)
-        self.assertIn("to=success", msg)
-        self.assertIn("trace_id=t1", msg)
+                   if "FSM_TRANSITION" in r.getMessage() and "REJECTED" not in r.getMessage())
+        parts = [p.strip() for p in msg.split("|")]
+        self.assertEqual(parts[2], "t1")
+        self.assertEqual(parts[3], "success")
+        self.assertIn("from=ui_lock", parts[5])
+        self.assertIn("to=success", parts[5])
+        self.assertIn("status=success", parts[5])
 
     def test_trace_id_defaults_to_dash_when_omitted(self):
         with self.assertLogs("modules.fsm.main", level="INFO") as cm:
             transition_for_worker(_WID, "ui_lock")
         msg = next(r.getMessage() for r in cm.records
-                   if "FSM_TRANSITION " in r.getMessage() and "REJECTED" not in r.getMessage())
-        self.assertIn("trace_id=-", msg)
+                   if "FSM_TRANSITION" in r.getMessage() and "REJECTED" not in r.getMessage())
+        parts = [p.strip() for p in msg.split("|")]
+        self.assertEqual(parts[2], "-")
 
     def test_out_of_band_transition_emits_warn(self):
         transition_for_worker(_WID, "ui_lock", trace_id="t2")
@@ -68,11 +79,16 @@ class FSMTransitionLoggingTests(unittest.TestCase):
                  and "FSM_TRANSITION_REJECTED" in r.getMessage()]
         self.assertEqual(len(warns), 1)
         msg = warns[0].getMessage()
-        self.assertIn(f"worker_id={_WID}", msg)
-        self.assertIn("from=ui_lock", msg)
-        self.assertIn("to=vbv_cancelled", msg)
-        self.assertIn("reason=out_of_band", msg)
-        self.assertIn("trace_id=t2", msg)
+        parts = [p.strip() for p in msg.split("|")]
+        self.assertEqual(len(parts), 6)
+        self.assertEqual(parts[1], _WID)
+        self.assertEqual(parts[2], "t2")
+        self.assertEqual(parts[3], "ui_lock")
+        self.assertEqual(parts[4], "FSM_TRANSITION_REJECTED")
+        self.assertIn("status=rejected", parts[5])
+        self.assertIn("from=ui_lock", parts[5])
+        self.assertIn("to=vbv_cancelled", parts[5])
+        self.assertIn("reason=out_of_band", parts[5])
 
     def test_terminal_state_rejection_emits_warn(self):
         transition_for_worker(_WID, "ui_lock")
@@ -84,10 +100,14 @@ class FSMTransitionLoggingTests(unittest.TestCase):
                  and "FSM_TRANSITION_REJECTED" in r.getMessage()]
         self.assertEqual(len(warns), 1)
         msg = warns[0].getMessage()
-        self.assertIn("from=success", msg)
-        self.assertIn("to=declined", msg)
-        self.assertIn("reason=terminal", msg)
-        self.assertIn("trace_id=term-1", msg)
+        parts = [p.strip() for p in msg.split("|")]
+        self.assertEqual(parts[2], "term-1")
+        self.assertEqual(parts[3], "success")
+        self.assertEqual(parts[4], "FSM_TRANSITION_REJECTED")
+        self.assertIn("status=rejected", parts[5])
+        self.assertIn("from=success", parts[5])
+        self.assertIn("to=declined", parts[5])
+        self.assertIn("reason=terminal", parts[5])
 
 
 if __name__ == "__main__":
