@@ -464,10 +464,10 @@ def _load_greetings(path: str | None = None) -> list[str]:
                 if len(greetings) >= _GREETINGS_MAX_ENTRIES:
                     truncated = True
                     break
-                if len(line) > _GREETINGS_MAX_LINE_LENGTH:
-                    continue
                 entry = line.strip()
-                if not entry or entry in seen:
+                if not entry or len(entry) > _GREETINGS_MAX_LINE_LENGTH:
+                    continue
+                if entry in seen:
                     continue
                 greetings.append(entry)
                 seen.add(entry)

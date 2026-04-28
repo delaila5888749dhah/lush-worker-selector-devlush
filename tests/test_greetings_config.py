@@ -176,28 +176,31 @@ class TestLoadGreetings(unittest.TestCase):
         self.assertEqual(seq_a, seq_b)
 
     def test_overlong_lines_are_skipped(self):
-        """Lines longer than the per-line cap are silently dropped."""
+        """Lines longer than the per-line cap are silently dropped; the
+        boundary length is accepted."""
         long_entry = "x" * (drv._GREETINGS_MAX_LINE_LENGTH + 10)
+        boundary_entry = "y" * drv._GREETINGS_MAX_LINE_LENGTH
         with tempfile.NamedTemporaryFile(
             "w", suffix=".txt", delete=False, encoding="utf-8"
         ) as fh:
-            fh.write(long_entry + "\nOk entry\n")
+            fh.write(long_entry + "\n" + boundary_entry + "\nOk entry\n")
             path = fh.name
         try:
             merged = drv._load_greetings(path)
         finally:
             os.unlink(path)
         self.assertNotIn(long_entry, merged)
+        self.assertIn(boundary_entry, merged)
         self.assertIn("Ok entry", merged)
 
     def test_total_entries_are_capped(self):
         """File with > MAX entries is truncated and a WARNING is logged."""
         cap = drv._GREETINGS_MAX_ENTRIES
-        overflow = cap - len(drv._DEFAULT_GREETINGS) + 25
+        entries_to_write = cap - len(drv._DEFAULT_GREETINGS) + 25
         with tempfile.NamedTemporaryFile(
             "w", suffix=".txt", delete=False, encoding="utf-8"
         ) as fh:
-            for i in range(overflow):
+            for i in range(entries_to_write):
                 fh.write(f"Entry {i}\n")
             path = fh.name
         try:
