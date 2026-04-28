@@ -491,6 +491,37 @@ class TestCriticalSectionZones(unittest.TestCase):
             )
             self.assertIsNone(sm.get_active_zone())
 
+    def test_nested_zones_release_in_lifo_order(self):
+        """Nested critical zones must be tracked re-entrantly.
+
+        Entering an inner zone while an outer zone is still active must
+        NOT clear the outer zone on the inner exit; the critical-section
+        flag must remain set until the outermost zone is also exited.
+        """
+        sm = BehaviorStateMachine(initial_state="PAYMENT")
+        sm.enter_critical_zone("api_wait")           # outer
+        self.assertEqual(sm.get_active_zone(), "api_wait")
+        sm.enter_critical_zone("payment_submit")     # inner
+        self.assertEqual(sm.get_active_zone(), "payment_submit")
+        self.assertTrue(sm.is_critical_context())
+        # Exit inner — outer must still be active.
+        sm.exit_critical_zone()
+        self.assertEqual(sm.get_active_zone(), "api_wait")
+        self.assertTrue(sm.is_critical_context())
+        self.assertFalse(sm.is_safe_for_delay())
+        # Exit outer — flag finally clears.
+        sm.exit_critical_zone()
+        self.assertIsNone(sm.get_active_zone())
+        self.assertFalse(sm.is_critical_context())
+        self.assertTrue(sm.is_safe_for_delay())
+
+    def test_exit_critical_zone_is_noop_when_stack_empty(self):
+        """Defensive: extra exit_critical_zone() calls must not raise."""
+        sm = BehaviorStateMachine(initial_state="PAYMENT")
+        sm.exit_critical_zone()  # no-op
+        self.assertTrue(sm.is_safe_for_delay())
+        self.assertIsNone(sm.get_active_zone())
+
 
 if __name__ == "__main__":
     unittest.main()

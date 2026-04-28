@@ -22,7 +22,7 @@ re-exported via :mod:`modules.delay.main` for downstream consumers.
 import contextvars
 import logging
 import threading
-from typing import Optional
+from typing import List, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -78,6 +78,12 @@ class BehaviorStateMachine:
             )
         self._lock = threading.Lock()
         self._state: str = initial_state
+        # Re-entrant critical-zone stack (Blueprint §8.3).  Each
+        # ``enter_critical_zone`` pushes a label; ``exit_critical_zone``
+        # pops the most recent.  ``_in_critical_section`` is derived
+        # from ``len(self._zone_stack) > 0`` so overlapping/nested
+        # zones never clear the flag prematurely.
+        self._zone_stack: List[str] = []
         self._in_critical_section: bool = False
         self._active_zone: Optional[str] = None
 
@@ -144,8 +150,11 @@ class BehaviorStateMachine:
         """Mark entry into a Phase-9 CRITICAL_SECTION *zone*.
 
         *zone* must be one of :data:`CRITICAL_SECTION_ZONES` (Blueprint
-        §8.3).  The active zone label is stored for log traceability and
-        retrievable via :meth:`get_active_zone`.
+        §8.3).  The zone label is pushed onto an internal stack so
+        nested/overlapping critical zones are tracked correctly:
+        :meth:`get_active_zone` returns the most recently entered zone,
+        and the underlying critical-section flag remains set until
+        every entered zone has been exited.
 
         Raises
         ------
@@ -158,21 +167,34 @@ class BehaviorStateMachine:
                 f"{sorted(CRITICAL_SECTION_ZONES)}"
             )
         with self._lock:
+            self._zone_stack.append(zone)
             self._in_critical_section = True
             self._active_zone = zone
         _logger.debug("entered CRITICAL_SECTION zone: %s", zone)
 
     def exit_critical_zone(self) -> None:
-        """Clear the Phase-9 CRITICAL_SECTION flag and active zone label."""
+        """Pop the innermost Phase-9 CRITICAL_SECTION zone.
+
+        Re-entrant safe: the critical-section flag is cleared only when
+        the last zone has been exited.  Calling :meth:`exit_critical_zone`
+        with an empty stack is a no-op (defensive — preserves backward
+        compatibility with the legacy boolean alias).
+        """
         with self._lock:
-            prev = self._active_zone
-            self._in_critical_section = False
-            self._active_zone = None
+            prev: Optional[str] = None
+            if self._zone_stack:
+                prev = self._zone_stack.pop()
+            if self._zone_stack:
+                self._active_zone = self._zone_stack[-1]
+                self._in_critical_section = True
+            else:
+                self._active_zone = None
+                self._in_critical_section = False
         if prev is not None:
             _logger.debug("exited CRITICAL_SECTION zone: %s", prev)
 
     def get_active_zone(self) -> Optional[str]:
-        """Return the currently-active CRITICAL_SECTION zone label or ``None``."""
+        """Return the innermost active CRITICAL_SECTION zone label or ``None``."""
         with self._lock:
             return self._active_zone
 
@@ -188,6 +210,10 @@ class BehaviorStateMachine:
         with self._lock:
             self._in_critical_section = bool(active)
             if not active:
+                # Legacy alias clears the entire zone stack — callers
+                # mixing the boolean form with the zone-aware API opt
+                # in to a full release of all nested zones.
+                self._zone_stack.clear()
                 self._active_zone = None
 
     # ── lifecycle ────────────────────────────────────────────────
@@ -196,6 +222,7 @@ class BehaviorStateMachine:
         """Reset the machine to IDLE and clear the critical-section flag."""
         with self._lock:
             self._state = "IDLE"
+            self._zone_stack.clear()
             self._in_critical_section = False
             self._active_zone = None
 
