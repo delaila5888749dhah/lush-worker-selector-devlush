@@ -134,15 +134,25 @@ def get_current_state_for_worker(worker_id: str) -> "State | None":
         return _registry.get(worker_id, {}).get("current")
 
 
-def transition_for_worker(worker_id: str, target_state: "str | PaymentState") -> State:
+def transition_for_worker(
+    worker_id: str,
+    target_state: "str | PaymentState",
+    trace_id: "str | None" = None,
+) -> State:
     """Transition *worker_id* to *target_state*.
 
     *target_state* accepts either a raw ``str`` or a :class:`PaymentState`
     member; both are accepted for backward compatibility.
+
+    *trace_id* is an optional correlation identifier that is included in the
+    structured log line emitted on every successful transition (and on every
+    rejection by :data:`_VALID_PAYMENT_TRANSITIONS`). When omitted, ``"-"`` is
+    logged so the field is always present and grep-able.
     """
     target_state = _normalize_state(target_state)
     if target_state not in ALLOWED_STATES:
         raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
+    _trace = trace_id if trace_id is not None else "-"
     with _registry_lock:
         entry = _registry.get(worker_id)
         if entry is None:
@@ -150,17 +160,30 @@ def transition_for_worker(worker_id: str, target_state: "str | PaymentState") ->
         if target_state not in entry["states"]:
             raise InvalidTransitionError(f"state '{target_state}' not registered for worker '{worker_id}'")
         current = entry["current"]
+        prev_name = current.name if current is not None else None
         if current is not None:
             current_name = current.name
             if current_name in TERMINAL_STATES:
+                _logger.warning(
+                    "FSM_TRANSITION_REJECTED worker_id=%s from=%s to=%s reason=terminal trace_id=%s",
+                    worker_id, current_name, target_state, _trace,
+                )
                 raise ValueError(
                     f"Invalid transition from {current_name} to {target_state}: "
                     f"'{current_name}' is a terminal state"
                 )
             allowed_targets = _VALID_PAYMENT_TRANSITIONS.get(current_name, set())
             if target_state not in allowed_targets:
+                _logger.warning(
+                    "FSM_TRANSITION_REJECTED worker_id=%s from=%s to=%s reason=out_of_band trace_id=%s",
+                    worker_id, current_name, target_state, _trace,
+                )
                 raise ValueError(f"Invalid transition from {current_name} to {target_state}")
         entry["current"] = entry["states"][target_state]
+        _logger.info(
+            "FSM_TRANSITION worker_id=%s from=%s to=%s trace_id=%s",
+            worker_id, prev_name if prev_name is not None else "-", target_state, _trace,
+        )
         return entry["current"]
 
 
