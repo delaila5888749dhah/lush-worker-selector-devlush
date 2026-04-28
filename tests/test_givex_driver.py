@@ -1814,15 +1814,26 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             gd.set_expected_total("not-a-number")
 
+    def test_set_expected_total_quantizes_float_drift(self):
+        gd = GivexDriver(_make_driver())
+        from decimal import Decimal as _D
+        gd.set_expected_total(0.1 + 0.2)
+        self.assertEqual(gd._expected_total, _D("0.30"))  # pylint: disable=protected-access
+
+    def test_set_expected_total_rejects_nan(self):
+        gd = GivexDriver(_make_driver())
+        with self.assertRaises(ValueError):
+            gd.set_expected_total("NaN")
+
     def test_submit_purchase_no_expected_total_skips_dom_check(self):
         """When set_expected_total was never called, click proceeds and DOM is not read."""
         selenium = _make_driver()
         gd = GivexDriver(selenium)
         with patch.object(gd, "_hesitate_before_submit"), \
-             patch.object(gd, "_read_dom_order_total") as mock_read, \
+             patch.object(gd, "_verify_dom_order_total_before_submit") as mock_verify, \
              patch.object(gd, "bounding_box_click") as mock_click:
             gd.submit_purchase()
-        mock_read.assert_not_called()
+        mock_verify.assert_not_called()
         mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
 
     def test_submit_purchase_match_clicks(self):
@@ -1832,7 +1843,7 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         gd.set_expected_total("49.99")
         from decimal import Decimal as _D
         with patch.object(gd, "_hesitate_before_submit"), \
-             patch.object(gd, "_read_dom_order_total", return_value=_D("50.00")), \
+             patch.object(gd, "_verify_dom_order_total_before_submit", return_value=_D("50.00")), \
              patch.object(gd, "bounding_box_click") as mock_click:
             gd.submit_purchase()
         mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
@@ -1843,7 +1854,18 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         gd.set_expected_total(25)
         from decimal import Decimal as _D
         with patch.object(gd, "_hesitate_before_submit"), \
-             patch.object(gd, "_read_dom_order_total", return_value=_D("25.00")), \
+             patch.object(gd, "_verify_dom_order_total_before_submit", return_value=_D("25.00")), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
+
+    def test_submit_purchase_negative_match_clicks(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("-49.99")
+        from decimal import Decimal as _D
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "_verify_dom_order_total_before_submit", return_value=_D("-49.99")), \
              patch.object(gd, "bounding_box_click") as mock_click:
             gd.submit_purchase()
         mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
@@ -1854,9 +1876,12 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         selenium = _make_driver()
         gd = GivexDriver(selenium)
         gd.set_expected_total("50.00")
-        from decimal import Decimal as _D
         with patch.object(gd, "_hesitate_before_submit"), \
-             patch.object(gd, "_read_dom_order_total", return_value=_D("99.99")), \
+             patch.object(
+                 gd,
+                 "_verify_dom_order_total_before_submit",
+                 side_effect=SessionFlaggedError("dom mismatch"),
+             ), \
              patch.object(gd, "bounding_box_click") as mock_click:
             with self.assertRaises(SessionFlaggedError):
                 gd.submit_purchase()
@@ -1869,6 +1894,11 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         gd = GivexDriver(selenium)
         gd.set_expected_total("10.00")
         with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(
+                 gd,
+                 "_verify_dom_order_total_before_submit",
+                 side_effect=PageStateError("order_total_missing"),
+             ), \
              patch.object(gd, "bounding_box_click") as mock_click:
             with self.assertRaises(PageStateError):
                 gd.submit_purchase()
@@ -1881,12 +1911,28 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         from decimal import Decimal as _D
         self.assertEqual(gd._read_dom_order_total(), _D("1234.56"))  # pylint: disable=protected-access
 
+    def test_read_dom_order_total_handles_simple_decimal_comma(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [self._make_total_element("49,99")]
+        gd = GivexDriver(selenium)
+        from decimal import Decimal as _D
+        self.assertEqual(gd._read_dom_order_total(), _D("49.99"))  # pylint: disable=protected-access
+
     def test_read_dom_order_total_handles_accounting_negative(self):
         selenium = _make_driver()
         selenium.find_elements.return_value = [self._make_total_element("$(49.99)")]
         gd = GivexDriver(selenium)
         from decimal import Decimal as _D
         self.assertEqual(gd._read_dom_order_total(), _D("-49.99"))  # pylint: disable=protected-access
+
+    def test_read_dom_order_total_ignores_non_negative_parenthetical_text(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [
+            self._make_total_element("Total: (was $50.00) now $49.99")
+        ]
+        gd = GivexDriver(selenium)
+        with self.assertRaises(PageStateError):
+            gd._read_dom_order_total()  # pylint: disable=protected-access
 
     def test_read_dom_order_total_falls_back_to_innertext_when_text_blank(self):
         selenium = _make_driver()
@@ -1905,17 +1951,111 @@ class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
         with self.assertRaises(PageStateError):
             gd._read_dom_order_total()  # pylint: disable=protected-access
 
+    def test_read_dom_order_total_multi_number_string_raises_pagestate(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [
+            self._make_total_element("Subtotal $40.00 Total $49.99")
+        ]
+        gd = GivexDriver(selenium)
+        with self.assertRaises(PageStateError):
+            gd._read_dom_order_total()  # pylint: disable=protected-access
+
+    def test_read_dom_order_total_wraps_find_elements_exception(self):
+        selenium = _make_driver()
+        selenium.find_elements.side_effect = RuntimeError("stale")
+        gd = GivexDriver(selenium)
+        with self.assertRaises(PageStateError):
+            gd._read_dom_order_total()  # pylint: disable=protected-access
+
+    def test_read_dom_order_total_uses_expected_total_to_disambiguate_multi_element_match(self):
+        selenium = _make_driver()
+        subtotal = self._make_total_element("Subtotal $40.00")
+        total = self._make_total_element("Order Total $49.99")
+
+        def _find_elements(by, selector):
+            if selector in ("#cws_lbl_total", "#cws_lbl_orderTotal"):
+                return []
+            if selector == ".order-total":
+                return [subtotal, total]
+            return []
+
+        selenium.find_elements.side_effect = _find_elements
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("49.99")
+        from decimal import Decimal as _D
+        self.assertEqual(gd._read_dom_order_total(), _D("49.99"))  # pylint: disable=protected-access
+
+    def test_verify_dom_order_total_before_submit_tolerance_edge_passes(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("10.00")
+        from decimal import Decimal as _D
+        with patch.object(gd, "_read_dom_order_total", return_value=_D("10.01")):
+            self.assertEqual(
+                gd._verify_dom_order_total_before_submit(),  # pylint: disable=protected-access
+                _D("10.01"),
+            )
+
+    def test_verify_dom_order_total_before_submit_over_tolerance_fails(self):
+        from modules.common.exceptions import SessionFlaggedError
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("10.00")
+        from decimal import Decimal as _D
+        monotonic_values = iter([0.0, 0.0, 1.1])
+        with patch.object(gd, "_read_dom_order_total", return_value=_D("10.011")), \
+             patch("modules.cdp.driver.time.monotonic", side_effect=lambda: next(monotonic_values)), \
+             patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(SessionFlaggedError):
+                gd._verify_dom_order_total_before_submit()  # pylint: disable=protected-access
+
+    def test_submit_purchase_clears_expected_total_after_success(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("10.00")
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "_verify_dom_order_total_before_submit"), \
+             patch.object(gd, "bounding_box_click"):
+            gd.submit_purchase()
+        self.assertIsNone(gd._expected_total)  # pylint: disable=protected-access
+
+    def test_submit_purchase_clears_expected_total_after_failure(self):
+        from modules.common.exceptions import SessionFlaggedError
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("10.00")
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(
+                 gd,
+                 "_verify_dom_order_total_before_submit",
+                 side_effect=SessionFlaggedError("boom"),
+             ), \
+             patch.object(gd, "bounding_box_click"):
+            with self.assertRaises(SessionFlaggedError):
+                gd.submit_purchase()
+        self.assertIsNone(gd._expected_total)  # pylint: disable=protected-access
+
+    def test_navigate_to_egift_clears_stale_expected_total(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("10.00")
+        with patch.object(gd, "_clear_browser_state"), \
+             patch.object(gd, "_wait_for_element", return_value=True), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_wait_for_url"):
+            gd.navigate_to_egift()
+        self.assertIsNone(gd._expected_total)  # pylint: disable=protected-access
+
     def test_submit_purchase_dom_check_runs_after_hesitate_before_click(self):
         """Order: hesitate → DOM read → bbox click."""
         selenium = _make_driver()
         gd = GivexDriver(selenium)
         gd.set_expected_total("50.00")
-        from decimal import Decimal as _D
         call_log = []
         with patch.object(gd, "_hesitate_before_submit",
                           side_effect=lambda: call_log.append("hesitate")), \
-             patch.object(gd, "_read_dom_order_total",
-                          side_effect=lambda: (call_log.append("read"), _D("50.00"))[1]), \
+             patch.object(gd, "_verify_dom_order_total_before_submit",
+                          side_effect=lambda: call_log.append("read")), \
              patch.object(gd, "bounding_box_click",
                           side_effect=lambda s: call_log.append(("click", s))):
             gd.submit_purchase()

@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -385,6 +385,13 @@ SEL_ORDER_TOTAL_DISPLAY = (
 # greater than this raises :class:`SessionFlaggedError` and aborts the
 # submit click (E3 audit).
 _ORDER_TOTAL_TOLERANCE = Decimal("0.01")
+_ORDER_TOTAL_QUANTUM = Decimal("0.01")
+# Short bounded poll window for the final DOM total re-check.  This absorbs
+# minor client-side render lag (SPA / animation / text swap) without widening
+# the irreversible click window meaningfully; submit still only proceeds after
+# a successful DOM-vs-watchdog match (E3 audit).
+_ORDER_TOTAL_DOM_SETTLE_TIMEOUT_S = 1.0
+_ORDER_TOTAL_DOM_SETTLE_INTERVAL_S = 0.1
 
 # ── Post-submit state detection (Step 5) ─────────────────────────────────────
 # Maximum seconds to wait for the TransientMonitor daemon thread to exit after
@@ -2183,6 +2190,10 @@ class GivexDriver:
         Accepts the cookie banner if present, then clicks the Buy eGift link,
         and navigates directly to the eGift form page.
         """
+        # Reset any stale preflight total from a previous cycle / retry before
+        # the next pre-submit flow begins.  The orchestrator will wire a fresh
+        # expected total after the new Phase A watchdog read succeeds.
+        self._clear_expected_total()
         self._clear_browser_state()
         self._driver.get(URL_BASE)
         # Dismiss cookie banner if present (best-effort)
@@ -2355,11 +2366,83 @@ class GivexDriver:
             self._expected_total = None
             return
         try:
-            self._expected_total = Decimal(str(value))
+            coerced = Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError) as exc:
             raise ValueError(
                 f"set_expected_total: cannot coerce {value!r} to Decimal"
             ) from exc
+        if not coerced.is_finite():
+            raise ValueError(
+                f"set_expected_total: non-finite total {value!r} is not allowed"
+            )
+        self._expected_total = coerced.quantize(
+            _ORDER_TOTAL_QUANTUM,
+            rounding=ROUND_HALF_EVEN,
+        )
+
+    def _clear_expected_total(self) -> None:
+        """Clear any stored watchdog/preflight total for this driver."""
+        self._expected_total = None
+
+    def _read_order_total_text_from_element(self, element) -> str:
+        """Return visible/order-total text for *element* (or ``data-total`` fallback)."""
+        raw = ""
+        try:
+            raw = element.text or ""
+        except Exception:  # pylint: disable=broad-except
+            raw = ""
+        if raw and raw.strip():
+            return raw
+        try:
+            return self._driver.execute_script(
+                "return arguments[0].innerText || "
+                "arguments[0].textContent || "
+                "arguments[0].getAttribute('data-total') || '';",
+                element,
+            ) or ""
+        except Exception:  # pylint: disable=broad-except
+            return ""
+
+    def _parse_dom_order_total_text(self, raw: object) -> Decimal:
+        """Parse a single Order Total string into a cent-quantized Decimal.
+
+        Rejects strings that expose multiple numeric amounts (e.g.
+        ``"Subtotal $40.00 Total $49.99"``) so the driver never guesses which
+        value is the final total.  Accounting-style negatives are accepted only
+        when the numeric token itself is wrapped in parentheses.
+        """
+        text = str(raw or "")
+        normalized = (
+            text.replace("\xa0", " ")
+            .replace("\u2007", " ")
+            .replace("\u202f", " ")
+            .strip()
+        )
+        if not normalized:
+            raise PageStateError("order_total_unparseable:''")
+        lowered = normalized.lower()
+        lowered = _re.sub(r"\b(?:usd|cad|eur|gbp|aud)\b", " ", lowered)
+        lowered = lowered.replace("us$", " ").replace("$", " ")
+        if "." not in lowered and _re.search(r"\d+,\d{2}\b", lowered):
+            lowered = _re.sub(r"(?<=\d),(?=\d{2}\b)", ".", lowered)
+        lowered = lowered.replace(",", "")
+        matches = _re.findall(r"\(\s*[-+]?\d+(?:\.\d+)?\s*\)|[-+]?\d+(?:\.\d+)?", lowered)
+        if len(matches) != 1:
+            kind = "ambiguous" if matches else "unparseable"
+            raise PageStateError(f"order_total_{kind}:{text!r}")
+        token = matches[0].strip()
+        is_accounting_negative = token.startswith("(") and token.endswith(")")
+        numeric = token.strip("()").strip()
+        try:
+            value = Decimal(numeric)
+        except InvalidOperation as exc:
+            raise PageStateError(f"order_total_unparseable:{text!r}") from exc
+        if not value.is_finite():
+            raise PageStateError(f"order_total_unparseable:{text!r}")
+        value = value.quantize(_ORDER_TOTAL_QUANTUM, rounding=ROUND_HALF_EVEN)
+        if is_accounting_negative and value > 0:
+            value = -value
+        return value
 
     def _read_dom_order_total(self) -> Decimal:
         """Read the on-page Order Total element and return it as a Decimal.
@@ -2373,42 +2456,84 @@ class GivexDriver:
                 element, the matched element exposes no usable text, or the
                 text cannot be parsed as a number.
         """
-        elements = self.find_elements(SEL_ORDER_TOTAL_DISPLAY)
-        if not elements:
-            raise PageStateError(
-                f"order_total_missing:{SEL_ORDER_TOTAL_DISPLAY}"
-            )
-        raw = ""
-        try:
-            raw = elements[0].text or ""
-        except Exception:  # pylint: disable=broad-except
-            raw = ""
-        if not raw or not raw.strip():
-            # Fallback for elements whose text is rendered via innerText or
-            # carried in a ``data-total`` attribute (matches the orchestrator
-            # DOM fallback in ``_notify_total_from_dom``).
+        first_error = None
+        expected = self._expected_total
+        for selector in (part.strip() for part in SEL_ORDER_TOTAL_DISPLAY.split(",")):
+            if not selector:
+                continue
             try:
-                raw = self._driver.execute_script(
-                    "return arguments[0].innerText || "
-                    "arguments[0].textContent || "
-                    "arguments[0].getAttribute('data-total') || '';",
-                    elements[0],
-                ) or ""
-            except Exception:  # pylint: disable=broad-except
-                raw = ""
-        cleaned = (raw or "").replace(",", "").strip()
-        match = _re.search(r"-?\d+(?:\.\d+)?", cleaned)
-        if not match:
-            raise PageStateError(f"order_total_unparseable:{raw!r}")
-        try:
-            value = Decimal(match.group())
-        except InvalidOperation as exc:
+                elements = self._driver.find_elements("css selector", selector)
+            except Exception as exc:  # pylint: disable=broad-except
+                raise PageStateError(
+                    f"order_total_find_failed:{selector}:{type(exc).__name__}"
+                ) from exc
+            if not elements:
+                continue
+            candidates = []
+            for element in elements:
+                raw = self._read_order_total_text_from_element(element)
+                try:
+                    candidates.append((self._parse_dom_order_total_text(raw), raw))
+                except PageStateError as exc:
+                    if first_error is None:
+                        first_error = exc
+            if not candidates:
+                continue
+            if expected is not None:
+                matched = [
+                    (value, raw)
+                    for value, raw in candidates
+                    if abs(value - expected) <= _ORDER_TOTAL_TOLERANCE
+                ]
+                if matched:
+                    return matched[0][0]
+            unique_values = {value for value, _raw in candidates}
+            if len(unique_values) == 1:
+                return candidates[0][0]
             raise PageStateError(
-                f"order_total_unparseable:{raw!r}"
-            ) from exc
-        if "(" in cleaned and ")" in cleaned and value > 0:
-            value = -value
-        return value
+                "order_total_ambiguous:"
+                + repr([raw for _value, raw in candidates])
+            )
+        if first_error is not None:
+            raise first_error
+        raise PageStateError(f"order_total_missing:{SEL_ORDER_TOTAL_DISPLAY}")
+
+    def _verify_dom_order_total_before_submit(self) -> Decimal:
+        """Poll briefly for the final DOM Order Total to settle before submit."""
+        expected = self._expected_total
+        if expected is None:
+            raise RuntimeError("_verify_dom_order_total_before_submit called without expected total")
+        deadline = time.monotonic() + _ORDER_TOTAL_DOM_SETTLE_TIMEOUT_S
+        last_dom_total = None
+        last_error = None
+        while True:
+            try:
+                dom_total = self._read_dom_order_total()
+                last_dom_total = dom_total
+                if abs(dom_total - expected) <= _ORDER_TOTAL_TOLERANCE:
+                    return dom_total
+                last_error = SessionFlaggedError(
+                    "Order Total mismatch before COMPLETE PURCHASE: "
+                    f"dom={dom_total} expected={expected} "
+                    f"tolerance={_ORDER_TOTAL_TOLERANCE}"
+                )
+            except PageStateError as exc:
+                last_error = exc
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(_ORDER_TOTAL_DOM_SETTLE_INTERVAL_S)
+        if isinstance(last_error, PageStateError):
+            raise last_error
+        _log.error(
+            "submit_purchase: Order Total mismatch — dom=%s expected=%s "
+            "tolerance=%s; aborting click",
+            last_dom_total, expected, _ORDER_TOTAL_TOLERANCE,
+        )
+        raise SessionFlaggedError(
+            "Order Total mismatch before COMPLETE PURCHASE: "
+            f"dom={last_dom_total} expected={expected} "
+            f"tolerance={_ORDER_TOTAL_TOLERANCE}"
+        )
 
     def submit_purchase(self) -> None:
         """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5).
@@ -2420,68 +2545,59 @@ class GivexDriver:
         click is aborted and :class:`SessionFlaggedError` is raised — Spec
         §5 line 287: "Kiểm tra Order Total, click COMPLETE PURCHASE."
         """
-        self._hesitate_before_submit()
-        # E3 audit: cross-check on-page Order Total vs captured watchdog
-        # total BEFORE the irreversible click.  If the cart mutated between
-        # Phase A and submit (or a concurrency leak yielded the wrong
-        # worker's total), abort instead of charging the card.  The DOM
-        # selector miss raises ``PageStateError`` (subclass of
-        # ``SessionFlaggedError``) so the runtime treats it as a flagged
-        # session and cleans up the cycle.
-        if self._expected_total is not None:
-            dom_total = self._read_dom_order_total()
-            expected = self._expected_total
-            if abs(dom_total - expected) > _ORDER_TOTAL_TOLERANCE:
-                _log.error(
-                    "submit_purchase: Order Total mismatch — dom=%s "
-                    "expected=%s tolerance=%s; aborting click",
-                    dom_total, expected, _ORDER_TOTAL_TOLERANCE,
-                )
-                raise SessionFlaggedError(
-                    f"Order Total mismatch before COMPLETE PURCHASE: "
-                    f"dom={dom_total} expected={expected} "
-                    f"tolerance={_ORDER_TOTAL_TOLERANCE}"
-                )
-        # Wire active-poll monitor to catch late-appearing VBV iframe after submit.
-        # See PR #206 for TransientMonitor class; this is the follow-up wiring step.
-        # Late import avoids A1 cross-module isolation violation flagged by
-        # check_import_scope; cdp→monitor is a permitted one-way dependency.
-        monitor = None
         try:
-            from modules.monitor.main import TransientMonitor as _TransientMonitor  # noqa: PLC0415
-            monitor = _TransientMonitor(
-                detector=lambda: bool(self.find_elements(SEL_VBV_IFRAME)),
-                interval=0.5,
-            )
-            monitor.start()
-        except ImportError:  # pragma: no cover - monitor always present in prod
-            pass
-        try:
-            # Phase 5A Task 2A: gate the irreversible submit click behind
-            # the CRITICAL_SECTION flag so any concurrent delay-injection
-            # site (e.g. background biometric typing) is forced to zero.
-            # Review fix [F1]: only advance the FSM to POST_ACTION when
-            # the click actually succeeded — otherwise an unrelated mid-
-            # submit failure would mark the worker as post-submit and
-            # incorrectly lock out future delay injection.
-            if self._sm is not None:
-                self._sm.set_critical_section(True)
-            click_succeeded = False
+            self._hesitate_before_submit()
+            # E3 audit: cross-check on-page Order Total vs captured watchdog
+            # total BEFORE the irreversible click.  If the cart mutated between
+            # Phase A and submit (or a concurrency leak yielded the wrong
+            # worker's total), abort instead of charging the card.  The DOM
+            # selector miss raises ``PageStateError`` (subclass of
+            # ``SessionFlaggedError``) so the runtime treats it as a flagged
+            # session and cleans up the cycle.
+            if self._expected_total is not None:
+                self._verify_dom_order_total_before_submit()
+            # Wire active-poll monitor to catch late-appearing VBV iframe after submit.
+            # See PR #206 for TransientMonitor class; this is the follow-up wiring step.
+            # Late import avoids A1 cross-module isolation violation flagged by
+            # check_import_scope; cdp→monitor is a permitted one-way dependency.
+            monitor = None
             try:
-                self.bounding_box_click(SEL_COMPLETE_PURCHASE)
-                click_succeeded = True
-            finally:
+                from modules.monitor.main import TransientMonitor as _TransientMonitor  # noqa: PLC0415
+                monitor = _TransientMonitor(
+                    detector=lambda: bool(self.find_elements(SEL_VBV_IFRAME)),
+                    interval=0.5,
+                )
+                monitor.start()
+            except ImportError:  # pragma: no cover - monitor always present in prod
+                pass
+            try:
+                # Phase 5A Task 2A: gate the irreversible submit click behind
+                # the CRITICAL_SECTION flag so any concurrent delay-injection
+                # site (e.g. background biometric typing) is forced to zero.
+                # Review fix [F1]: only advance the FSM to POST_ACTION when
+                # the click actually succeeded — otherwise an unrelated mid-
+                # submit failure would mark the worker as post-submit and
+                # incorrectly lock out future delay injection.
                 if self._sm is not None:
-                    self._sm.set_critical_section(False)
-                    if click_succeeded:
-                        if not self._sm.transition("POST_ACTION"):
-                            _log.warning(
-                                "submit_purchase: SM rejected POST_ACTION transition from %s",
-                                self._sm.get_state(),
-                            )
+                    self._sm.set_critical_section(True)
+                click_succeeded = False
+                try:
+                    self.bounding_box_click(SEL_COMPLETE_PURCHASE)
+                    click_succeeded = True
+                finally:
+                    if self._sm is not None:
+                        self._sm.set_critical_section(False)
+                        if click_succeeded:
+                            if not self._sm.transition("POST_ACTION"):
+                                _log.warning(
+                                    "submit_purchase: SM rejected POST_ACTION transition from %s",
+                                    self._sm.get_state(),
+                                )
+            finally:
+                if monitor is not None:
+                    monitor.cancel(timeout=_VBV_MONITOR_CANCEL_TIMEOUT_S)
         finally:
-            if monitor is not None:
-                monitor.cancel(timeout=_VBV_MONITOR_CANCEL_TIMEOUT_S)
+            self._clear_expected_total()
 
     def clear_card_fields_cdp(self) -> None:
         """Clear card number + CVV via CDP Ctrl+A + Backspace (Blueprint §6 Fork 4).

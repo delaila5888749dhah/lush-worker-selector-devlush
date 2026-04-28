@@ -138,9 +138,14 @@ class OrchestratorWiringTests(unittest.TestCase):
             mock_fsm.get_current_state_for_worker.return_value = State("success")
 
             # Must NOT raise — failure is best-effort.
-            run_payment_step(task, worker_id="e3-worker")
+            with self.assertLogs("integration.orchestrator", level="ERROR") as logs:
+                run_payment_step(task, worker_id="e3-worker")
 
         mock_cdp.submit_purchase.assert_called_once()
+        rendered = "\n".join(logs.output)
+        self.assertIn("e3-worker", rendered)
+        self.assertIn("DOM-vs-watchdog cross-check disabled for this cycle", rendered)
+        self.assertIn("50.0", rendered)
 
 
 if __name__ == "__main__":  # pragma: no cover

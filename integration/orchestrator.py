@@ -1318,11 +1318,21 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         # spot drivers that don't expose ``set_expected_total``.
         try:
             cdp.set_expected_total(worker_id, preflight_total)
-        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        except RuntimeError as exc:
+            _logger.error(
+                "[trace=%s] cdp.set_expected_total missing-driver/runtime failure "
+                "for worker=%s, task_id=%s, total=%s; DOM-vs-watchdog "
+                "cross-check disabled for this cycle: %s",
+                _get_trace_id(), worker_id, getattr(task, "task_id", None),
+                preflight_total, _sanitize_error(exc),
+            )
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
-                "[trace=%s] cdp.set_expected_total failed for worker=%s; "
-                "DOM-vs-watchdog cross-check disabled for this cycle",
-                _get_trace_id(), worker_id, exc_info=True,
+                "[trace=%s] cdp.set_expected_total failed for worker=%s, "
+                "task_id=%s, total=%s; DOM-vs-watchdog cross-check disabled "
+                "for this cycle: %s",
+                _get_trace_id(), worker_id, getattr(task, "task_id", None),
+                preflight_total, _sanitize_error(exc),
             )
         # Re-arm watchdog for the post-submit confirmation total (Phase C).
         watchdog.enable_network_monitor(worker_id)
