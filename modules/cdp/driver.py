@@ -1075,11 +1075,18 @@ class PopupCloseOutcome(enum.Enum):
 
 
 def _popup_xpath_click_close(driver) -> bool:
-    """P1-6: XPath-based fallback click for popup close buttons/anchors.
+    """P1-6 / D7: XPath-based fallback close that ONLY uses CDP clicks.
 
     Tries each element matching :data:`XPATH_POPUP_CLOSE` in document order
-    and returns True on the first successful ``.click()``. Returns False if
-    no elements match or every click attempt raises.
+    and dispatches a CDP ``Input.dispatchMouseEvent`` sequence
+    (``isTrusted=True``) at a randomized point inside its bounding rect via
+    :func:`_dispatch_cdp_click_sequence`. Returns ``True`` on the first
+    successful dispatch, ``False`` if no element matches or every attempt
+    raises.
+
+    Native Selenium ``element.click()`` is intentionally **not** used in
+    the FSM handler path — it would emit ``isTrusted=False`` events and
+    degrade anti-bot quality (audit finding [D7]).
     """
     base = getattr(driver, "_driver", driver)
     try:
@@ -1087,13 +1094,49 @@ def _popup_xpath_click_close(driver) -> bool:
     except WebDriverException as exc:
         _log.warning("popup XPath close: find_elements failed: %s", exc)
         return False
+    rnd = getattr(driver, "_rnd", None) or _random.Random()
     for element in elements:
         try:
-            element.click()
+            rect = base.execute_script(
+                "var r=arguments[0].getBoundingClientRect();"
+                "return {left:r.left,top:r.top,width:r.width,height:r.height};",
+                element,
+            )
+        except WebDriverException as exc:
+            _log.debug(
+                "popup XPath close: getBoundingClientRect failed: %s", exc
+            )
+            continue
+        if (
+            not rect
+            or rect.get("width", 0) == 0
+            or rect.get("height", 0) == 0
+        ):
+            _log.debug(
+                "popup XPath close: skipping element with missing/zero rect: %r",
+                rect,
+            )
+            continue
+        offset_x = max(-15.0, min(15.0, rnd.uniform(-15, 15)))
+        offset_y = max(-5.0, min(5.0, rnd.uniform(-5, 5)))
+        center_x = rect["left"] + rect["width"] / 2
+        center_y = rect["top"] + rect["height"] / 2
+        abs_x = max(
+            rect["left"], min(center_x + offset_x, rect["left"] + rect["width"])
+        )
+        abs_y = max(
+            rect["top"], min(center_y + offset_y, rect["top"] + rect["height"])
+        )
+        try:
+            _dispatch_cdp_click_sequence(base, abs_x, abs_y, rng=rnd, jitter=True)
             return True
         except WebDriverException as exc:
             _log.debug(
-                "popup XPath close: click failed on element: %s", exc
+                "popup XPath close: CDP dispatch failed on element: %s", exc
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug(
+                "popup XPath close: CDP dispatch raised on element: %s", exc
             )
     return False
 

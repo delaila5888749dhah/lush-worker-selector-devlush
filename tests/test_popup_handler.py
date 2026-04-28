@@ -626,12 +626,20 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         self.assertIn("Đóng", xpath)
 
     def test_css_miss_triggers_xpath_fallback_and_returns_needs_refill(self):
-        """CSS-miss (SelectorTimeoutError) must trigger XPath click + clear."""
+        """CSS-miss (SelectorTimeoutError) must trigger XPath CDP click + clear.
+
+        D7: the XPath fallback must dispatch ``Input.dispatchMouseEvent`` and
+        never call native ``element.click()`` (isTrusted=False anti-pattern).
+        """
         fake_el = MagicMock()
         base_driver = MagicMock()
         base_driver.find_elements.return_value = [fake_el]
+        base_driver.execute_script.return_value = {
+            "left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0,
+        }
         wrapper = SimpleNamespace(
             _driver=base_driver,
+            _rnd=__import__("random").Random(42),
             bounding_box_click=MagicMock(
                 side_effect=SelectorTimeoutError(SEL_POPUP_CLOSE, 0)
             ),
@@ -645,7 +653,20 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         base_driver.find_elements.assert_called_once_with(
             "xpath", drv.XPATH_POPUP_CLOSE
         )
-        fake_el.click.assert_called_once_with()
+        # D7: native .click() must NOT be invoked in the FSM handler path.
+        fake_el.click.assert_not_called()
+        # CDP dispatch sequence: mouseMoved + mousePressed + mouseReleased.
+        cdp_calls = [
+            c for c in base_driver.execute_cdp_cmd.call_args_list
+            if c[0][0] == "Input.dispatchMouseEvent"
+        ]
+        self.assertEqual(len(cdp_calls), 3)
+        event_types = [c[0][1]["type"] for c in cdp_calls]
+        self.assertEqual(
+            event_types, ["mouseMoved", "mousePressed", "mouseReleased"]
+        )
+        for c in cdp_calls:
+            self.assertEqual(c[0][1]["button"], "left")
         wrapper.clear_card_fields_cdp.assert_called_once_with()
 
     def test_css_miss_with_no_xpath_match_returns_close_failed(self):
@@ -667,14 +688,27 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         wrapper.clear_card_fields_cdp.assert_not_called()
 
     def test_xpath_fallback_tries_next_element_when_first_click_raises(self):
-        """If the first XPath match's click() raises, fallback must try the next."""
+        """If the first XPath match's CDP dispatch raises, fallback must try the next."""
         bad_el = MagicMock()
-        bad_el.click.side_effect = StaleElementReferenceException("detached")
         good_el = MagicMock()
         base_driver = MagicMock()
         base_driver.find_elements.return_value = [bad_el, good_el]
+        rect = {"left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0}
+        # Both elements resolve to a valid rect; first CDP dispatch raises.
+        base_driver.execute_script.return_value = rect
+        call_count = {"n": 0}
+
+        def cdp_side_effect(cmd, params):
+            if cmd == "Input.dispatchMouseEvent":
+                call_count["n"] += 1
+                # First element's mouseMoved triggers a stale-element style failure.
+                if call_count["n"] == 1:
+                    raise StaleElementReferenceException("detached")
+
+        base_driver.execute_cdp_cmd.side_effect = cdp_side_effect
         wrapper = SimpleNamespace(
             _driver=base_driver,
+            _rnd=__import__("random").Random(42),
             bounding_box_click=MagicMock(
                 side_effect=SelectorTimeoutError(SEL_POPUP_CLOSE, 0)
             ),
@@ -685,8 +719,16 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
-        bad_el.click.assert_called_once_with()
-        good_el.click.assert_called_once_with()
+        # Native .click() must never be called in the FSM handler path (D7).
+        bad_el.click.assert_not_called()
+        good_el.click.assert_not_called()
+        # First element raised on its first CDP event; second element issues a
+        # full 3-event sequence ⇒ 1 + 3 = 4 dispatchMouseEvent calls.
+        cdp_calls = [
+            c for c in base_driver.execute_cdp_cmd.call_args_list
+            if c[0][0] == "Input.dispatchMouseEvent"
+        ]
+        self.assertEqual(len(cdp_calls), 4)
 
     def test_css_success_does_not_invoke_xpath_fallback(self):
         """When CSS click succeeds, the XPath fallback must not be invoked."""
