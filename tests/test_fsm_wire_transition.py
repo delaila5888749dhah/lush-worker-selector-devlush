@@ -246,6 +246,79 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             state, _total = run_payment_step(task)
         self.assertIsNone(state)
 
+    def test_primary_ui_busy_settles_then_transitions(self):
+        """Primary path: spinner-visible ``ui_busy`` is re-probed until a
+        canonical FSM state appears, which is then forwarded to the FSM."""
+        task = _make_task()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.time.sleep"),
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_cdp.detect_page_state.side_effect = ["ui_busy", "ui_busy", "success"]
+            mock_fsm.transition_for_worker.return_value = State("success")
+            mock_fsm.get_current_state_for_worker.return_value = State("success")
+            mock_watchdog.wait_for_total.return_value = 49.99
+            state, _total = run_payment_step(task)
+        # transition called exactly once with the settled FSM state
+        self.assertEqual(state.name, "success")
+        mock_fsm.transition_for_worker.assert_called_once_with("default", "success")
+
+    def test_primary_persistent_ui_busy_skips_fsm_transition(self):
+        """Primary path: if ``ui_busy`` never settles, no FSM transition is
+        attempted (so the non-FSM ``ui_busy`` value is never pushed into the
+        FSM and InvalidTransitionError is avoided)."""
+        task = _make_task()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.time.sleep"),
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_cdp.detect_page_state.return_value = "ui_busy"
+            mock_fsm.get_current_state_for_worker.return_value = None
+            mock_watchdog.wait_for_total.return_value = 49.99
+            state, _total = run_payment_step(task)
+        mock_fsm.transition_for_worker.assert_not_called()
+        self.assertIsNone(state)
+
+    def test_fallback_ui_busy_settles_then_transitions(self):
+        """Fallback path: ``ui_busy`` is re-probed until a canonical FSM state
+        appears, which is then forwarded to the FSM."""
+        task = _make_task()
+        # Primary detect raises so its FSM transition is skipped; fallback
+        # then sees ui_busy that settles to success.
+        detect_calls = {"n": 0}
+
+        def _detect(_w_id):
+            detect_calls["n"] += 1
+            if detect_calls["n"] == 1:
+                raise RuntimeError("primary detect failed")
+            if detect_calls["n"] in (2, 3):
+                return "ui_busy"
+            return "success"
+
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.time.sleep"),
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_cdp.detect_page_state.side_effect = _detect
+            mock_fsm.transition_for_worker.return_value = State("success")
+            mock_fsm.get_current_state_for_worker.return_value = None
+            mock_watchdog.wait_for_total.return_value = 49.99
+            state, _total = run_payment_step(task)
+        self.assertEqual(state.name, "success")
+        mock_fsm.transition_for_worker.assert_called_once_with("default", "success")
+
     def test_fallback_not_called_when_primary_succeeds(self):
         """When primary detect_page_state succeeds, get_current_state returns non-None → no fallback."""
         task = _make_task()
