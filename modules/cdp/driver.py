@@ -1798,10 +1798,34 @@ class GivexDriver:
             self._send_keys_fallback(sel, val)
             return
         typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
-        if self._persona and self._temporal:
-            typo_prob += self._temporal.get_night_typo_increase(self._utc_offset_hours)
+        # Apply explicit ``typo_rate`` override first (callers who pass an
+        # explicit rate own the rate exactly — no NIGHT bonus is layered on
+        # top of an explicit override). The critical-section guard below is
+        # still authoritative: an explicit rate cannot re-enable typo
+        # injection in a safe-zone contract.
         if typo_rate is not None:
             typo_prob = typo_rate
+            apply_night_bonus = False
+        else:
+            apply_night_bonus = True
+        # Phase 10 §10 / audit [L3]: NIGHT typo bonus is gated by the engine's
+        # delay-permitted check so that VBV / POST_ACTION / Phase-9
+        # CRITICAL_SECTION never see *any* typo behaviour modulation. The
+        # critical-section guard is applied *after* the explicit ``typo_rate``
+        # override so it is authoritative: callers cannot re-enable typo
+        # injection in a safe-zone contract by passing ``typo_rate``. This
+        # also zeroes the persona base rate while in critical section, since
+        # typo injection is itself a behaviour modulation that must not fire
+        # in safe-zone contracts.
+        delay_permitted = (
+            self._engine is None or self._engine.is_delay_permitted()
+        )
+        if not delay_permitted:
+            typo_prob = 0.0
+        elif apply_night_bonus and self._persona and self._temporal:
+            typo_prob += self._temporal.get_night_typo_increase(self._utc_offset_hours)
+        # Clamp into a valid probability range after the additive NIGHT bonus.
+        typo_prob = max(0.0, min(1.0, typo_prob))
         # Phase 5A Task 4 / audit [J2]: when the engine reports that
         # delay is not permitted (e.g. CRITICAL_SECTION active, VBV /
         # POST_ACTION state, or accumulator exhausted), skip the
