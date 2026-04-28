@@ -251,6 +251,10 @@ _network_listener_lock = threading.Lock()  # pylint: disable=invalid-name
 # Cleared per cycle in run_payment_step before watchdog.enable_network_monitor().
 # Protected by _network_listener_lock.
 _notified_workers_this_cycle: set[str] = set()  # pylint: disable=unsubscriptable-object
+# Phase A DOM-only fallback (ALLOW_DOM_ONLY_WATCHDOG=1): per-worker stop
+# events used to terminate the polling thread.  Protected by
+# _network_listener_lock.
+_dom_polling_stop_events: dict[str, threading.Event] = {}
 # CDP Network.responseReceived URL filter.
 # A substring match against the request URL is sufficient to trigger the
 # pricing-total notification path.  Each entry uniquely identifies a
@@ -1055,8 +1059,84 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
         _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
 
 
+def _dom_only_fallback_enabled() -> bool:
+    """Lazy proxy for ``integration.runtime.is_dom_only_watchdog_allowed``."""
+    try:
+        from integration.runtime import is_dom_only_watchdog_allowed  # noqa: PLC0415
+        return is_dom_only_watchdog_allowed()
+    except ImportError:  # pragma: no cover — defensive only
+        return False
+
+
+def _start_phase_a_dom_polling(driver_obj, worker_id: str) -> None:
+    """Start a daemon thread that polls the DOM for the Phase A pricing total.
+
+    Used only when the registered driver lacks ``add_cdp_listener`` AND the
+    operator opted into the ``ALLOW_DOM_ONLY_WATCHDOG`` fallback (see
+    :func:`integration.runtime.probe_cdp_listener_support`).  Without this
+    polling Phase A always times out after ``_WATCHDOG_TIMEOUT_PAYMENT``s.
+
+    The thread polls every ~0.5s and exits as soon as the worker is in
+    ``_notified_workers_this_cycle`` (first-notify-wins), the per-worker stop
+    event is set, or the ``_WATCHDOG_TIMEOUT_PAYMENT + 1.0``s deadline lapses.
+    """
+    poll_interval = 0.5
+    deadline = time.monotonic() + float(_WATCHDOG_TIMEOUT_PAYMENT) + 1.0
+    stop_event = threading.Event()
+    with _network_listener_lock:
+        prev = _dom_polling_stop_events.get(worker_id)
+        if prev is not None:
+            prev.set()
+        _dom_polling_stop_events[worker_id] = stop_event
+
+    def _poll() -> None:
+        try:
+            while time.monotonic() < deadline:
+                if stop_event.is_set():
+                    return
+                with _network_listener_lock:
+                    already_notified = worker_id in _notified_workers_this_cycle
+                if already_notified:
+                    return
+                try:
+                    _notify_total_from_dom(driver_obj, worker_id)
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    pass  # _notify_total_from_dom already logs.
+                if stop_event.wait(poll_interval):
+                    return
+        finally:
+            with _network_listener_lock:
+                # Only remove the entry if it is still ours (a concurrent
+                # restart may have replaced it with a fresh event).
+                if _dom_polling_stop_events.get(worker_id) is stop_event:
+                    _dom_polling_stop_events.pop(worker_id, None)
+
+    thread = threading.Thread(
+        target=_poll, name=f"phaseA-dom-poll-{worker_id}", daemon=True,
+    )
+    thread.start()
+
+
+def _stop_phase_a_dom_polling(worker_id: str) -> None:
+    """Signal the Phase A polling thread (if any) to exit promptly."""
+    with _network_listener_lock:
+        stop_event = _dom_polling_stop_events.get(worker_id)
+    if stop_event is not None:
+        stop_event.set()
+
+
 def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
-    """Enable CDP Network monitoring and set up total interception."""
+    """Enable CDP Network monitoring and set up total interception.
+
+    Runtime guarantee (issue F2 audit): when the driver exposes a callable
+    ``add_cdp_listener``, attach the ``Network.responseReceived`` callback
+    (drives Phase A + Phase C signals).  When the hook is absent and
+    ``ALLOW_DOM_ONLY_WATCHDOG=1``, start a Phase A DOM-polling thread (Phase C
+    already runs ``_notify_total_from_dom`` synchronously, so no extra polling
+    is needed there).  The probe at registration time guarantees we never
+    reach the silent-skip branch in production; the silent skip is retained
+    only so test stubs without the hook keep working.
+    """
     try:
         driver_obj.execute_cdp_cmd("Network.enable", {})
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
@@ -1124,6 +1204,16 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                         callback_exc,
                     )
             add_listener("Network.responseReceived", _on_response)
+        elif _dom_only_fallback_enabled():
+            # Listener absent + fallback opt-in: start Phase A DOM polling.
+            # Without env opt-in we keep legacy silent-skip so test stubs work.
+            _logger.warning(
+                "[trace=%s] Driver lacks add_cdp_listener; "
+                "ALLOW_DOM_ONLY_WATCHDOG=1 — starting Phase A DOM polling "
+                "fallback for worker=%s.",
+                _get_trace_id(), worker_id,
+            )
+            _start_phase_a_dom_polling(driver_obj, worker_id)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to set Network.responseReceived listener: %s",
@@ -1180,11 +1270,11 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
     if driver_obj is None:
         raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
-    _setup_network_total_listener(driver_obj, worker_id)
     # Reset first-notify-wins guard for this worker's new cycle before enabling the watchdog.
     with _network_listener_lock:
         _notified_workers_this_cycle.discard(worker_id)
     watchdog.enable_network_monitor(worker_id)
+    _setup_network_total_listener(driver_obj, worker_id)
     _submitted_before_wait = False
     # Phase 5A Task 2C: surface the active BehaviorStateMachine (published
     # by the behaviour wrapper into a ContextVar) so the wait_for_total
@@ -1205,6 +1295,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             finally:
                 if _behavior_sm is not None:
                     _behavior_sm.set_critical_section(False)
+                # Stop Phase A DOM polling (no-op when CDP listener is in use).
+                _stop_phase_a_dom_polling(worker_id)
         except SessionFlaggedError:
             _logger.warning(
                 "[trace=%s] Pricing watchdog timeout BEFORE fill for worker=%s, task_id=%s; "
