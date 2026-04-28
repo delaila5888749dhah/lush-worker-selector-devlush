@@ -371,83 +371,57 @@ SEL_BILLING_CITY    = "#cws_txt_billingCity"
 SEL_BILLING_ZIP     = "#cws_txt_billingPostal"
 SEL_BILLING_PHONE   = "#cws_txt_billingPhone"
 SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
-# Visible Order Total element on the payment page.  Verified against the
-# captured watchdog/preflight total in :meth:`GivexDriver.submit_purchase`
-# right before clicking COMPLETE PURCHASE so a mid-cycle cart mutation or
-# concurrency leak cannot reach the irreversible click (Spec §5 line 287
-# "Kiểm tra Order Total, click COMPLETE PURCHASE." — E3 audit).
+# Visible Order Total element verified against the captured watchdog/preflight
+# total in :meth:`GivexDriver.submit_purchase` right before clicking COMPLETE
+# PURCHASE so a mid-cycle cart mutation cannot reach the irreversible click
+# (Spec §5 line 287 — E3 audit).
 SEL_ORDER_TOTAL_DISPLAY = (
     "#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]"
 )
-# Tolerance for DOM-vs-expected total comparison.  Anything larger than this
-# is treated as a cart mutation and aborts the click.  Kept loose enough to
-# absorb display-rounding (e.g. 49.995 → "$50.00") yet tight enough that a
-# real price drift triggers immediately.
+# Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
 
 
 def _parse_money_text(raw):
-    """Parse a money-formatted string into a :class:`decimal.Decimal`.
+    """Locale-aware money parser → :class:`decimal.Decimal` or ``None``.
 
-    Locale-aware: supports US-style (``"1,234.56"``), European-style
-    (``"1.234,56"``), and bare decimals (``"49.99"`` / ``"49,99"``).
-    Strips currency symbols and whitespace; treats accounting-style
-    parentheses (``"($49.99)"``) as a negative amount.
-
-    Disambiguation when only one separator type is present:
-
-    * Multiple occurrences of the same separator → thousands separator.
-    * Single separator followed by *exactly* 3 digits → thousands
-      separator (e.g. ``"1.234"`` → 1234, ``"1,234"`` → 1234).
-    * Single separator followed by 1, 2, or 4+ digits → decimal point
-      (e.g. ``"49,99"`` → 49.99, ``"1.2345"`` → 1.2345).
-
-    Args:
-        raw: The text to parse.  May be ``None`` or empty.
-
-    Returns:
-        A :class:`decimal.Decimal`, or ``None`` if no parseable number
-        could be extracted.
+    Handles US (``"1,234.56"``), European (``"1.234,56"``, ``"49,99"``),
+    and accounting negatives (``"($49.99)"``).  When only one separator
+    type is present, a single occurrence followed by exactly 3 digits is
+    treated as a thousands separator; otherwise as a decimal point.
     """
     if not raw:
         return None
     text = str(raw).strip()
-    is_neg_paren = "(" in text and ")" in text
+    neg = "(" in text and ")" in text
     keep = re.sub(r"[^\d,.\-+]", "", text)
-    if not keep:
+    if not keep or not any(c.isdigit() for c in keep):
         return None
-    sign_neg = keep.startswith("-")
+    sign = keep.startswith("-")
     keep = keep.lstrip("+-")
-    if not keep or not any(ch.isdigit() for ch in keep):
-        return None
-    has_dot = "." in keep
-    has_comma = "," in keep
+    has_dot, has_comma = "." in keep, "," in keep
     if has_dot and has_comma:
         if keep.rfind(",") > keep.rfind("."):
             keep = keep.replace(".", "").replace(",", ".")
         else:
             keep = keep.replace(",", "")
-    elif has_comma:
-        parts = keep.split(",")
-        if len(parts) > 2 or (
-            len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) > 0
-        ):
-            keep = keep.replace(",", "")
-        else:
+    elif has_dot or has_comma:
+        sep = "." if has_dot else ","
+        parts = keep.split(sep)
+        is_thousands = len(parts) > 2 or (
+            len(parts) == 2 and len(parts[-1]) == 3 and parts[0]
+        )
+        if is_thousands:
+            keep = keep.replace(sep, "")
+        elif has_comma:
             keep = keep.replace(",", ".")
-    elif has_dot:
-        parts = keep.split(".")
-        if len(parts) > 2 or (
-            len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) > 0
-        ):
-            keep = keep.replace(".", "")
     try:
         value = decimal.Decimal(keep)
     except decimal.InvalidOperation:
         return None
-    if sign_neg:
+    if sign:
         value = -value
-    if is_neg_paren and value > 0:
+    if neg and value > 0:
         value = -value
     return value
 
@@ -2472,26 +2446,16 @@ class GivexDriver:
     # ── Order Total cross-check (E3 audit) ──────────────────────────────────
 
     def set_expected_total(self, value) -> None:
-        """Record the watchdog/preflight total expected on the payment page.
+        """Record the watchdog/preflight total for the submit-time cross-check.
 
-        Called by the orchestrator after Phase A's ``wait_for_total`` so that
-        :meth:`submit_purchase` can cross-check the on-page Order Total via
-        DOM right before clicking COMPLETE PURCHASE (Spec §5 line 287).
-
-        Args:
-            value: Numeric total (``int``/``float``/``str``/``Decimal``).
-                ``None`` clears any previously-set expectation.
-
-        Raises:
-            ValueError: if *value* cannot be parsed as a finite Decimal.
+        Called by the orchestrator after Phase A's ``wait_for_total``.  ``None``
+        clears.  Raises ``ValueError`` if *value* is not a finite number.
         """
         if value is None:
             self._expected_total = None
             return
         try:
-            # Pass through ``str()`` so a binary-float like 49.99 becomes the
-            # literal "49.99" and avoids the 49.989999999... drift that would
-            # otherwise blow past the 0.01 tolerance.
+            # ``str()`` so a binary-float like 49.99 keeps its literal form.
             parsed = decimal.Decimal(str(value))
         except (decimal.InvalidOperation, TypeError, ValueError) as exc:
             raise ValueError(
@@ -2504,21 +2468,10 @@ class GivexDriver:
         self._expected_total = parsed
 
     def _read_dom_order_total(self) -> decimal.Decimal:
-        """Read the visible Order Total from the payment page DOM.
+        """Read the visible Order Total via :func:`_parse_money_text`.
 
-        Strips currency symbols and whitespace, then parses the numeric
-        text with :func:`_parse_money_text` so locale-formatted totals
-        (US ``"$1,234.56"``, European ``"1.234,56 €"``, bare ``"49,99"``,
-        accounting-style ``"($49.99)"``) all decode correctly.  Raises
-        :class:`PageStateError` on missing or unparseable DOM.
-
-        Returns:
-            The Order Total as a :class:`decimal.Decimal`.
-
-        Raises:
-            PageStateError: if no element matches
-                :data:`SEL_ORDER_TOTAL_DISPLAY` or its text content does not
-                contain a parseable number.
+        Raises ``PageStateError`` if no element matches
+        :data:`SEL_ORDER_TOTAL_DISPLAY` or its text is unparseable.
         """
         elements = self.find_elements(SEL_ORDER_TOTAL_DISPLAY)
         if not elements:
@@ -2537,27 +2490,15 @@ class GivexDriver:
     def submit_purchase(self) -> None:
         """Hesitate 3-5s, cross-check Order Total, then click COMPLETE PURCHASE.
 
-        Spec §5 line 287: "Kiểm tra Order Total, click COMPLETE PURCHASE."
-        After the hesitation pause and *before* the irreversible bounding-box
-        click, the on-page Order Total is read from the DOM and compared to
-        the captured Phase A watchdog/preflight total stored via
-        :meth:`set_expected_total`.  If they differ by more than
-        :data:`_ORDER_TOTAL_TOLERANCE` the click is *not* dispatched and
-        :class:`SessionFlaggedError` is raised so the orchestrator can abort
-        the cycle.  When no expected total has been wired (legacy callers /
-        unit-tests that drive ``submit_purchase`` directly), the check is
-        skipped to preserve the existing behaviour.
-
-        Raises:
-            SessionFlaggedError: DOM total drifts from expected by more than
-                ``_ORDER_TOTAL_TOLERANCE``.
-            PageStateError: ``SEL_ORDER_TOTAL_DISPLAY`` matches no element or
-                its text cannot be parsed (E3 acceptance criteria).
+        Spec §5 line 287.  Before the irreversible click, the DOM Order Total
+        is compared to the value wired via :meth:`set_expected_total`; drift
+        greater than :data:`_ORDER_TOTAL_TOLERANCE` raises
+        :class:`SessionFlaggedError` and skips the click.  No-op when no
+        expected total has been wired (legacy callers).
         """
         self._hesitate_before_submit()
-        # E3 audit: cross-check DOM Order Total against captured watchdog/
-        # preflight total *after* the hesitation window so any cart mutation
-        # that occurred during the 3-5 s pause is caught before the click.
+        # E3: re-check Order Total *after* the hesitation window so any cart
+        # mutation during the 3-5 s pause is caught before the click.
         if self._expected_total is not None:
             dom_total = self._read_dom_order_total()
             drift = abs(dom_total - self._expected_total)
@@ -2761,19 +2702,16 @@ class GivexDriver:
         self.add_to_cart_and_checkout()
         self.select_guest_checkout(billing_profile.email)
         self.fill_payment_and_billing(task.primary_card, billing_profile)
-        # E3 audit: wire ``task.amount`` (the source-of-truth expected Order
-        # Total) before ``submit_purchase`` so the in-driver full-cycle path
-        # gets the same DOM-vs-expected cross-check the orchestrator path
-        # gets via ``set_expected_total(worker_id, preflight_total)``.  Skip
-        # only when the caller already pre-wired a total (e.g. orchestrator
-        # full_cycle path injecting a watchdog total) — never silently leave
-        # the guard disabled.
+        # E3 audit: wire ``task.amount`` (source-of-truth expected total)
+        # before ``submit_purchase`` so the in-driver full-cycle path gets
+        # the same DOM cross-check the orchestrator path gets via
+        # ``set_expected_total``.  Skip only when a caller already pre-wired.
         if self._expected_total is None and getattr(task, "amount", None) is not None:
             try:
                 self.set_expected_total(task.amount)
             except ValueError:
                 _log.warning(
-                    "run_full_cycle: task.amount=%r not parseable as Decimal; "
+                    "run_full_cycle: task.amount=%r not parseable; "
                     "submit will proceed without DOM cross-check",
                     getattr(task, "amount", None),
                 )
