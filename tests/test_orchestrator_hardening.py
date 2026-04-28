@@ -208,7 +208,7 @@ class DualNotifyGuardTests(unittest.TestCase):
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task, worker_id=worker_id)
 
-        self.assertEqual(order[:2], ["enable", "setup"])
+        self.assertEqual(order, ["enable", "setup", "enable"])
 
     def test_concurrent_callbacks_only_notify_once(self):
         """Concurrent DOM-read callbacks for the same worker must notify at most once."""
