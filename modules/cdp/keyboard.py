@@ -4,6 +4,7 @@ import time
 from typing import Dict, Set
 
 from modules.common.exceptions import CDPCommandError
+from modules.common.sanitize import sanitize_error as _sanitize_error
 _log = logging.getLogger(__name__)
 _ADJACENT = {'a':'sqwz','b':'vghn','c':'xdfv','d':'erfcs','e':'rdsw','f':'rtgvd','g':'tyhbf','h':'yujng','i':'uojk','j':'uikmh','k':'iolmj','l':'opk','m':'nkj','n':'bhjm','o':'iplk','p':'ol','q':'wa','r':'etdf','s':'wedaz','t':'ryfg','u':'yhij','v':'cfgb','w':'qase','x':'zsdc','y':'tugi','z':'asx','0':'9','1':'2','2':'13','3':'24','4':'35','5':'46','6':'57','7':'68','8':'79','9':'80'}
 _BACKSPACE, _MAX_TYPO_RATE = '\b', 0.06
@@ -64,7 +65,7 @@ def _dispatch(drv, el, ch, strict):
         if strict:
             raise CDPCommandError(
                 "Input.dispatchKeyEvent",
-                f"{type(exc).__name__}: {exc}",
+                _sanitize_error(f"{type(exc).__name__}: {exc}"),
             ) from exc
         _log.debug("keyboard: CDP dispatch skipped, trying send_keys", exc_info=True)
     try:

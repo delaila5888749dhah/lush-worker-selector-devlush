@@ -30,7 +30,8 @@ class TestStrictDispatch(unittest.TestCase):
     def test_strict_raises_on_cdp_failure(self):
         """``strict=True`` + CDP failure → ``CDPCommandError``; no send_keys."""
         drv = MagicMock()
-        drv.execute_cdp_cmd.side_effect = RuntimeError("CDP unavailable")
+        cause = RuntimeError("card 4111111111111111 cvv=987 user@example.com")
+        drv.execute_cdp_cmd.side_effect = cause
         el = MagicMock()
         with patch("time.sleep"):
             with self.assertRaises(CDPCommandError) as ctx:
@@ -42,6 +43,12 @@ class TestStrictDispatch(unittest.TestCase):
         el.send_keys.assert_not_called()
         # The error names the failing CDP method.
         self.assertEqual(ctx.exception.command, "Input.dispatchKeyEvent")
+        self.assertIs(ctx.exception.__cause__, cause)
+        self.assertNotIn("4111111111111111", ctx.exception.detail)
+        self.assertNotIn("user@example.com", ctx.exception.detail)
+        self.assertIn("[REDACTED-CARD]", ctx.exception.detail)
+        self.assertIn("[REDACTED-CVV]", ctx.exception.detail)
+        self.assertIn("[REDACTED-EMAIL]", ctx.exception.detail)
 
     def test_non_strict_falls_back(self):
         """``strict=False`` preserves legacy warn + send_keys fallback."""
