@@ -125,6 +125,27 @@ class FSMTransitionLoggingTests(unittest.TestCase):
         self.assertIn("to=not_a_state", parts[5])
         self.assertIn("reason=invalid_state", parts[5])
 
+    def test_unregistered_state_rejection_emits_warn(self):
+        from modules.common.exceptions import InvalidTransitionError
+        from modules.fsm import main as fsm_main
+        # Drop one of the registered states for the worker so that the
+        # state, while in ALLOWED_STATES, is not registered for this worker.
+        with fsm_main._registry_lock:
+            fsm_main._registry[_WID]["states"].pop("vbv_3ds", None)
+        with self.assertLogs("modules.fsm.main", level="WARNING") as cm:
+            with self.assertRaises(InvalidTransitionError):
+                transition_for_worker(_WID, "vbv_3ds", trace_id="ur-1")
+        warns = [r for r in cm.records if r.levelno == logging.WARNING
+                 and "FSM_TRANSITION_REJECTED" in r.getMessage()]
+        self.assertEqual(len(warns), 1)
+        parts = [p.strip() for p in warns[0].getMessage().split("|")]
+        self.assertEqual(len(parts), 6)
+        self.assertEqual(parts[1], _WID)
+        self.assertEqual(parts[2], "ur-1")
+        self.assertEqual(parts[4], "FSM_TRANSITION_REJECTED")
+        self.assertIn("to=vbv_3ds", parts[5])
+        self.assertIn("reason=unregistered_state", parts[5])
+
     def test_unknown_worker_rejection_emits_warn(self):
         from modules.common.exceptions import InvalidTransitionError
         with self.assertLogs("modules.fsm.main", level="WARNING") as cm:
