@@ -96,7 +96,10 @@ _ENABLE_RETRY_UI_LOCK: bool = os.getenv("ENABLE_RETRY_UI_LOCK", "1") not in ("0"
 _MAX_UI_LOCK_RETRIES: int = 2
 _UI_BUSY_STATE = "ui_busy"
 _UI_BUSY_RECHECK_INTERVAL = 0.3
-_UI_BUSY_RECHECK_ATTEMPTS = 34
+_UI_BUSY_RECHECK_TIMEOUT = 10.0
+_UI_BUSY_RECHECK_ATTEMPTS = math.ceil(
+    _UI_BUSY_RECHECK_TIMEOUT / _UI_BUSY_RECHECK_INTERVAL
+)
 
 # P1-2 — Clear/refill after "Thank you" popup feature flag.
 # Set ENABLE_CLEAR_REFILL_AFTER_POPUP=0 to disable clear/refill after confirmation.
