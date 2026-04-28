@@ -31,8 +31,9 @@ Set the following variables before starting:
 | `BITBROWSER_API_KEY` | **yes** (production) | — | API key for the BitBrowser automation service. Required when `ENABLE_PRODUCTION_TASK_FN` is on. |
 | `BITBROWSER_ENDPOINT` | no | `http://127.0.0.1:54345` | Base URL for the local BitBrowser API server. |
 | `GIVEX_ENDPOINT` | no | — | Givex service endpoint URL. A warning is logged on startup if unset. |
-| `GIVEX_EGIFT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/` | Override the eGift page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. |
-| `GIVEX_PAYMENT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html` | Override the payment page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. |
+| `GIVEX_EGIFT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/` | Override the eGift page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. Validated at import time against the Givex host allowlist (`modules/cdp/driver.py:_ALLOWED_GIVEX_HOSTS`); HTTPS is required. |
+| `GIVEX_PAYMENT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html` | Override the payment page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. Validated at import time against the Givex host allowlist; HTTPS is required. |
+| `ALLOW_NON_PROD_GIVEX_HOSTS` | no | `0` | **Security flag — staging/sandbox only.** When truthy (`1`/`true`/`yes`, case-insensitive), `GIVEX_EGIFT_URL` / `GIVEX_PAYMENT_URL` may point at a host outside `_ALLOWED_GIVEX_HOSTS`; the override is accepted but a `WARNING` is logged labelling the worker as `INSECURE/DEGRADED`. Any falsy / unset value re-enables strict allowlist enforcement. **MUST NOT be enabled in production** — see §2.5 below. The HTTPS scheme is always required; this flag does not allow `http://` downgrades. |
 | `PROXY_LIST_FILE` | no | — | Path to a newline-delimited proxy list file consumed by the proxy rotator. |
 | `GEOIP_DB_PATH` | no | `data/GeoLite2-City.mmdb` | Path to the MaxMind GeoLite2 City database used for zip-code derivation (F-07). |
 | `REDIS_URL` | no | `""` | Redis connection URL used for deduplication and idempotency. Leave unset to disable Redis-backed idempotency. |
@@ -72,6 +73,36 @@ Bước vận hành:
 
 Rollback: đặt `BITBROWSER_POOL_MODE=0` → quay về legacy create/delete flow
 (hành vi không đổi, hoàn toàn backward-compatible).
+
+### 2.5 Givex host allowlist (`ALLOW_NON_PROD_GIVEX_HOSTS`)
+
+`modules/cdp/driver.py` validates `GIVEX_EGIFT_URL` and `GIVEX_PAYMENT_URL`
+against `_ALLOWED_GIVEX_HOSTS` at module import time so a typo or a
+malicious override cannot redirect the bot to a typo-squat / phishing
+host. The `https://` scheme is always required and is **never** bypassable.
+
+**Production (default — recommended):**
+
+- Leave `ALLOW_NON_PROD_GIVEX_HOSTS` unset (or `0` / `false`). Only the
+  hosts in `_ALLOWED_GIVEX_HOSTS` (currently `wwws-usa2.givex.com`) are
+  accepted; any other host raises `RuntimeError` at import.
+
+**Staging / sandbox only:**
+
+- Set `ALLOW_NON_PROD_GIVEX_HOSTS=1` (or `true` / `yes`) when Givex hands
+  out a non-prod URL (e.g. `https://staging.givex.com/...`). The override
+  is accepted but the worker logs a `WARNING` labelled `INSECURE/DEGRADED`
+  on every import — that line is intentional, treat any occurrence in a
+  production log stream as a misconfiguration alert.
+
+**Never:**
+
+- Do **not** set `ALLOW_NON_PROD_GIVEX_HOSTS=1` in production, in shared
+  prod-like environments, or in CI runs that exercise the production
+  task-fn (`ENABLE_PRODUCTION_TASK_FN=1`). The flag is a deliberate
+  fail-open and exists only so QA can point the bot at a sandbox host.
+- Do **not** use the flag to silence an `http://` rejection — the scheme
+  check is independent and is not bypassable. Fix the URL instead.
 
 ### 2.3 Verify deployment
 
