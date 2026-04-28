@@ -175,6 +175,41 @@ class DualNotifyGuardTests(unittest.TestCase):
         # notify_total must be called (guard cleared for new cycle)
         mock_wd.notify_total.assert_called_once_with(worker_id, 49.99)
 
+    def test_guard_reset_and_watchdog_enable_happen_before_listener_setup(self):
+        """New-cycle reset must happen before listener/polling setup starts."""
+        worker_id = "guard-worker"
+        task = _make_task()
+        driver = MagicMock()
+        order: list[str] = []
+
+        with _network_listener_lock:
+            _notified_workers_this_cycle.add(worker_id)
+
+        def _record_enable(*_args, **_kwargs):
+            order.append("enable")
+
+        def _record_setup(*_args, **_kwargs):
+            with _network_listener_lock:
+                self.assertNotIn(worker_id, _notified_workers_this_cycle)
+            order.append("setup")
+
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_wd,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+            patch("integration.orchestrator._setup_network_total_listener",
+                  side_effect=_record_setup),
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_cdp._get_driver.return_value = driver
+            mock_wd.enable_network_monitor.side_effect = _record_enable
+            mock_wd.wait_for_total.return_value = 49.99
+            mock_fsm.get_current_state_for_worker.return_value = None
+            run_payment_step(task, worker_id=worker_id)
+
+        self.assertEqual(order[:2], ["enable", "setup"])
+
     def test_concurrent_callbacks_only_notify_once(self):
         """Concurrent DOM-read callbacks for the same worker must notify at most once."""
         worker_id = "guard-concurrent"

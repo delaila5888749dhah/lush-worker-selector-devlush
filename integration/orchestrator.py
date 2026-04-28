@@ -1270,11 +1270,11 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     driver_obj = cdp._get_driver(worker_id)  # pylint: disable=protected-access
     if driver_obj is None:
         raise RuntimeError(f"No driver object returned for worker '{worker_id}'.")
-    _setup_network_total_listener(driver_obj, worker_id)
     # Reset first-notify-wins guard for this worker's new cycle before enabling the watchdog.
     with _network_listener_lock:
         _notified_workers_this_cycle.discard(worker_id)
     watchdog.enable_network_monitor(worker_id)
+    _setup_network_total_listener(driver_obj, worker_id)
     _submitted_before_wait = False
     # Phase 5A Task 2C: surface the active BehaviorStateMachine (published
     # by the behaviour wrapper into a ContextVar) so the wait_for_total
