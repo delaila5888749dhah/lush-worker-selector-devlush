@@ -17,7 +17,6 @@ from unittest.mock import MagicMock
 
 from selenium.common.exceptions import WebDriverException
 
-from modules.cdp import driver as drv
 from modules.cdp.driver import _popup_xpath_click_close
 
 
