@@ -8,7 +8,6 @@ right before the irreversible COMPLETE PURCHASE click (Spec §5 line 287).
 import unittest
 from unittest.mock import MagicMock, patch
 
-from modules.common.exceptions import SessionFlaggedError
 from modules.common.types import CardInfo, State, WorkerTask
 from modules.fsm.main import cleanup_worker, reset_registry
 from modules.watchdog.main import reset as _reset_watchdog
