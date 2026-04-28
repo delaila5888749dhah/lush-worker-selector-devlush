@@ -1,6 +1,6 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 7.1
+spec-version: 8.1
 
 > **v7.1 Additive Changes:**
 > - Added monitor UI-lock metric APIs: `record_ui_lock_retry()`, `record_ui_lock_recovered()`, `record_ui_lock_exhausted()`

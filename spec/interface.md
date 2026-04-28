@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 7.2
+spec-version: 8.2
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -86,11 +86,17 @@ Function: transition_for_worker
 Input:
   - worker_id: str
   - target_state: str
+  - trace_id: str | None = None
 Output: State
 Error:
   - Raise InvalidStateError if target_state is not in ALLOWED_STATES
   - Raise InvalidTransitionError if target_state is not registered for worker_id
   - Raise ValueError if the transition is not permitted by the payment transition graph
+Notes:
+  - Emits a structured log line in the canonical 6-field pipe-delimited format `timestamp | worker_id | trace_id | state | action | status` (matches `integration/runtime.py::_log_event` and `.github/AI_CONTEXT.md`) on every transition attempt
+  - Successful transitions log at INFO with action=`FSM_TRANSITION` and status field `status=success from=<prev> to=<target>`
+  - Transitions rejected by the payment transition graph or by the terminal-state guard log at WARN with action=`FSM_TRANSITION_REJECTED` and status field `status=rejected from=<prev> to=<target> reason=invalid_state|unknown_worker|unregistered_state|out_of_band|terminal` (`invalid_state` precedes `InvalidStateError`, `unknown_worker`/`unregistered_state` precede `InvalidTransitionError`, `out_of_band`/`terminal` precede `ValueError`)
+  - trace_id is an optional correlation identifier emitted verbatim in field 3; when omitted it is logged as `-`
 
 Function: cleanup_worker
 Input:

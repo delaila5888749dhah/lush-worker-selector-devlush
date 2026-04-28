@@ -3,6 +3,7 @@
 Legacy global API is deprecated. Use `initialize_for_worker()`, `transition_for_worker()`,
 `get_current_state_for_worker()`, `cleanup_worker()` for production multi-worker usage.
 """
+from datetime import datetime, timezone
 import enum
 import functools
 import inspect
@@ -134,33 +135,83 @@ def get_current_state_for_worker(worker_id: str) -> "State | None":
         return _registry.get(worker_id, {}).get("current")
 
 
-def transition_for_worker(worker_id: str, target_state: "str | PaymentState") -> State:
+def transition_for_worker(
+    worker_id: str,
+    target_state: "str | PaymentState",
+    trace_id: "str | None" = None,
+) -> State:
     """Transition *worker_id* to *target_state*.
 
     *target_state* accepts either a raw ``str`` or a :class:`PaymentState`
     member; both are accepted for backward compatibility.
+
+    *trace_id* is an optional correlation identifier that is included in the
+    structured log line emitted on every transition attempt (success or
+    rejection). When omitted, ``"-"`` is logged so the field is always
+    present and grep-able.
+
+    Log format follows the canonical 6-field pipe-delimited shape
+    ``timestamp | worker_id | trace_id | state | action | status``
+    (see ``.github/AI_CONTEXT.md`` and ``integration/runtime.py::_log_event``):
+    successful transitions emit action ``FSM_TRANSITION`` with
+    ``status=success from=<prev> to=<target>``; rejected transitions emit
+    action ``FSM_TRANSITION_REJECTED`` at WARN with
+    ``status=rejected from=<prev> to=<target> reason=<invalid_state|unknown_worker|unregistered_state|terminal|out_of_band>``.
     """
     target_state = _normalize_state(target_state)
+    _trace = trace_id if trace_id is not None else "-"
+
+    def _warn_rejected(prev: str, reason: str) -> None:
+        _logger.warning(
+            "%s | %s | %s | %s | %s | %s",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            worker_id, _trace, prev, "FSM_TRANSITION_REJECTED",
+            f"status=rejected from={prev} to={target_state} reason={reason}",
+        )
+
     if target_state not in ALLOWED_STATES:
+        _warn_rejected("-", "invalid_state")
         raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
     with _registry_lock:
         entry = _registry.get(worker_id)
         if entry is None:
+            _warn_rejected("-", "unknown_worker")
             raise InvalidTransitionError(f"worker '{worker_id}' not initialized")
         if target_state not in entry["states"]:
+            _current = entry["current"]
+            _warn_rejected(_current.name if _current is not None else "-", "unregistered_state")
             raise InvalidTransitionError(f"state '{target_state}' not registered for worker '{worker_id}'")
         current = entry["current"]
+        prev_name = current.name if current is not None else "-"
         if current is not None:
             current_name = current.name
             if current_name in TERMINAL_STATES:
+                _logger.warning(
+                    "%s | %s | %s | %s | %s | %s",
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    worker_id, _trace, current_name, "FSM_TRANSITION_REJECTED",
+                    f"status=rejected from={current_name} to={target_state} reason=terminal",
+                )
                 raise ValueError(
                     f"Invalid transition from {current_name} to {target_state}: "
                     f"'{current_name}' is a terminal state"
                 )
             allowed_targets = _VALID_PAYMENT_TRANSITIONS.get(current_name, set())
             if target_state not in allowed_targets:
+                _logger.warning(
+                    "%s | %s | %s | %s | %s | %s",
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    worker_id, _trace, current_name, "FSM_TRANSITION_REJECTED",
+                    f"status=rejected from={current_name} to={target_state} reason=out_of_band",
+                )
                 raise ValueError(f"Invalid transition from {current_name} to {target_state}")
         entry["current"] = entry["states"][target_state]
+        _logger.info(
+            "%s | %s | %s | %s | %s | %s",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            worker_id, _trace, target_state, "FSM_TRANSITION",
+            f"status=success from={prev_name} to={target_state}",
+        )
         return entry["current"]
 
 

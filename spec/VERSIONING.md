@@ -44,9 +44,9 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 
 | File | Version | Cập nhật |
 |------|---------|----------|
-| `spec/core/interface.md` | 7.0 | 2026-04-21 |
-| `spec/integration/interface.md` | 7.1 | 2026-04-23 |
-| `spec/interface.md` (aggregated) | 7.2 | 2026-04-24 |
+| `spec/core/interface.md` | 8.0 | 2026-04-28 |
+| `spec/integration/interface.md` | 8.1 | 2026-04-28 |
+| `spec/interface.md` (aggregated) | 8.2 | 2026-04-28 |
 | `spec/fsm.md` | 1.1 | 2026-04-23 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -54,6 +54,14 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v8.0 / v8.1 / v8.2 (2026-04-28) — BREAKING (FSM transition signature)
+- `spec/core/interface.md` (→ 8.0), `spec/integration/interface.md` (→ 8.1),
+  `spec/interface.md` (→ 8.2): `transition_for_worker` gained an optional
+  `trace_id: str | None = None` parameter to support the canonical 6-field
+  structured FSM transition log (`timestamp | worker_id | trace_id | state |
+  action | status`). Major bump per Rule 6 VERSIONING_ENFORCEMENT because the
+  parameter list of a public spec function changed.
 
 ### v7.2 (2026-04-24) — ADDITIVE (Blueprint §2.1)
 - `spec/interface.md`: Declared `BitBrowserPoolClient` (pool-mode BitBrowser
