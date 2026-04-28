@@ -94,6 +94,12 @@ _ENABLE_RETRY_LOOP: bool = os.getenv("ENABLE_RETRY_LOOP", "1") not in ("0", "fal
 # Default is enabled (any value other than "0", "false", or "no").
 _ENABLE_RETRY_UI_LOCK: bool = os.getenv("ENABLE_RETRY_UI_LOCK", "1") not in ("0", "false", "no")
 _MAX_UI_LOCK_RETRIES: int = 2
+_UI_BUSY_STATE = "ui_busy"
+_UI_BUSY_RECHECK_INTERVAL = 0.3
+_UI_BUSY_RECHECK_TIMEOUT = 10.0
+_UI_BUSY_RECHECK_ATTEMPTS = math.ceil(
+    _UI_BUSY_RECHECK_TIMEOUT / _UI_BUSY_RECHECK_INTERVAL
+)
 
 # P1-2 — Clear/refill after "Thank you" popup feature flag.
 # Set ENABLE_CLEAR_REFILL_AFTER_POPUP=0 to disable clear/refill after confirmation.
@@ -1352,9 +1358,23 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         )
         # P0-1: Detect page state immediately after submit and wire FSM transition.
         # This is the primary path for all FSM state changes in production.
+        # Spinner-visible ``ui_busy`` is treated as active loading: re-probe
+        # until a stable state appears (or until the busy-recheck budget is
+        # exhausted). Only canonical FSM states are forwarded to
+        # ``transition_for_worker``; a residual ``ui_busy`` is left to the
+        # post-submit fallback below to retry once Phase C completes.
         try:
-            _page_state = cdp.detect_page_state(worker_id)
-            fsm.transition_for_worker(worker_id, _page_state)
+            _page_state = _settle_busy_page_state(
+                lambda: cdp.detect_page_state(worker_id)
+            )
+            if _page_state in _FSM_STATES:
+                fsm.transition_for_worker(worker_id, _page_state)
+            else:
+                _logger.info(
+                    "[trace=%s] worker=%s post-submit state=%s is non-FSM; "
+                    "deferring transition to fallback path",
+                    _get_trace_id(), worker_id, _page_state,
+                )
         except InvalidTransitionError as _fsm_exc:
             _logger.warning(
                 "[trace=%s] FSM InvalidTransitionError after submit for worker=%s: %s",
@@ -1455,11 +1475,21 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     state = fsm.get_current_state_for_worker(worker_id)
     if state is None:
         # P0-1 fallback: FSM was never transitioned by the primary path (e.g.
-        # detect_page_state raised after submit).  Try once more here before
-        # returning so that handle_outcome receives a real state instead of None.
+        # detect_page_state raised after submit, or returned ``ui_busy``).  Try
+        # once more here, settling any remaining spinner-visible loading first
+        # so we don't push a non-FSM ``ui_busy`` value into the FSM.
         try:
-            _page_state = cdp.detect_page_state(worker_id)
-            state = fsm.transition_for_worker(worker_id, _page_state)
+            _page_state = _settle_busy_page_state(
+                lambda: cdp.detect_page_state(worker_id)
+            )
+            if _page_state in _FSM_STATES:
+                state = fsm.transition_for_worker(worker_id, _page_state)
+            else:
+                _logger.warning(
+                    "[trace=%s] FSM fallback state=%s is non-FSM for worker=%s — "
+                    "returning state=None; handle_outcome will retry.",
+                    _get_trace_id(), _page_state, worker_id,
+                )
         except InvalidTransitionError as _fsm_exc:
             _logger.warning(
                 "[trace=%s] FSM fallback InvalidTransitionError for worker=%s: %s",
@@ -1506,6 +1536,22 @@ def clear_refill_after_thank_you_popup(driver, new_card) -> None:
         _logger.warning(
             "[thank-you-refill] clear/refill failed: %s", _sanitize_error(exc)
         )
+
+
+def _settle_busy_page_state(get_page_state: Callable[[], str]) -> str:
+    """Re-probe while the page is still visibly busy after submit.
+
+    Spinner-visible pages are treated as active loading, not ``ui_lock``.
+    Callers use this helper to wait for a stable non-busy state before making
+    retry/focus-shift decisions.
+    """
+    page_state = get_page_state()
+    attempts = 0
+    while page_state == _UI_BUSY_STATE and attempts < _UI_BUSY_RECHECK_ATTEMPTS:
+        attempts += 1
+        time.sleep(_UI_BUSY_RECHECK_INTERVAL)
+        page_state = get_page_state()
+    return page_state
 
 
 def _payment_url_matches(current: str, canonical: str) -> bool:
@@ -1934,8 +1980,10 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                 # handle_outcome below receives the updated state rather than ui_lock.
                 _ui_lock_cleared = False
                 try:
-                    _new_page_state = cdp.detect_page_state(worker_id)
-                    if _new_page_state != "ui_lock":
+                    _new_page_state = _settle_busy_page_state(
+                        lambda: cdp.detect_page_state(worker_id)
+                    )
+                    if _new_page_state in _FSM_STATES and _new_page_state != "ui_lock":
                         state = fsm.transition_for_worker(worker_id, _new_page_state)
                         _ui_lock_cleared = True
                         try:
@@ -1946,6 +1994,12 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                                 "failed for worker=%s: %s",
                                 _get_trace_id(), worker_id, _sanitize_error(_met_exc),
                             )
+                    elif _new_page_state == _UI_BUSY_STATE:
+                        _logger.info(
+                            "[trace=%s] worker=%s still loading after focus-shift; "
+                            "deferring ui_lock recovery until a stable state appears",
+                            _get_trace_id(), worker_id,
+                        )
                 except Exception as _det_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
                         "[trace=%s] detect_page_state retry after ui_lock failed "

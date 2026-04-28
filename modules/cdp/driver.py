@@ -2602,12 +2602,15 @@ class GivexDriver:
         3. ``declined``  — URL contains ``error=vv`` (Givex VBV/3DS failure
                            signal), OR a payment-error element is present, OR
                            page text contains "declined" / "transaction failed".
-        4. ``ui_lock``   — A loading overlay or spinner is present.
-        5. Raises ``PageStateError`` if none of the above matched.
+        4. ``ui_busy``   — A loading overlay or spinner is present and the page
+                           is still actively processing the submit.
+        5. ``ui_lock``   — No spinner/state change appears for 3 seconds after
+                           submit (stuck UI per Blueprint §6).
+        6. Raises ``PageStateError`` if none of the above matched.
 
         Returns:
             One of: ``"success"``, ``"vbv_3ds"``, ``"declined"``,
-            ``"ui_lock"``.
+            ``"ui_busy"``, ``"ui_lock"``.
 
         Raises:
             PageStateError: if the page state cannot be determined.
@@ -2641,11 +2644,11 @@ class GivexDriver:
         if "declined" in page_text or "transaction failed" in page_text:
             return "declined"
 
-        # 4 — ui_lock
+        # 4 — ui_busy (spinner visible means active loading, not a stuck UI)
         if self.find_elements(SEL_UI_LOCK_SPINNER):
-            return "ui_lock"
+            return "ui_busy"
 
-        # 5 — 3s timeout fallback: sustained stall with no recognisable state → ui_lock
+        # 5 — 3s timeout fallback: sustained spinner-absent stall → ui_lock
         deadline = time.time() + 3.0
         while time.time() < deadline:
             time.sleep(0.3)
@@ -2657,8 +2660,8 @@ class GivexDriver:
             if "error=vv" in current_url:
                 return "declined"
             if self.find_elements(SEL_UI_LOCK_SPINNER):
-                return "ui_lock"
-        # After 3s no state change → treat as stuck ui_lock
+                return "ui_busy"
+        # After 3s with no spinner/state change → treat as stuck ui_lock
         return "ui_lock"
 
     # ── Full-cycle orchestrator ───────────────────────────────────────────────

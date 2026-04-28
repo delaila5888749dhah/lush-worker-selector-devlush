@@ -116,8 +116,8 @@ class TestStuckSubmitGuard(unittest.TestCase):
 
         self.assertEqual(result, "declined")
 
-    def test_ui_lock_spinner_detected_during_poll(self):
-        """Spinner appears during the 3s poll → 'ui_lock'."""
+    def test_ui_busy_spinner_detected_during_poll(self):
+        """Spinner appears during the 3s poll → 'ui_busy'."""
         selenium = _make_driver()
         from modules.cdp.driver import SEL_UI_LOCK_SPINNER
         spinner_el = MagicMock()
@@ -140,7 +140,7 @@ class TestStuckSubmitGuard(unittest.TestCase):
              patch("modules.cdp.driver.time.time", side_effect=[0.0, 1.0, 1.0]):
             result = gd.detect_page_state()
 
-        self.assertEqual(result, "ui_lock")
+        self.assertEqual(result, "ui_busy")
 
 
 if __name__ == "__main__":
