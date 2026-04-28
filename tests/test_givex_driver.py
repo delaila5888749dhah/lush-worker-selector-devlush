@@ -646,6 +646,57 @@ class TestRunFullCycle(unittest.TestCase):
         with self.assertRaises(ValueError):
             gd.run_full_cycle(task, billing)
 
+    def test_run_full_cycle_wires_task_amount_as_expected_total(self):
+        """E3 audit: the in-driver path must wire task.amount before submit
+        so submit_purchase enforces the DOM Order Total cross-check."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = _make_billing()
+        captured = {}
+
+        def fake_submit():
+            captured["expected_total"] = gd._expected_total
+
+        with (
+            patch.object(gd, "preflight_geo_check"),
+            patch.object(gd, "navigate_to_egift"),
+            patch.object(gd, "fill_egift_form"),
+            patch.object(gd, "add_to_cart_and_checkout"),
+            patch.object(gd, "select_guest_checkout"),
+            patch.object(gd, "fill_payment_and_billing"),
+            patch.object(gd, "submit_purchase", side_effect=fake_submit),
+            patch.object(gd, "detect_page_state", return_value="success"),
+        ):
+            gd.run_full_cycle(task, billing)
+        self.assertEqual(captured["expected_total"], decimal.Decimal(str(task.amount)))
+
+    def test_run_full_cycle_preserves_pre_wired_expected_total(self):
+        """If the orchestrator already wired a watchdog total, run_full_cycle
+        must not overwrite it with task.amount."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = _make_billing()
+        gd.set_expected_total("99.99")
+        captured = {}
+
+        def fake_submit():
+            captured["expected_total"] = gd._expected_total
+
+        with (
+            patch.object(gd, "preflight_geo_check"),
+            patch.object(gd, "navigate_to_egift"),
+            patch.object(gd, "fill_egift_form"),
+            patch.object(gd, "add_to_cart_and_checkout"),
+            patch.object(gd, "select_guest_checkout"),
+            patch.object(gd, "fill_payment_and_billing"),
+            patch.object(gd, "submit_purchase", side_effect=fake_submit),
+            patch.object(gd, "detect_page_state", return_value="success"),
+        ):
+            gd.run_full_cycle(task, billing)
+        self.assertEqual(captured["expected_total"], decimal.Decimal("99.99"))
+
 
 class TestDetectPageState(unittest.TestCase):
     """detect_page_state checks URL fragments, elements, and page text."""

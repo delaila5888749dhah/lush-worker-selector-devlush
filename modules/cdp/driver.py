@@ -2707,5 +2707,21 @@ class GivexDriver:
         self.add_to_cart_and_checkout()
         self.select_guest_checkout(billing_profile.email)
         self.fill_payment_and_billing(task.primary_card, billing_profile)
+        # E3 audit: wire ``task.amount`` (the source-of-truth expected Order
+        # Total) before ``submit_purchase`` so the in-driver full-cycle path
+        # gets the same DOM-vs-expected cross-check the orchestrator path
+        # gets via ``set_expected_total(worker_id, preflight_total)``.  Skip
+        # only when the caller already pre-wired a total (e.g. orchestrator
+        # full_cycle path injecting a watchdog total) — never silently leave
+        # the guard disabled.
+        if self._expected_total is None and getattr(task, "amount", None) is not None:
+            try:
+                self.set_expected_total(task.amount)
+            except ValueError:
+                _log.warning(
+                    "run_full_cycle: task.amount=%r not parseable as Decimal; "
+                    "submit will proceed without DOM cross-check",
+                    getattr(task, "amount", None),
+                )
         self.submit_purchase()
         return self.detect_page_state()
