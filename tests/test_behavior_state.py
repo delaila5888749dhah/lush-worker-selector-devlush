@@ -406,5 +406,91 @@ class TestCriticalSectionConstant(unittest.TestCase):
             )
 
 
+# ── CRITICAL_SECTION_ZONES whitelist (Blueprint §8.3) ────────────
+
+
+class TestCriticalSectionZones(unittest.TestCase):
+    """CRITICAL_SECTION_ZONES is the canonical 4-zone whitelist."""
+
+    def test_has_four_zones(self):
+        from modules.delay.state import CRITICAL_SECTION_ZONES
+        self.assertEqual(
+            CRITICAL_SECTION_ZONES,
+            frozenset({"payment_submit", "vbv_iframe", "api_wait", "page_reload"}),
+        )
+
+    def test_critical_section_zones_exported_via_main(self):
+        from modules.delay.main import CRITICAL_SECTION_ZONES
+        self.assertEqual(
+            CRITICAL_SECTION_ZONES,
+            frozenset({"payment_submit", "vbv_iframe", "api_wait", "page_reload"}),
+        )
+
+    def test_enter_critical_zone_rejects_unknown(self):
+        sm = BehaviorStateMachine(initial_state="PAYMENT")
+        with self.assertRaises(ValueError):
+            sm.enter_critical_zone("not_a_real_zone")
+        # SM must remain delay-safe after a rejected enter
+        self.assertTrue(sm.is_safe_for_delay())
+        self.assertIsNone(sm.get_active_zone())
+
+    def test_enter_critical_zone_records_active_zone(self):
+        sm = BehaviorStateMachine(initial_state="PAYMENT")
+        sm.enter_critical_zone("payment_submit")
+        self.assertEqual(sm.get_active_zone(), "payment_submit")
+        self.assertTrue(sm.is_critical_context())
+        self.assertFalse(sm.is_safe_for_delay())
+
+    def test_exit_critical_zone_clears_state(self):
+        sm = BehaviorStateMachine(initial_state="PAYMENT")
+        sm.enter_critical_zone("api_wait")
+        sm.exit_critical_zone()
+        self.assertIsNone(sm.get_active_zone())
+        self.assertTrue(sm.is_safe_for_delay())
+
+    def test_legacy_set_critical_section_alias_still_works(self):
+        """Backward compat: legacy set_critical_section(bool) toggles the flag."""
+        sm = BehaviorStateMachine(initial_state="FILLING_FORM")
+        sm.set_critical_section(True)
+        self.assertTrue(sm.is_critical_context())
+        self.assertFalse(sm.is_safe_for_delay())
+        sm.set_critical_section(False)
+        self.assertTrue(sm.is_safe_for_delay())
+        self.assertIsNone(sm.get_active_zone())
+
+    def test_reset_clears_active_zone(self):
+        sm = BehaviorStateMachine(initial_state="PAYMENT")
+        sm.enter_critical_zone("vbv_iframe")
+        sm.reset()
+        self.assertIsNone(sm.get_active_zone())
+        self.assertTrue(sm.is_safe_for_delay())
+
+    def test_all_four_cs_zones_block_delay(self):
+        """All four canonical zones must block delay injection in a SAFE FSM state."""
+        from modules.delay.state import CRITICAL_SECTION_ZONES
+        for zone in CRITICAL_SECTION_ZONES:
+            sm = BehaviorStateMachine(initial_state="PAYMENT")
+            self.assertTrue(
+                sm.is_safe_for_delay(),
+                f"PAYMENT must be delay-safe before entering zone {zone!r}",
+            )
+            sm.enter_critical_zone(zone)
+            self.assertFalse(
+                sm.is_safe_for_delay(),
+                f"zone {zone!r} must block delay injection",
+            )
+            self.assertTrue(
+                sm.is_critical_context(),
+                f"zone {zone!r} must mark critical context",
+            )
+            self.assertEqual(sm.get_active_zone(), zone)
+            sm.exit_critical_zone()
+            self.assertTrue(
+                sm.is_safe_for_delay(),
+                f"exit_critical_zone() must restore delay safety after zone {zone!r}",
+            )
+            self.assertIsNone(sm.get_active_zone())
+
+
 if __name__ == "__main__":
     unittest.main()

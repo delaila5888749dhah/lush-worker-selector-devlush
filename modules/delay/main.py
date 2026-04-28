@@ -11,7 +11,7 @@ from modules.delay.persona import MAX_TYPING_DELAY, MIN_TYPING_DELAY  # noqa: F4
 from modules.delay.persona import TYPO_RATE_MIN, TYPO_RATE_MAX  # noqa: F401
 from modules.delay.persona import NIGHT_PENALTY_MIN, NIGHT_PENALTY_MAX  # noqa: F401
 from modules.delay.persona import FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX  # noqa: F401
-from modules.delay.state import BehaviorStateMachine, BEHAVIOR_STATES, CRITICAL_SECTION  # noqa: F401
+from modules.delay.state import BehaviorStateMachine, BEHAVIOR_STATES, CRITICAL_SECTION, CRITICAL_SECTION_ZONES  # noqa: F401
 from modules.delay.engine import DelayEngine  # noqa: F401
 from modules.delay.engine import MAX_HESITATION_DELAY, MAX_STEP_DELAY  # noqa: F401
 from modules.delay.config import WATCHDOG_HEADROOM  # noqa: F401
@@ -42,6 +42,7 @@ __all__ = [
     "BehaviorStateMachine",
     "BEHAVIOR_STATES",
     "CRITICAL_SECTION",
+    "CRITICAL_SECTION_ZONES",
     "DelayEngine",
     "MAX_HESITATION_DELAY",
     "MAX_STEP_DELAY",

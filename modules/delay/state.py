@@ -36,6 +36,18 @@ BEHAVIOR_STATES = {"IDLE", "FILLING_FORM", "PAYMENT", "VBV", "POST_ACTION"}
 # and re-exported via :mod:`modules.delay.main`.
 CRITICAL_SECTION = frozenset({"VBV", "POST_ACTION"})
 
+# Canonical whitelist of Phase-9 CRITICAL_SECTION zones (Blueprint §8.3).
+# These four zone labels are the *only* values accepted by
+# :meth:`BehaviorStateMachine.enter_critical_zone` and provide a single
+# grep-able audit point for every ad-hoc CS toggle in the codebase:
+#   - ``payment_submit`` — irreversible submit click in CDP driver
+#   - ``vbv_iframe``     — 3DS iframe interaction in CDP driver
+#   - ``api_wait``       — pricing-watchdog ``wait_for_total`` in orchestrator
+#   - ``page_reload``    — refill-after-VBV-cancel chain in orchestrator
+CRITICAL_SECTION_ZONES = frozenset(
+    {"payment_submit", "vbv_iframe", "api_wait", "page_reload"}
+)
+
 _VALID_BEHAVIOR_TRANSITIONS = {
     "IDLE": {"FILLING_FORM"},
     "FILLING_FORM": {"PAYMENT", "IDLE"},
@@ -67,6 +79,7 @@ class BehaviorStateMachine:
         self._lock = threading.Lock()
         self._state: str = initial_state
         self._in_critical_section: bool = False
+        self._active_zone: Optional[str] = None
 
     # ── transitions ──────────────────────────────────────────────
 
@@ -127,14 +140,55 @@ class BehaviorStateMachine:
 
     # ── critical-section flag (Phase 9 interop) ─────────────────
 
+    def enter_critical_zone(self, zone: str) -> None:
+        """Mark entry into a Phase-9 CRITICAL_SECTION *zone*.
+
+        *zone* must be one of :data:`CRITICAL_SECTION_ZONES` (Blueprint
+        §8.3).  The active zone label is stored for log traceability and
+        retrievable via :meth:`get_active_zone`.
+
+        Raises
+        ------
+        ValueError
+            If *zone* is not in :data:`CRITICAL_SECTION_ZONES`.
+        """
+        if zone not in CRITICAL_SECTION_ZONES:
+            raise ValueError(
+                f"unknown critical zone {zone!r}; must be one of "
+                f"{sorted(CRITICAL_SECTION_ZONES)}"
+            )
+        with self._lock:
+            self._in_critical_section = True
+            self._active_zone = zone
+        _logger.debug("entered CRITICAL_SECTION zone: %s", zone)
+
+    def exit_critical_zone(self) -> None:
+        """Clear the Phase-9 CRITICAL_SECTION flag and active zone label."""
+        with self._lock:
+            prev = self._active_zone
+            self._in_critical_section = False
+            self._active_zone = None
+        if prev is not None:
+            _logger.debug("exited CRITICAL_SECTION zone: %s", prev)
+
+    def get_active_zone(self) -> Optional[str]:
+        """Return the currently-active CRITICAL_SECTION zone label or ``None``."""
+        with self._lock:
+            return self._active_zone
+
     def set_critical_section(self, active: bool) -> None:
         """Mark whether the worker is currently in a Phase-9 CRITICAL_SECTION.
 
-        Called by the wrapper / integration layer so the behavior FSM can
-        honour the zero-delay rule without importing from *integration*.
+        Legacy alias retained for backward compatibility with call-sites and
+        tests that have not migrated to :meth:`enter_critical_zone` /
+        :meth:`exit_critical_zone`.  Prefer the zone-aware API for new
+        code so the active zone is recorded in :attr:`_active_zone` and
+        validated against :data:`CRITICAL_SECTION_ZONES`.
         """
         with self._lock:
             self._in_critical_section = bool(active)
+            if not active:
+                self._active_zone = None
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -143,6 +197,7 @@ class BehaviorStateMachine:
         with self._lock:
             self._state = "IDLE"
             self._in_critical_section = False
+            self._active_zone = None
 
 
 # ── Shared-instance context (Phase 5A Task 1) ─────────────────────

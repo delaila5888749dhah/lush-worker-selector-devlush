@@ -1606,7 +1606,7 @@ class GivexDriver:
                     "handle_vbv_challenge: SM rejected VBV transition from %s",
                     self._sm.get_state(),
                 )
-            self._sm.set_critical_section(True)
+            self._sm.enter_critical_zone("vbv_iframe")
         try:
             try:
                 vbv_dynamic_wait(rng=self._get_rng())
@@ -1644,7 +1644,7 @@ class GivexDriver:
                 return result
         finally:
             if self._sm is not None:
-                self._sm.set_critical_section(False)
+                self._sm.exit_critical_zone()
                 # Review fix [F2]: only advance to POST_ACTION when the
                 # iframe was successfully cancelled.  On `iframe_missing`
                 # / `cdp_fail` / `error` the FSM must remain in its
@@ -2559,14 +2559,14 @@ class GivexDriver:
             # submit failure would mark the worker as post-submit and
             # incorrectly lock out future delay injection.
             if self._sm is not None:
-                self._sm.set_critical_section(True)
+                self._sm.enter_critical_zone("payment_submit")
             click_succeeded = False
             try:
                 self.bounding_box_click(SEL_COMPLETE_PURCHASE)
                 click_succeeded = True
             finally:
                 if self._sm is not None:
-                    self._sm.set_critical_section(False)
+                    self._sm.exit_critical_zone()
                     if click_succeeded:
                         if not self._sm.transition("POST_ACTION"):
                             _log.warning(

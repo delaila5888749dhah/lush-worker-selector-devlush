@@ -1293,14 +1293,14 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         # stalls, abort BEFORE typing any card data so no submission occurs.
         try:
             if _behavior_sm is not None:
-                _behavior_sm.set_critical_section(True)
+                _behavior_sm.enter_critical_zone("api_wait")
             try:
                 preflight_total = watchdog.wait_for_total(
                     worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
                 )
             finally:
                 if _behavior_sm is not None:
-                    _behavior_sm.set_critical_section(False)
+                    _behavior_sm.exit_critical_zone()
                 # Stop Phase A DOM polling (no-op when CDP listener is in use).
                 _stop_phase_a_dom_polling(worker_id)
         except SessionFlaggedError:
@@ -1395,14 +1395,14 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         _notify_total_from_dom(driver_obj, worker_id)
         try:
             if _behavior_sm is not None:
-                _behavior_sm.set_critical_section(True)
+                _behavior_sm.enter_critical_zone("api_wait")
             try:
                 total = watchdog.wait_for_total(
                     worker_id, timeout=_WATCHDOG_TIMEOUT_PAYMENT,
                 )
             finally:
                 if _behavior_sm is not None:
-                    _behavior_sm.set_critical_section(False)
+                    _behavior_sm.exit_critical_zone()
         except SessionFlaggedError as _post_exc:
             _logger.warning(
                 "[trace=%s] Post-submit total missing for worker=%s, task_id=%s; "
@@ -1664,7 +1664,7 @@ def refill_after_vbv_reload(driver, ctx, new_card) -> None:
     # the behaviour ContextVar so all delay sites see the active CS.
     sm = _get_current_sm()
     if sm is not None:
-        sm.set_critical_section(True)
+        sm.enter_critical_zone("page_reload")
     try:
         if ctx.task is not None:
             # Full refill: page was reloaded to the beginning after VBV cancel.
@@ -1689,7 +1689,7 @@ def refill_after_vbv_reload(driver, ctx, new_card) -> None:
         _logger.warning("refill_after_vbv_reload failed: %s", _sanitize_error(exc))
     finally:
         if sm is not None:
-            sm.set_critical_section(False)
+            sm.exit_critical_zone()
 
 
 def _record_fork_safe(branch: str) -> None:

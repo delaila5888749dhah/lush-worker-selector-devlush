@@ -30,13 +30,19 @@ class TestRefillAfterVbvCriticalSection(unittest.TestCase):
 
         sm = BehaviorStateMachine()
         flag_calls: list[bool] = []
-        real_flag = sm.set_critical_section
+        real_enter = sm.enter_critical_zone
+        real_exit = sm.exit_critical_zone
 
-        def _flag(active: bool) -> None:
-            flag_calls.append(bool(active))
-            real_flag(active)
+        def _enter(zone: str) -> None:
+            flag_calls.append(True)
+            real_enter(zone)
 
-        sm.set_critical_section = _flag  # type: ignore[assignment]
+        def _exit() -> None:
+            flag_calls.append(False)
+            real_exit()
+
+        sm.enter_critical_zone = _enter  # type: ignore[assignment]
+        sm.exit_critical_zone = _exit  # type: ignore[assignment]
 
         billing = MagicMock(email="x@y.z")
         task = MagicMock()
@@ -66,13 +72,19 @@ class TestRefillAfterVbvCriticalSection(unittest.TestCase):
 
         sm = BehaviorStateMachine()
         flag_calls: list[bool] = []
-        real_flag = sm.set_critical_section
+        real_enter = sm.enter_critical_zone
+        real_exit = sm.exit_critical_zone
 
-        def _flag(active: bool) -> None:
-            flag_calls.append(bool(active))
-            real_flag(active)
+        def _enter(zone: str) -> None:
+            flag_calls.append(True)
+            real_enter(zone)
 
-        sm.set_critical_section = _flag  # type: ignore[assignment]
+        def _exit() -> None:
+            flag_calls.append(False)
+            real_exit()
+
+        sm.enter_critical_zone = _enter  # type: ignore[assignment]
+        sm.exit_critical_zone = _exit  # type: ignore[assignment]
 
         billing = MagicMock(email="x@y.z")
         task = MagicMock()
@@ -108,13 +120,19 @@ class TestWaitForTotalCriticalSection(unittest.TestCase):
 
         sm = BehaviorStateMachine()
         flag_calls: list[bool] = []
-        real_flag = sm.set_critical_section
+        real_enter = sm.enter_critical_zone
+        real_exit = sm.exit_critical_zone
 
-        def _flag(active: bool) -> None:
-            flag_calls.append(bool(active))
-            real_flag(active)
+        def _enter(zone: str) -> None:
+            flag_calls.append(True)
+            real_enter(zone)
 
-        sm.set_critical_section = _flag  # type: ignore[assignment]
+        def _exit() -> None:
+            flag_calls.append(False)
+            real_exit()
+
+        sm.enter_critical_zone = _enter  # type: ignore[assignment]
+        sm.exit_critical_zone = _exit  # type: ignore[assignment]
 
         # Provide a fake driver in the cdp registry so the early lookup succeeds.
         fake_driver = MagicMock()
@@ -149,15 +167,21 @@ class TestWaitForTotalCriticalSection(unittest.TestCase):
                  patch.object(orchestrator.fsm, "transition_for_worker"), \
                  patch.object(orchestrator, "_notify_total_from_dom",
                                side_effect=_notify):
-                # Wrap set_critical_section recording into the same `order` list
+                # Wrap enter/exit recording into the same `order` list
                 # so we can verify exact bracketing.
-                original_flag = sm.set_critical_section
+                original_enter = sm.enter_critical_zone
+                original_exit = sm.exit_critical_zone
 
-                def _ordered_flag(active: bool) -> None:
-                    order.append(f"cs={bool(active)}")
-                    original_flag(active)
+                def _ordered_enter(zone: str) -> None:
+                    order.append("cs=True")
+                    original_enter(zone)
 
-                sm.set_critical_section = _ordered_flag  # type: ignore[assignment]
+                def _ordered_exit() -> None:
+                    order.append("cs=False")
+                    original_exit()
+
+                sm.enter_critical_zone = _ordered_enter  # type: ignore[assignment]
+                sm.exit_critical_zone = _ordered_exit  # type: ignore[assignment]
 
                 task = MagicMock(task_id="t-1", amount=49.99)
                 orchestrator.run_payment_step(task, worker_id="w-1")
