@@ -207,7 +207,10 @@ def wrap(task_fn, persona: PersonaProfile, stop_event: threading.Event | None = 
     temporal = TemporalModel(persona)
     cycle_state = {"count": 0}
     cycle_lock = threading.Lock()
-    _log.debug("wrap: persona_type=%s seed=%d", persona.persona_type, persona._seed)
+    _log.debug(
+        "wrap: persona_archetype=%s persona_type=%s seed=%d",
+        persona.persona_archetype, persona.persona_type, persona._seed,
+    )
 
     @functools.wraps(task_fn)
     def _wrapped(*args, **kwargs):
