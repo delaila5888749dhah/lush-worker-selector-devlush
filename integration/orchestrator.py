@@ -36,7 +36,7 @@ from modules.cdp import main as cdp
 from modules.delay.config import CDP_CALL_TIMEOUT as _CDP_CALL_TIMEOUT_CONFIG
 from modules.delay.state import get_current_sm as _get_current_sm
 from modules.fsm import main as fsm
-from modules.fsm.main import ALLOWED_STATES as _FSM_STATES  # noqa: F401 — Imported from fsm canonical source; intentionally unused but enforces INV-FSM-01 at import time
+from modules.fsm.main import ALLOWED_STATES as _FSM_STATES  # Canonical FSM state set; enforces INV-FSM-01 at import time
 from modules.monitor import main as monitor
 from modules.observability import alerting as _alerting
 from modules.rollout import main as rollout
@@ -1725,18 +1725,28 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
             result = driver.handle_vbv_challenge()
             if result in ("cancelled", "iframe_missing"):
-                driver.detect_page_state()
+                post_state = driver.detect_page_state()
+                next_state = (
+                    post_state
+                    if post_state in _FSM_STATES and post_state != "vbv_3ds"
+                    else "vbv_cancelled"
+                )
                 return handle_outcome(
-                    State("vbv_cancelled"), order_queue,
+                    State(next_state), order_queue,
                     worker_id=worker_id, ctx=ctx,
                 )
             elif result == "cdp_fail":
                 # retry once on CDP/WebDriver failure
                 result = driver.handle_vbv_challenge()
                 if result in ("cancelled", "iframe_missing"):
-                    driver.detect_page_state()
+                    post_state = driver.detect_page_state()
+                    next_state = (
+                        post_state
+                        if post_state in _FSM_STATES and post_state != "vbv_3ds"
+                        else "vbv_cancelled"
+                    )
                     return handle_outcome(
-                        State("vbv_cancelled"), order_queue,
+                        State(next_state), order_queue,
                         worker_id=worker_id, ctx=ctx,
                     )
         except Exception as exc:
