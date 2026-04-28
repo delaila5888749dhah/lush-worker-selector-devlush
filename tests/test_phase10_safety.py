@@ -204,8 +204,9 @@ class TestNightTypoRateWiring(unittest.TestCase):
         ):
             night_typos = self._count_typos(gd, n)
         self.assertGreater(night_typos, day_typos)
-        # The bonus should be at least ~50 over 10k keystrokes (0.015×10000=150)
-        self.assertGreaterEqual(night_typos - day_typos, 50)
+        # _count_typos returns int(rate × N) deterministically. With persona
+        # typo_rate=0.02 and NIGHT bonus 0.015: DAY=200, NIGHT=350 → diff=150.
+        self.assertEqual(night_typos - day_typos, 150)
 
     def test_typo_rate_zero_in_critical_section(self):
         """While the engine forbids delay (VBV / POST_ACTION / critical
