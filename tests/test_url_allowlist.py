@@ -21,7 +21,6 @@ _DRIVER_PATH = os.path.join(_PROJECT_DIR, "modules", "cdp", "driver.py")
 
 _FOREIGN_EGIFT = "https://evil.example.com/e-gifts/"
 _FOREIGN_PAYMENT = "https://evil.example.com/payment.html"
-_PROD_PAYMENT = "https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html"
 
 
 def _load_driver(env_patch):
