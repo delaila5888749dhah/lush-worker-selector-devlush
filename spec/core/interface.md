@@ -72,11 +72,16 @@ Function: transition_for_worker
 Input:
   - worker_id: str
   - target_state: str
+  - trace_id: str | None = None
 Output: State
 Error:
   - Raise InvalidStateError if target_state is not in ALLOWED_STATES
   - Raise InvalidTransitionError if target_state is not registered for worker_id
   - Raise ValueError if the transition is not permitted by the payment transition graph
+Notes:
+  - Emits structured INFO log "FSM_TRANSITION worker_id=… from=… to=… trace_id=…" on every successful transition
+  - Emits structured WARN log "FSM_TRANSITION_REJECTED … reason=out_of_band|terminal trace_id=…" when a transition is rejected by the payment transition graph or by the terminal-state guard
+  - trace_id is an optional correlation identifier included verbatim in the structured log; when omitted it is logged as "-"
 
 Function: cleanup_worker
 Input:
