@@ -153,6 +153,89 @@ class TestPersonaTypes(unittest.TestCase):
         self.assertAlmostEqual(mean, p.typing_speed, delta=0.15)
 
 
+class TestArchetypeParamsCoverage(unittest.TestCase):
+    """Mapping invariants: catalogue ↔ params table must stay in sync."""
+
+    def test_every_declared_archetype_has_params_entry(self):
+        from modules.delay.persona import (
+            _PERSONA_ARCHETYPES, _ARCHETYPE_PARAMS, _REQUIRED_PARAM_FIELDS,
+        )
+        for name in _PERSONA_ARCHETYPES:
+            self.assertIn(
+                name, _ARCHETYPE_PARAMS,
+                f"archetype {name!r} declared without params entry",
+            )
+            for field in _REQUIRED_PARAM_FIELDS:
+                self.assertIn(
+                    field, _ARCHETYPE_PARAMS[name],
+                    f"archetype {name!r} missing field {field!r}",
+                )
+
+    def test_no_orphan_params_entries(self):
+        from modules.delay.persona import _PERSONA_ARCHETYPES, _ARCHETYPE_PARAMS
+        orphan = set(_ARCHETYPE_PARAMS) - set(_PERSONA_ARCHETYPES)
+        self.assertEqual(
+            orphan, set(),
+            f"params entries without declared archetype: {sorted(orphan)}",
+        )
+
+    def test_validate_raises_on_missing_params_entry(self):
+        """Drift detection: declared archetype without params → RuntimeError."""
+        from modules.delay import persona as persona_mod
+        original = persona_mod._PERSONA_ARCHETYPES
+        try:
+            persona_mod._PERSONA_ARCHETYPES = original + ("ghost",)
+            with self.assertRaises(RuntimeError) as ctx:
+                persona_mod._validate_archetype_params()
+            self.assertIn("ghost", str(ctx.exception))
+        finally:
+            persona_mod._PERSONA_ARCHETYPES = original
+
+    def test_validate_raises_on_orphan_params_entry(self):
+        """Drift detection: params entry without declared archetype → RuntimeError."""
+        from modules.delay import persona as persona_mod
+        persona_mod._ARCHETYPE_PARAMS["ghost"] = {
+            "typing_mult": 1.0,
+            "hesitation_mult": 1.0,
+            "fatigue_threshold": (5, 9),
+            "night_penalty": (0.20, 0.25),
+        }
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                persona_mod._validate_archetype_params()
+            self.assertIn("ghost", str(ctx.exception))
+        finally:
+            persona_mod._ARCHETYPE_PARAMS.pop("ghost", None)
+
+    def test_validate_raises_on_missing_required_field(self):
+        """Drift detection: params entry missing required field → RuntimeError."""
+        from modules.delay import persona as persona_mod
+        original = persona_mod._ARCHETYPE_PARAMS["man"]
+        try:
+            persona_mod._ARCHETYPE_PARAMS["man"] = {"typing_mult": 1.0}
+            with self.assertRaises(RuntimeError) as ctx:
+                persona_mod._validate_archetype_params()
+            self.assertIn("man", str(ctx.exception))
+        finally:
+            persona_mod._ARCHETYPE_PARAMS["man"] = original
+
+    def test_each_archetype_constructs_persona(self):
+        """Every declared archetype must produce a working PersonaProfile.
+
+        Sampling enough seeds to cover all four archetypes proves the runtime
+        lookup ``_ARCHETYPE_PARAMS[persona_archetype]`` does not raise for any
+        catalogue value.
+        """
+        from modules.delay.persona import _PERSONA_ARCHETYPES
+        seen: set = set()
+        for seed in range(1000):
+            p = PersonaProfile(seed)
+            seen.add(p.persona_archetype)
+            if seen == set(_PERSONA_ARCHETYPES):
+                break
+        self.assertEqual(seen, set(_PERSONA_ARCHETYPES))
+
+
 class TestActiveHours(unittest.TestCase):
     def test_active_hours_tuple(self):
         p = PersonaProfile(42)

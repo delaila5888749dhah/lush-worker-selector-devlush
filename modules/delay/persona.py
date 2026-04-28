@@ -54,6 +54,45 @@ _ARCHETYPE_PARAMS: dict = {
     },
 }
 
+# Single-source-of-truth invariant: every declared archetype must have a
+# matching params entry, and the params table must not contain orphan keys.
+# Validating at import time turns catalogue/mapping drift into a clear
+# ``RuntimeError`` instead of a raw ``KeyError`` raised deep inside
+# ``PersonaProfile.__init__``.
+_REQUIRED_PARAM_FIELDS = (
+    "typing_mult",
+    "hesitation_mult",
+    "fatigue_threshold",
+    "night_penalty",
+)
+
+
+def _validate_archetype_params() -> None:
+    declared = set(_PERSONA_ARCHETYPES)
+    mapped = set(_ARCHETYPE_PARAMS)
+    missing = declared - mapped
+    if missing:
+        raise RuntimeError(
+            "PersonaProfile: archetypes declared without params entry: "
+            f"{sorted(missing)}"
+        )
+    orphan = mapped - declared
+    if orphan:
+        raise RuntimeError(
+            "PersonaProfile: params entries without declared archetype: "
+            f"{sorted(orphan)}"
+        )
+    for name, params in _ARCHETYPE_PARAMS.items():
+        missing_fields = [f for f in _REQUIRED_PARAM_FIELDS if f not in params]
+        if missing_fields:
+            raise RuntimeError(
+                f"PersonaProfile: archetype {name!r} missing fields: "
+                f"{missing_fields}"
+            )
+
+
+_validate_archetype_params()
+
 
 def _clamp_range(lo: float, hi: float, gmin: float, gmax: float) -> tuple:
     """Clamp ``(lo, hi)`` into ``[gmin, gmax]`` preserving order."""
