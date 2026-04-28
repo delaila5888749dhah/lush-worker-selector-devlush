@@ -203,15 +203,19 @@ class TestTypeValueStrictMode(unittest.TestCase):
                 type_value(drv, el, "x", _rnd(), strict=False)
         self.assertTrue(any("fell back to send_keys" in msg for msg in log_cm.output))
 
-    def test_strict_warns_on_cdp_and_fallback_failure(self):
+    def test_strict_raises_on_cdp_failure(self):
+        """Strict mode raises CDPCommandError when CDP dispatch fails (no send_keys fallback)."""
+        from modules.common.exceptions import CDPCommandError, SessionFlaggedError
         drv = _mock_driver()
         drv.execute_cdp_cmd.side_effect = RuntimeError("CDP gone")
         el = MagicMock()
-        el.send_keys.side_effect = RuntimeError("fallback gone")
         with patch("time.sleep"):
-            with self.assertLogs("modules.cdp.keyboard", level="WARNING") as cm:
+            with self.assertRaises(CDPCommandError) as ctx:
                 type_value(drv, el, "x", _rnd(), strict=True)
-        self.assertTrue(any("dispatch completely failed" in msg for msg in cm.output))
+        # Subclass of SessionFlaggedError so the runtime treats it as a flagged session.
+        self.assertIsInstance(ctx.exception, SessionFlaggedError)
+        # Must NOT fall back to send_keys in strict mode.
+        el.send_keys.assert_not_called()
 
     def test_non_strict_does_not_warn(self):
         drv = _mock_driver()
