@@ -43,6 +43,7 @@ class TestStrictDispatch(unittest.TestCase):
         el.send_keys.assert_not_called()
         # The error names the failing CDP method.
         self.assertEqual(ctx.exception.command, "Input.dispatchKeyEvent")
+        self.assertIn("Input.dispatchKeyEvent", str(ctx.exception))
         self.assertIs(ctx.exception.__cause__, cause)
         self.assertNotIn("4111111111111111", ctx.exception.detail)
         self.assertNotIn("user@example.com", ctx.exception.detail)
