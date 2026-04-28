@@ -211,6 +211,34 @@ class TestUiLockResolvesAfterFocusShift(_P04Base):
         # detect_page_state called exactly once per focus-shift attempt (2 ui_lock iters)
         self.assertEqual(mock_cdp.detect_page_state.call_count, 2)
 
+    def test_ui_busy_after_focus_shift_waits_for_stable_state(self):
+        """Spinner-visible re-detect waits for a stable non-busy state before resolving."""
+        task = _make_task()
+
+        with patch("integration.orchestrator.run_payment_step",
+                   return_value=(State("ui_lock"), "0.00")), \
+             patch("integration.orchestrator.billing", _make_billing_mock()), \
+             patch(_STORE_PATCH, return_value=_make_store_mock()), \
+             patch("integration.orchestrator._notify_success"), \
+             patch("integration.orchestrator.initialize_cycle"), \
+             patch("integration.orchestrator._alerting"), \
+             patch("integration.orchestrator.time.sleep"), \
+             patch("integration.orchestrator.fsm") as mock_fsm, \
+             patch("integration.orchestrator.cdp") as mock_cdp:
+            mock_cdp.handle_ui_lock_focus_shift.return_value = True
+            mock_cdp.detect_page_state.side_effect = ["ui_busy", "success"]
+            mock_cdp._get_driver.return_value = MagicMock()
+            mock_fsm.transition_for_worker.return_value = State("success")
+            action, state, _total = run_cycle(
+                task, worker_id=_WORKER_ID,
+                ctx=CycleContext(cycle_id="c4b", worker_id=_WORKER_ID),
+            )
+
+        self.assertEqual(action, "complete")
+        self.assertEqual(state.name, "success")
+        self.assertEqual(mock_cdp.detect_page_state.call_count, 2)
+        mock_fsm.transition_for_worker.assert_called_once_with(_WORKER_ID, "success")
+
 
 # ---------------------------------------------------------------------------
 # Test group 3: ui_lock cap enforcement

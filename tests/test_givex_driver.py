@@ -12,7 +12,7 @@ Covers:
 - run_full_cycle — steps called in the correct order
 - _wait_for_element — returns True when found, False on timeout
 - detect_page_state — checks all URL_CONFIRM_FRAGMENTS, element presence,
-  VBV iframe, declined text, ui_lock spinner, returns 'ui_lock' on unknown after 3s poll
+  VBV iframe, declined text, ui_busy spinner, returns 'ui_lock' on unknown after 3s poll
 """
 
 import time
@@ -765,7 +765,7 @@ class TestDetectPageState(unittest.TestCase):
         gd = GivexDriver(selenium)
         self.assertEqual(gd.detect_page_state(), "declined")
 
-    def test_detect_page_state_ui_lock(self):
+    def test_detect_page_state_ui_busy(self):
         selenium = _make_driver()
         spinner_el = MagicMock()
         first_spinner = SEL_UI_LOCK_SPINNER.split(",")[0].strip()
@@ -777,7 +777,7 @@ class TestDetectPageState(unittest.TestCase):
 
         selenium.find_elements.side_effect = side_effect
         gd = GivexDriver(selenium)
-        self.assertEqual(gd.detect_page_state(), "ui_lock")
+        self.assertEqual(gd.detect_page_state(), "ui_busy")
 
     def test_detect_page_state_returns_ui_lock_on_unknown_after_3s(self):
         selenium = _make_driver()

@@ -94,6 +94,9 @@ _ENABLE_RETRY_LOOP: bool = os.getenv("ENABLE_RETRY_LOOP", "1") not in ("0", "fal
 # Default is enabled (any value other than "0", "false", or "no").
 _ENABLE_RETRY_UI_LOCK: bool = os.getenv("ENABLE_RETRY_UI_LOCK", "1") not in ("0", "false", "no")
 _MAX_UI_LOCK_RETRIES: int = 2
+_UI_BUSY_STATE = "ui_busy"
+_UI_BUSY_RECHECK_INTERVAL = 0.3
+_UI_BUSY_RECHECK_ATTEMPTS = 34
 
 # P1-2 — Clear/refill after "Thank you" popup feature flag.
 # Set ENABLE_CLEAR_REFILL_AFTER_POPUP=0 to disable clear/refill after confirmation.
@@ -1508,6 +1511,22 @@ def clear_refill_after_thank_you_popup(driver, new_card) -> None:
         )
 
 
+def _settle_busy_page_state(get_page_state: Callable[[], str]) -> str:
+    """Re-probe while the page is still visibly busy after submit.
+
+    Spinner-visible pages are treated as active loading, not ``ui_lock``.
+    Callers use this helper to wait for a stable non-busy state before making
+    retry/focus-shift decisions.
+    """
+    page_state = get_page_state()
+    attempts = 0
+    while page_state == _UI_BUSY_STATE and attempts < _UI_BUSY_RECHECK_ATTEMPTS:
+        attempts += 1
+        time.sleep(_UI_BUSY_RECHECK_INTERVAL)
+        page_state = get_page_state()
+    return page_state
+
+
 def _payment_url_matches(current: str, canonical: str) -> bool:
     """Compare a current URL against :data:`URL_PAYMENT`.
 
@@ -1934,8 +1953,10 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                 # handle_outcome below receives the updated state rather than ui_lock.
                 _ui_lock_cleared = False
                 try:
-                    _new_page_state = cdp.detect_page_state(worker_id)
-                    if _new_page_state != "ui_lock":
+                    _new_page_state = _settle_busy_page_state(
+                        lambda: cdp.detect_page_state(worker_id)
+                    )
+                    if _new_page_state in _FSM_STATES and _new_page_state != "ui_lock":
                         state = fsm.transition_for_worker(worker_id, _new_page_state)
                         _ui_lock_cleared = True
                         try:
@@ -1946,6 +1967,12 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                                 "failed for worker=%s: %s",
                                 _get_trace_id(), worker_id, _sanitize_error(_met_exc),
                             )
+                    elif _new_page_state == _UI_BUSY_STATE:
+                        _logger.info(
+                            "[trace=%s] worker=%s still loading after focus-shift; "
+                            "deferring ui_lock recovery until a stable state appears",
+                            _get_trace_id(), worker_id,
+                        )
                 except Exception as _det_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
                         "[trace=%s] detect_page_state retry after ui_lock failed "
