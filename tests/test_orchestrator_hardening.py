@@ -321,6 +321,16 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
         mock_wd = self._call("1,234.56")
         mock_wd.notify_total.assert_called_once_with("dom-worker", 1234.56)
 
+    def test_string_european_decimal_comma(self):
+        """Locale-aware: bare ``49,99`` must parse as 49.99, not 4999."""
+        mock_wd = self._call("49,99 €")
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 49.99)
+
+    def test_string_european_thousands_dot_decimal_comma(self):
+        """Locale-aware: ``1.234,56`` must parse as 1234.56, not 1.23456."""
+        mock_wd = self._call("€ 1.234,56")
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 1234.56)
+
     def test_accounting_style_negative(self):
         """(49.99) should be treated as -49.99 (accounting notation)."""
         mock_wd = self._call("(49.99)")

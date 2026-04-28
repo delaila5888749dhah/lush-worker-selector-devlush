@@ -1944,6 +1944,26 @@ class TestSubmitPurchaseOrderTotalCrossCheck(unittest.TestCase):
         with self.assertRaises(PageStateError):
             gd._read_dom_order_total()
 
+    def test_read_dom_order_total_european_decimal_comma(self):
+        """Locale-aware: bare ``49,99`` parses as 49.99, not 4999."""
+        gd, _el = self._gd_with_total_element("49,99 €")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("49.99"))
+
+    def test_read_dom_order_total_european_thousands_dot_decimal_comma(self):
+        """Locale-aware: ``1.234,56`` parses as 1234.56, not 1.23456."""
+        gd, _el = self._gd_with_total_element("€ 1.234,56")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234.56"))
+
+    def test_read_dom_order_total_us_thousands_only(self):
+        """``1,234`` (no decimal) is treated as 1234, not 1.234."""
+        gd, _el = self._gd_with_total_element("$1,234")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234"))
+
+    def test_read_dom_order_total_european_thousands_only(self):
+        """``1.234`` (no decimal) is treated as 1234, not 1.234."""
+        gd, _el = self._gd_with_total_element("1.234 €")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234"))
+
 
 # ── TestFillEgiftFormScrolls ─────────────────────────────────────────────────
 

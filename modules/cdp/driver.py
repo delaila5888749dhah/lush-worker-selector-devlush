@@ -385,6 +385,72 @@ SEL_ORDER_TOTAL_DISPLAY = (
 # real price drift triggers immediately.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
 
+
+def _parse_money_text(raw):
+    """Parse a money-formatted string into a :class:`decimal.Decimal`.
+
+    Locale-aware: supports US-style (``"1,234.56"``), European-style
+    (``"1.234,56"``), and bare decimals (``"49.99"`` / ``"49,99"``).
+    Strips currency symbols and whitespace; treats accounting-style
+    parentheses (``"($49.99)"``) as a negative amount.
+
+    Disambiguation when only one separator type is present:
+
+    * Multiple occurrences of the same separator → thousands separator.
+    * Single separator followed by *exactly* 3 digits → thousands
+      separator (e.g. ``"1.234"`` → 1234, ``"1,234"`` → 1234).
+    * Single separator followed by 1, 2, or 4+ digits → decimal point
+      (e.g. ``"49,99"`` → 49.99, ``"1.2345"`` → 1.2345).
+
+    Args:
+        raw: The text to parse.  May be ``None`` or empty.
+
+    Returns:
+        A :class:`decimal.Decimal`, or ``None`` if no parseable number
+        could be extracted.
+    """
+    if not raw:
+        return None
+    text = str(raw).strip()
+    is_neg_paren = "(" in text and ")" in text
+    keep = re.sub(r"[^\d,.\-+]", "", text)
+    if not keep:
+        return None
+    sign_neg = keep.startswith("-")
+    keep = keep.lstrip("+-")
+    if not keep or not any(ch.isdigit() for ch in keep):
+        return None
+    has_dot = "." in keep
+    has_comma = "," in keep
+    if has_dot and has_comma:
+        if keep.rfind(",") > keep.rfind("."):
+            keep = keep.replace(".", "").replace(",", ".")
+        else:
+            keep = keep.replace(",", "")
+    elif has_comma:
+        parts = keep.split(",")
+        if len(parts) > 2 or (
+            len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) > 0
+        ):
+            keep = keep.replace(",", "")
+        else:
+            keep = keep.replace(",", ".")
+    elif has_dot:
+        parts = keep.split(".")
+        if len(parts) > 2 or (
+            len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) > 0
+        ):
+            keep = keep.replace(".", "")
+    try:
+        value = decimal.Decimal(keep)
+    except decimal.InvalidOperation:
+        return None
+    if sign_neg:
+        value = -value
+    if is_neg_paren and value > 0:
+        value = -value
+    return value
+
 # ── Post-submit state detection (Step 5) ─────────────────────────────────────
 # Maximum seconds to wait for the TransientMonitor daemon thread to exit after
 # cancel() is signalled during submit_purchase (Issue #194, PR #206).
@@ -2440,11 +2506,11 @@ class GivexDriver:
     def _read_dom_order_total(self) -> decimal.Decimal:
         """Read the visible Order Total from the payment page DOM.
 
-        Strips currency symbols, thousands separators, and surrounding
-        whitespace so a string like ``"  $1,234.56 USD "`` parses to
-        ``Decimal("1234.56")``.  Accounting-style negatives such as
-        ``"($49.99)"`` are returned as a negative Decimal — matching the
-        convention used by :func:`integration.orchestrator._notify_total_from_dom`.
+        Strips currency symbols and whitespace, then parses the numeric
+        text with :func:`_parse_money_text` so locale-formatted totals
+        (US ``"$1,234.56"``, European ``"1.234,56 €"``, bare ``"49,99"``,
+        accounting-style ``"($49.99)"``) all decode correctly.  Raises
+        :class:`PageStateError` on missing or unparseable DOM.
 
         Returns:
             The Order Total as a :class:`decimal.Decimal`.
@@ -2457,27 +2523,15 @@ class GivexDriver:
         elements = self.find_elements(SEL_ORDER_TOTAL_DISPLAY)
         if not elements:
             raise PageStateError(f"order_total:{SEL_ORDER_TOTAL_DISPLAY}")
-        raw = ""
         try:
             raw = elements[0].text or ""
         except Exception as exc:  # pylint: disable=broad-except
             raise PageStateError(
                 f"order_total:read:{_sanitize_error(str(exc))}"
             ) from exc
-        cleaned = raw.replace(",", "").strip()
-        match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
-        if not match:
+        value = _parse_money_text(raw)
+        if value is None:
             raise PageStateError(f"order_total:parse:{SEL_ORDER_TOTAL_DISPLAY}")
-        try:
-            value = decimal.Decimal(match.group())
-        except decimal.InvalidOperation as exc:
-            raise PageStateError(
-                f"order_total:decimal:{SEL_ORDER_TOTAL_DISPLAY}"
-            ) from exc
-        # Accounting-style negative — e.g. "($49.99)" — matches the
-        # convention in integration.orchestrator._notify_total_from_dom.
-        if "(" in cleaned and ")" in cleaned and value > 0:
-            value = -value
         return value
 
     def submit_purchase(self) -> None:

@@ -1047,14 +1047,14 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
             _validated_notify_total(worker_id, float(result))
             return
         if isinstance(result, str) and result:
-            cleaned = result.replace(',', '')
-            match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
-            if match:
-                value = float(match.group())
-                # Handle accounting-style negative numbers, e.g. "(49.99)".
-                if "(" in cleaned and ")" in cleaned and value > 0:
-                    value = -value
-                _validated_notify_total(worker_id, value)
+            # Locale-aware money parser shared with GivexDriver._read_dom_order_total
+            # so US ($1,234.56), European (1.234,56) and bare-decimal (49,99)
+            # totals all decode consistently across the watchdog DOM-fallback
+            # and submit-time cross-check paths (E3 audit).
+            from modules.cdp.driver import _parse_money_text  # noqa: PLC0415
+            parsed = _parse_money_text(result)
+            if parsed is not None:
+                _validated_notify_total(worker_id, float(parsed))
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
 
