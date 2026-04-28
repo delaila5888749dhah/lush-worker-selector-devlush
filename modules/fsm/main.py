@@ -146,9 +146,9 @@ def transition_for_worker(
     member; both are accepted for backward compatibility.
 
     *trace_id* is an optional correlation identifier that is included in the
-    structured log line emitted on every successful transition (and on every
-    rejection by :data:`_VALID_PAYMENT_TRANSITIONS`). When omitted, ``"-"`` is
-    logged so the field is always present and grep-able.
+    structured log line emitted on every transition attempt (success or
+    rejection). When omitted, ``"-"`` is logged so the field is always
+    present and grep-able.
 
     Log format follows the canonical 6-field pipe-delimited shape
     ``timestamp | worker_id | trace_id | state | action | status``
@@ -156,17 +156,30 @@ def transition_for_worker(
     successful transitions emit action ``FSM_TRANSITION`` with
     ``status=success from=<prev> to=<target>``; rejected transitions emit
     action ``FSM_TRANSITION_REJECTED`` at WARN with
-    ``status=rejected from=<prev> to=<target> reason=<terminal|out_of_band>``.
+    ``status=rejected from=<prev> to=<target> reason=<invalid_state|unknown_worker|unregistered_state|terminal|out_of_band>``.
     """
     target_state = _normalize_state(target_state)
-    if target_state not in ALLOWED_STATES:
-        raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
     _trace = trace_id if trace_id is not None else "-"
+
+    def _warn_rejected(prev: str, reason: str) -> None:
+        _logger.warning(
+            "%s | %s | %s | %s | %s | %s",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            worker_id, _trace, prev, "FSM_TRANSITION_REJECTED",
+            f"status=rejected from={prev} to={target_state} reason={reason}",
+        )
+
+    if target_state not in ALLOWED_STATES:
+        _warn_rejected("-", "invalid_state")
+        raise InvalidStateError(f"state '{target_state}' is not in ALLOWED_STATES")
     with _registry_lock:
         entry = _registry.get(worker_id)
         if entry is None:
+            _warn_rejected("-", "unknown_worker")
             raise InvalidTransitionError(f"worker '{worker_id}' not initialized")
         if target_state not in entry["states"]:
+            _current = entry["current"]
+            _warn_rejected(_current.name if _current is not None else "-", "unregistered_state")
             raise InvalidTransitionError(f"state '{target_state}' not registered for worker '{worker_id}'")
         current = entry["current"]
         prev_name = current.name if current is not None else "-"

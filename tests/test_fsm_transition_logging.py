@@ -109,6 +109,36 @@ class FSMTransitionLoggingTests(unittest.TestCase):
         self.assertIn("to=declined", parts[5])
         self.assertIn("reason=terminal", parts[5])
 
+    def test_invalid_state_rejection_emits_warn(self):
+        from modules.common.exceptions import InvalidStateError
+        with self.assertLogs("modules.fsm.main", level="WARNING") as cm:
+            with self.assertRaises(InvalidStateError):
+                transition_for_worker(_WID, "not_a_state", trace_id="inv-1")
+        warns = [r for r in cm.records if r.levelno == logging.WARNING
+                 and "FSM_TRANSITION_REJECTED" in r.getMessage()]
+        self.assertEqual(len(warns), 1)
+        parts = [p.strip() for p in warns[0].getMessage().split("|")]
+        self.assertEqual(len(parts), 6)
+        self.assertEqual(parts[1], _WID)
+        self.assertEqual(parts[2], "inv-1")
+        self.assertEqual(parts[4], "FSM_TRANSITION_REJECTED")
+        self.assertIn("to=not_a_state", parts[5])
+        self.assertIn("reason=invalid_state", parts[5])
+
+    def test_unknown_worker_rejection_emits_warn(self):
+        from modules.common.exceptions import InvalidTransitionError
+        with self.assertLogs("modules.fsm.main", level="WARNING") as cm:
+            with self.assertRaises(InvalidTransitionError):
+                transition_for_worker("worker-not-init", "ui_lock", trace_id="uw-1")
+        warns = [r for r in cm.records if r.levelno == logging.WARNING
+                 and "FSM_TRANSITION_REJECTED" in r.getMessage()]
+        self.assertEqual(len(warns), 1)
+        parts = [p.strip() for p in warns[0].getMessage().split("|")]
+        self.assertEqual(parts[1], "worker-not-init")
+        self.assertEqual(parts[2], "uw-1")
+        self.assertEqual(parts[4], "FSM_TRANSITION_REJECTED")
+        self.assertIn("reason=unknown_worker", parts[5])
+
 
 if __name__ == "__main__":
     unittest.main()
