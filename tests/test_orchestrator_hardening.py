@@ -352,6 +352,25 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
             _notify_total_from_dom(driver, "dom-worker")
         mock_wd.notify_total.assert_not_called()
 
+    def test_dom_selector_includes_cws_lbl_order_total(self):
+        """E3 audit: orchestrator DOM fallback must query the same Order Total
+        node that ``GivexDriver.submit_purchase()`` cross-checks
+        (``SEL_ORDER_TOTAL_DISPLAY``).  Otherwise a page that exposes the
+        total only via ``#cws_lbl_orderTotal`` would let submit_purchase read
+        the DOM total while Phase A's DOM-only/degraded fallback cannot
+        capture the watchdog/preflight total from the same source.
+        """
+        driver = MagicMock()
+        driver.execute_script.return_value = "49.99"
+        with patch("integration.orchestrator.watchdog"):
+            _notify_total_from_dom(driver, "dom-worker")
+        driver.execute_script.assert_called_once()
+        script = driver.execute_script.call_args.args[0]
+        self.assertIn("#cws_lbl_orderTotal", script)
+        self.assertIn(".order-total", script)
+        self.assertIn(".checkout-total", script)
+        self.assertIn("[data-total]", script)
+
 
 # ── Network Listener Callback Coverage ────────────────────────────────────────
 

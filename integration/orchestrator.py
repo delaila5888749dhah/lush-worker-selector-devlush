@@ -1040,7 +1040,7 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
     """
     try:
         result = driver_obj.execute_script(
-            "var el = document.querySelector('.order-total, .checkout-total, [data-total]');"
+            "var el = document.querySelector('#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]');"
             "return el ? el.innerText : null;"
         )
         if isinstance(result, (int, float)):
