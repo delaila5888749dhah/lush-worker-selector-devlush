@@ -100,21 +100,22 @@ class TestVbvChallengeWiring(unittest.TestCase):
         self.assertEqual(action[0], "retry_new_card")
         self.assertEqual(ctx.swap_count, 1)
 
-    def test_vbv_cancel_reprobe_vbv_3ds_falls_back_to_vbv_cancelled(self):
-        """vbv_3ds re-probe must NOT recurse — fall back to vbv_cancelled."""
+    def test_vbv_cancel_reprobe_vbv_3ds_stays_on_3ds_path(self):
+        """vbv_3ds still present after cancel click → stay on 3DS path (await_3ds)."""
         task = _make_task()
         ctx = CycleContext(cycle_id="cycle-recurse", worker_id="worker-recurse", task=task)
         driver = MagicMock()
         driver.handle_vbv_challenge.return_value = "cancelled"
         driver.detect_page_state.return_value = "vbv_3ds"
 
-        with patch("integration.orchestrator.cdp") as mock_cdp, \
-             patch("integration.orchestrator.is_payment_page_reloaded", return_value=False):
+        with patch("integration.orchestrator.cdp") as mock_cdp:
             mock_cdp._get_driver.return_value = driver
             action = handle_outcome(State("vbv_3ds"), task.order_queue, ctx=ctx)
 
-        self.assertEqual(action[0], "retry_new_card")
-        self.assertEqual(ctx.swap_count, 1)
+        # 3DS iframe still present → must NOT be remapped to vbv_cancelled
+        # (which would trigger card swap).  Caller polls again via await_3ds.
+        self.assertEqual(action, "await_3ds")
+        self.assertEqual(ctx.swap_count, 0)
 
     def test_vbv_3ds_falls_back_to_await_3ds_on_exception(self):
         task = _make_task()

@@ -1726,10 +1726,15 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
             result = driver.handle_vbv_challenge()
             if result in ("cancelled", "iframe_missing"):
                 post_state = driver.detect_page_state()
+                # If the 3DS iframe is still present after the cancel click
+                # (post_state == "vbv_3ds"), keep waiting on the 3DS path
+                # rather than redispatching: the upstream polling layer is
+                # responsible for the next probe.  Unknown post_state →
+                # legacy "vbv_cancelled" fallback.
+                if post_state == "vbv_3ds":
+                    return "await_3ds"
                 next_state = (
-                    post_state
-                    if post_state in _FSM_STATES and post_state != "vbv_3ds"
-                    else "vbv_cancelled"
+                    post_state if post_state in _FSM_STATES else "vbv_cancelled"
                 )
                 return handle_outcome(
                     State(next_state), order_queue,
@@ -1740,10 +1745,10 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
                 result = driver.handle_vbv_challenge()
                 if result in ("cancelled", "iframe_missing"):
                     post_state = driver.detect_page_state()
+                    if post_state == "vbv_3ds":
+                        return "await_3ds"
                     next_state = (
-                        post_state
-                        if post_state in _FSM_STATES and post_state != "vbv_3ds"
-                        else "vbv_cancelled"
+                        post_state if post_state in _FSM_STATES else "vbv_cancelled"
                     )
                     return handle_outcome(
                         State(next_state), order_queue,
