@@ -416,7 +416,7 @@ THANK_YOU_TEXT_PATTERNS_DEFAULT = (
     THANK_YOU_TEXT_PATTERNS_EN + THANK_YOU_TEXT_PATTERNS_VN
 )
 
-_GREETINGS = [
+_DEFAULT_GREETINGS = [
     "Happy gifting!",
     "Enjoy this little treat!",
     "Thinking of you!",
@@ -427,6 +427,83 @@ _GREETINGS = [
     "Enjoy your gift!",
     "Thank you for being you",
 ]
+
+# Env var pointing to an optional UTF-8 file with one extra greeting per
+# line.  Spec §4 requires _GREETINGS be extensible without code changes.
+_GREETINGS_FILE_ENV = "GIVEX_GREETINGS_FILE"
+
+# Hard caps to prevent a malicious or accidentally-huge greetings file
+# from exhausting memory at import time.  These bounds are intentionally
+# generous for legitimate operator use (a few thousand short messages).
+_GREETINGS_MAX_ENTRIES = 1000
+_GREETINGS_MAX_LINE_LENGTH = 500
+
+
+def _load_greetings(path: str | None = None) -> list[str]:
+    """Return greetings = defaults + entries from optional file.
+
+    Reads the path from ``GIVEX_GREETINGS_FILE`` when *path* is None.
+    Each non-empty, stripped line of the UTF-8 file is appended after the
+    defaults; the merged list is deduplicated while preserving order.
+
+    Lines longer than ``_GREETINGS_MAX_LINE_LENGTH`` are skipped and the
+    total number of merged entries is capped at ``_GREETINGS_MAX_ENTRIES``
+    to bound memory use.  Any I/O or decoding error is logged at WARNING
+    level and the function falls back to the defaults — startup must
+    never be blocked by a bad greetings file.
+    """
+    greetings: list[str] = list(_DEFAULT_GREETINGS)
+    file_path = path if path is not None else os.environ.get(_GREETINGS_FILE_ENV)
+    if not file_path:
+        return greetings
+    try:
+        with open(file_path, "r", encoding="utf-8-sig") as fh:
+            seen = set(greetings)
+            truncated = False
+            for line in fh:
+                if len(greetings) >= _GREETINGS_MAX_ENTRIES:
+                    truncated = True
+                    break
+                entry = line.strip()
+                if not entry or len(entry) > _GREETINGS_MAX_LINE_LENGTH:
+                    continue
+                if entry in seen:
+                    continue
+                greetings.append(entry)
+                seen.add(entry)
+            if truncated:
+                _log.warning(
+                    "_load_greetings: %s=%r exceeded %d entries; truncated",
+                    _GREETINGS_FILE_ENV,
+                    file_path,
+                    _GREETINGS_MAX_ENTRIES,
+                )
+    except (OSError, UnicodeDecodeError) as exc:
+        _log.warning(
+            "_load_greetings: cannot read %s=%r (%s); using defaults",
+            _GREETINGS_FILE_ENV,
+            file_path,
+            exc,
+        )
+        return greetings
+    return greetings
+
+
+_GREETINGS = _load_greetings()
+
+
+def reload_greetings(path: str | None = None) -> list[str]:
+    """Re-read the greetings file and refresh the module-level list.
+
+    Useful when ``GIVEX_GREETINGS_FILE`` is set or its target is updated
+    after :mod:`modules.cdp.driver` has already been imported (Spec §4 —
+    extensibility without redeploy).  ``_random_greeting`` always reads
+    the live ``_GREETINGS`` global so the new list takes effect on the
+    next call.
+    """
+    global _GREETINGS
+    _GREETINGS = _load_greetings(path)
+    return _GREETINGS
 
 def _random_greeting(rnd=None) -> str:
     """Return a greeting message for the eGift form.
