@@ -51,6 +51,8 @@ class TestVbvChallengeWiring(unittest.TestCase):
         ctx = CycleContext(cycle_id="cycle-1", worker_id="worker-1", task=task)
         driver = MagicMock()
         driver.handle_vbv_challenge.return_value = "cancelled"
+        # Site rolled back to declined after VBV cancel; orchestrator must
+        # honour the re-probed state instead of hardcoding 'vbv_cancelled'.
         driver.detect_page_state.return_value = "declined"
 
         with patch("integration.orchestrator.cdp") as mock_cdp, \
@@ -58,10 +60,62 @@ class TestVbvChallengeWiring(unittest.TestCase):
             mock_cdp._get_driver.return_value = driver
             action = handle_outcome(State("vbv_3ds"), task.order_queue, ctx=ctx)
 
+        # Re-probed 'declined' → swap card via the declined fork (no
+        # vbv-cancelled refill, hence is_payment_page_reloaded must NOT
+        # be consulted because that path is gated on vbv_cancelled).
         self.assertEqual(action[0], "retry_new_card")
         self.assertEqual(ctx.swap_count, 1)
         driver.handle_vbv_challenge.assert_called_once()
         driver.detect_page_state.assert_called_once()
+
+    def test_vbv_cancel_reprobe_success_returns_complete(self):
+        """Site auto-approves after VBV cancel — no card swap should occur."""
+        task = _make_task()
+        ctx = CycleContext(cycle_id="cycle-success", worker_id="worker-success", task=task)
+        driver = MagicMock()
+        driver.handle_vbv_challenge.return_value = "cancelled"
+        driver.detect_page_state.return_value = "success"
+
+        with patch("integration.orchestrator.cdp") as mock_cdp:
+            mock_cdp._get_driver.return_value = driver
+            action = handle_outcome(State("vbv_3ds"), task.order_queue, ctx=ctx)
+
+        self.assertEqual(action, "complete")
+        self.assertEqual(ctx.swap_count, 0)
+
+    def test_vbv_cancel_reprobe_unknown_falls_back_to_vbv_cancelled(self):
+        """Unknown post-state falls back to legacy vbv_cancelled branch."""
+        task = _make_task()
+        ctx = CycleContext(cycle_id="cycle-fallback", worker_id="worker-fallback", task=task)
+        driver = MagicMock()
+        driver.handle_vbv_challenge.return_value = "cancelled"
+        driver.detect_page_state.return_value = "something_unexpected"
+
+        with patch("integration.orchestrator.cdp") as mock_cdp, \
+             patch("integration.orchestrator.is_payment_page_reloaded", return_value=False):
+            mock_cdp._get_driver.return_value = driver
+            action = handle_outcome(State("vbv_3ds"), task.order_queue, ctx=ctx)
+
+        # Fallback to legacy vbv_cancelled flow → swap card.
+        self.assertEqual(action[0], "retry_new_card")
+        self.assertEqual(ctx.swap_count, 1)
+
+    def test_vbv_cancel_reprobe_vbv_3ds_stays_on_3ds_path(self):
+        """vbv_3ds still present after cancel click → stay on 3DS path (await_3ds)."""
+        task = _make_task()
+        ctx = CycleContext(cycle_id="cycle-recurse", worker_id="worker-recurse", task=task)
+        driver = MagicMock()
+        driver.handle_vbv_challenge.return_value = "cancelled"
+        driver.detect_page_state.return_value = "vbv_3ds"
+
+        with patch("integration.orchestrator.cdp") as mock_cdp:
+            mock_cdp._get_driver.return_value = driver
+            action = handle_outcome(State("vbv_3ds"), task.order_queue, ctx=ctx)
+
+        # 3DS iframe still present → must NOT be remapped to vbv_cancelled
+        # (which would trigger card swap).  Caller polls again via await_3ds.
+        self.assertEqual(action, "await_3ds")
+        self.assertEqual(ctx.swap_count, 0)
 
     def test_vbv_3ds_falls_back_to_await_3ds_on_exception(self):
         task = _make_task()
