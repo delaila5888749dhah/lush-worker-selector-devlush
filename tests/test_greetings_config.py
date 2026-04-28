@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from modules.cdp import driver as drv
 
@@ -23,6 +24,11 @@ _BLUEPRINT_REQUIRED = (
 
 
 class TestLoadGreetings(unittest.TestCase):
+    def _missing_path(self) -> str:
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.rmdir(tmpdir))
+        return os.path.join(tmpdir, "missing-greetings.txt")
+
     def test_file_with_three_entries_merged_with_defaults(self):
         """tmp file with 3 entries → list contains defaults + 3 new."""
         with tempfile.NamedTemporaryFile(
@@ -46,9 +52,7 @@ class TestLoadGreetings(unittest.TestCase):
 
     def test_missing_file_falls_back_to_defaults_no_exception(self):
         """missing file → defaults only, no exception, WARNING logged."""
-        missing_path = os.path.join(tempfile.gettempdir(), "definitely_not_here_givex.txt")
-        if os.path.exists(missing_path):  # pragma: no cover - hygiene
-            os.unlink(missing_path)
+        missing_path = self._missing_path()
         with self.assertLogs(drv._log.name, level=logging.WARNING) as cm:
             merged = drv._load_greetings(missing_path)
         self.assertEqual(merged, list(drv._DEFAULT_GREETINGS))
@@ -95,15 +99,10 @@ class TestLoadGreetings(unittest.TestCase):
         ) as fh:
             fh.write("From env\n")
             path = fh.name
-        prev = os.environ.get(drv._GREETINGS_FILE_ENV)
-        os.environ[drv._GREETINGS_FILE_ENV] = path
         try:
-            merged = drv._load_greetings()
+            with patch.dict(os.environ, {drv._GREETINGS_FILE_ENV: path}):
+                merged = drv._load_greetings()
         finally:
-            if prev is None:
-                os.environ.pop(drv._GREETINGS_FILE_ENV, None)
-            else:
-                os.environ[drv._GREETINGS_FILE_ENV] = prev
             os.unlink(path)
         self.assertIn("From env", merged)
 
@@ -120,6 +119,66 @@ class TestLoadGreetings(unittest.TestCase):
             os.unlink(path)
         for required in _BLUEPRINT_REQUIRED:
             self.assertIn(required, merged)
+
+    def test_binary_file_falls_back_to_defaults_no_exception(self):
+        """Malformed UTF-8 file logs WARNING and falls back to defaults."""
+        with tempfile.NamedTemporaryFile("wb", suffix=".bin", delete=False) as fh:
+            fh.write(b"\xff\xfe\xfd")
+            path = fh.name
+        try:
+            with self.assertLogs(drv._log.name, level=logging.WARNING):
+                merged = drv._load_greetings(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(merged, list(drv._DEFAULT_GREETINGS))
+
+    def test_directory_path_falls_back_to_defaults_no_exception(self):
+        """Non-file OSError (directory path) logs WARNING and falls back."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertLogs(drv._log.name, level=logging.WARNING):
+                merged = drv._load_greetings(tmpdir)
+        self.assertEqual(merged, list(drv._DEFAULT_GREETINGS))
+
+    def test_crlf_and_blank_lines_are_normalized(self):
+        """CRLF endings and blank lines still load trimmed greetings."""
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8", newline=""
+        ) as fh:
+            fh.write("  Extra one  \r\n\r\nExtra two\r\n")
+            path = fh.name
+        try:
+            merged = drv._load_greetings(path)
+        finally:
+            os.unlink(path)
+        self.assertIn("Extra one", merged)
+        self.assertIn("Extra two", merged)
+        self.assertEqual(merged.count("Extra one"), 1)
+        self.assertEqual(merged.count("Extra two"), 1)
+
+    def test_utf8_bom_is_accepted(self):
+        """UTF-8 BOM should not leak into the first greeting."""
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8-sig"
+        ) as fh:
+            fh.write("From bom\n")
+            path = fh.name
+        try:
+            merged = drv._load_greetings(path)
+        finally:
+            os.unlink(path)
+        self.assertIn("From bom", merged)
+
+    def test_random_greeting_stays_deterministic_with_extended_list(self):
+        """Extending _GREETINGS must not change seeded choice semantics."""
+        import random
+
+        extended = list(drv._DEFAULT_GREETINGS) + ["Extra one", "Extra two"]
+        with patch.object(drv, "_GREETINGS", extended):
+            rnd_a = random.Random(42)
+            rnd_b = random.Random(42)
+            seq_a = [drv._random_greeting(rnd_a) for _ in range(10)]
+            seq_b = [drv._random_greeting(rnd_b) for _ in range(10)]
+        self.assertEqual(seq_a, seq_b)
 
 
 if __name__ == "__main__":  # pragma: no cover
