@@ -2693,7 +2693,10 @@ class GivexDriver:
                 "billing_profile.email must not be None for guest checkout"
             )
         if self._persona is not None:
-            _log.debug("run_full_cycle: persona_type=%s", self._persona.persona_type)
+            _log.debug(
+                "run_full_cycle: persona_archetype=%s persona_type=%s",
+                self._persona.persona_archetype, self._persona.persona_type,
+            )
         # Geo-check is a per-cycle invariant: skip when the worker entrypoint
         # (``integration.worker_task``) already ran it immediately after
         # ``BitBrowserSession.__enter__``.  The flag is reset implicitly per

@@ -95,13 +95,62 @@ class TestBoundaryValues(unittest.TestCase):
 
 
 class TestPersonaTypes(unittest.TestCase):
-    """Persona type is one of the allowed catalogue values."""
+    """Persona archetype is one of the spec catalogue values (Blueprint §2/§8)."""
 
-    def test_persona_type_valid(self):
+    def test_persona_archetype_valid(self):
         for seed in range(50):
             p = PersonaProfile(seed)
-            self.assertIn(p.persona_type,
-                          ("fast_typer", "moderate_typer", "slow_typer", "cautious", "impulsive"))
+            self.assertIn(p.persona_archetype, ("old", "young", "woman", "man"))
+
+    def test_persona_type_aliases_archetype(self):
+        for seed in range(20):
+            p = PersonaProfile(seed)
+            self.assertEqual(p.persona_type, p.persona_archetype)
+
+    def test_archetype_deterministic_per_seed(self):
+        """Same seed must yield the same archetype across constructions."""
+        for seed in (1, 2, 3, 42, 99, 1000):
+            self.assertEqual(
+                PersonaProfile(seed).persona_archetype,
+                PersonaProfile(seed).persona_archetype,
+            )
+
+    def test_old_slower_than_young_typing(self):
+        """Behavioural gap: aggregated 'old' typing_speed > 'young' typing_speed.
+
+        Sampling many seeds and grouping by archetype must produce a clear
+        separation because of the per-archetype typing_mult in
+        ``_ARCHETYPE_PARAMS`` (Blueprint §8 / §9).
+        """
+        old_speeds = []
+        young_speeds = []
+        for seed in range(2000):
+            p = PersonaProfile(seed)
+            if p.persona_archetype == "old":
+                old_speeds.append(p.typing_speed)
+            elif p.persona_archetype == "young":
+                young_speeds.append(p.typing_speed)
+        self.assertGreater(len(old_speeds), 50)
+        self.assertGreater(len(young_speeds), 50)
+        old_mean = sum(old_speeds) / len(old_speeds)
+        young_mean = sum(young_speeds) / len(young_speeds)
+        self.assertGreater(
+            old_mean, young_mean,
+            f"old_mean={old_mean:.3f} should exceed young_mean={young_mean:.3f}",
+        )
+
+    def test_typing_delay_uses_typing_speed(self):
+        """``get_typing_delay`` must be derived from ``typing_speed``.
+
+        The mean delay across many calls (group_index=0) should track the
+        persona's ``typing_speed`` within the ±10 % jitter band.
+        """
+        p = PersonaProfile(123)
+        samples = [p.get_typing_delay(0) for _ in range(500)]
+        mean = sum(samples) / len(samples)
+        # Mean of uniform jitter in [0.9, 1.1] is 1.0, so mean ≈ typing_speed
+        # (clamped). Allow generous tolerance for small-sample noise / clamps.
+        self.assertAlmostEqual(mean, p.typing_speed, delta=0.15)
 
 
 class TestActiveHours(unittest.TestCase):
@@ -116,9 +165,9 @@ class TestActiveHours(unittest.TestCase):
 class TestToDict(unittest.TestCase):
     def test_keys_present(self):
         d = PersonaProfile(1).to_dict()
-        for key in ("seed", "persona_type", "typing_speed", "typo_rate",
-                     "hesitation_pattern", "active_hours", "fatigue_threshold",
-                     "night_penalty_factor"):
+        for key in ("seed", "persona_type", "persona_archetype", "typing_speed",
+                     "typo_rate", "hesitation_pattern", "active_hours",
+                     "fatigue_threshold", "night_penalty_factor"):
             self.assertIn(key, d)
 
 
