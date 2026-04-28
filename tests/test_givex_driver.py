@@ -18,6 +18,7 @@ Covers:
 import time
 import types
 import datetime
+import decimal
 import unittest
 from unittest.mock import MagicMock, call, patch
 
@@ -46,6 +47,7 @@ from modules.cdp.driver import (
     SEL_GUEST_CONTINUE,
     SEL_GUEST_EMAIL,
     SEL_GUEST_HEADING,
+    SEL_ORDER_TOTAL_DISPLAY,
     SEL_RECIPIENT_EMAIL,
     SEL_RECIPIENT_NAME,
     SEL_REVIEW_CHECKOUT,
@@ -60,7 +62,7 @@ from modules.cdp.driver import (
     URL_GEO_CHECK,
     URL_PAYMENT,
 )
-from modules.common.exceptions import CDPClickError, PageStateError, SelectorTimeoutError
+from modules.common.exceptions import CDPClickError, PageStateError, SelectorTimeoutError, SessionFlaggedError
 from modules.common.types import BillingProfile, CardInfo, WorkerTask
 
 
@@ -643,6 +645,57 @@ class TestRunFullCycle(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             gd.run_full_cycle(task, billing)
+
+    def test_run_full_cycle_wires_task_amount_as_expected_total(self):
+        """E3 audit: the in-driver path must wire task.amount before submit
+        so submit_purchase enforces the DOM Order Total cross-check."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = _make_billing()
+        captured = {}
+
+        def fake_submit():
+            captured["expected_total"] = gd._expected_total
+
+        with (
+            patch.object(gd, "preflight_geo_check"),
+            patch.object(gd, "navigate_to_egift"),
+            patch.object(gd, "fill_egift_form"),
+            patch.object(gd, "add_to_cart_and_checkout"),
+            patch.object(gd, "select_guest_checkout"),
+            patch.object(gd, "fill_payment_and_billing"),
+            patch.object(gd, "submit_purchase", side_effect=fake_submit),
+            patch.object(gd, "detect_page_state", return_value="success"),
+        ):
+            gd.run_full_cycle(task, billing)
+        self.assertEqual(captured["expected_total"], decimal.Decimal(str(task.amount)))
+
+    def test_run_full_cycle_preserves_pre_wired_expected_total(self):
+        """If the orchestrator already wired a watchdog total, run_full_cycle
+        must not overwrite it with task.amount."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = _make_billing()
+        gd.set_expected_total("99.99")
+        captured = {}
+
+        def fake_submit():
+            captured["expected_total"] = gd._expected_total
+
+        with (
+            patch.object(gd, "preflight_geo_check"),
+            patch.object(gd, "navigate_to_egift"),
+            patch.object(gd, "fill_egift_form"),
+            patch.object(gd, "add_to_cart_and_checkout"),
+            patch.object(gd, "select_guest_checkout"),
+            patch.object(gd, "fill_payment_and_billing"),
+            patch.object(gd, "submit_purchase", side_effect=fake_submit),
+            patch.object(gd, "detect_page_state", return_value="success"),
+        ):
+            gd.run_full_cycle(task, billing)
+        self.assertEqual(captured["expected_total"], decimal.Decimal("99.99"))
 
 
 class TestDetectPageState(unittest.TestCase):
@@ -1780,6 +1833,136 @@ class TestSubmitPurchaseHesitates(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 gd.submit_purchase()
         mock_click.assert_not_called()
+
+
+# ── TestSubmitPurchaseOrderTotalCrossCheck ───────────────────────────────────
+
+
+class TestSubmitPurchaseOrderTotalCrossCheck(unittest.TestCase):
+    """E3 audit: DOM Order Total must match captured watchdog total before click."""
+
+    @staticmethod
+    def _gd_with_total_element(text: str) -> tuple[GivexDriver, MagicMock]:
+        selenium = _make_driver()
+        el = MagicMock()
+        el.text = text
+        # find_elements is dispatched by GivexDriver.find_elements which calls
+        # self._driver.find_elements("css selector", part) per comma-part. The
+        # default _make_driver() returns [] so we override only when queried
+        # with the *first* sub-selector of SEL_ORDER_TOTAL_DISPLAY.
+        first_part = SEL_ORDER_TOTAL_DISPLAY.split(",")[0].strip()
+
+        def fake_find_elements(by, sel):
+            if sel == first_part:
+                return [el]
+            return []
+
+        selenium.find_elements.side_effect = fake_find_elements
+        gd = GivexDriver(selenium)
+        return gd, el
+
+    def test_match_clicks_complete_purchase(self):
+        gd, _el = self._gd_with_total_element("$50.00")
+        gd.set_expected_total(50.00)
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(SEL_COMPLETE_PURCHASE)
+
+    def test_match_within_tolerance_clicks(self):
+        """Drift of exactly 0.01 is accepted; only > 0.01 raises."""
+        gd, _el = self._gd_with_total_element("$50.01")
+        gd.set_expected_total("50.00")
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(SEL_COMPLETE_PURCHASE)
+
+    def test_mismatch_raises_session_flagged_and_does_not_click(self):
+        gd, _el = self._gd_with_total_element("$55.00")
+        gd.set_expected_total(50.00)
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            with self.assertRaises(SessionFlaggedError):
+                gd.submit_purchase()
+        mock_click.assert_not_called()
+
+    def test_dom_selector_miss_raises_page_state_error(self):
+        selenium = _make_driver()
+        # Default: find_elements returns [] for every selector — DOM miss.
+        gd = GivexDriver(selenium)
+        gd.set_expected_total(50.00)
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            with self.assertRaises(PageStateError):
+                gd.submit_purchase()
+        mock_click.assert_not_called()
+
+    def test_no_expected_total_skips_check(self):
+        """Legacy callers that never wire set_expected_total still submit."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        # No set_expected_total — DOM is never queried, click proceeds.
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click, \
+             patch.object(gd, "_read_dom_order_total") as mock_read:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(SEL_COMPLETE_PURCHASE)
+        mock_read.assert_not_called()
+
+    def test_set_expected_total_rejects_non_finite(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with self.assertRaises(ValueError):
+            gd.set_expected_total(float("nan"))
+        with self.assertRaises(ValueError):
+            gd.set_expected_total(float("inf"))
+
+    def test_set_expected_total_none_clears(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total(50.00)
+        gd.set_expected_total(None)
+        # Subsequent submit must skip cross-check (no DOM read).
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click, \
+             patch.object(gd, "_read_dom_order_total") as mock_read:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(SEL_COMPLETE_PURCHASE)
+        mock_read.assert_not_called()
+
+    def test_read_dom_order_total_strips_currency_and_whitespace(self):
+        gd, _el = self._gd_with_total_element("  $1,234.56 USD ")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234.56"))
+
+    def test_read_dom_order_total_handles_accounting_negative(self):
+        gd, _el = self._gd_with_total_element("($49.99)")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("-49.99"))
+
+    def test_read_dom_order_total_unparseable_raises_page_state_error(self):
+        gd, _el = self._gd_with_total_element("Order Total: pending")
+        with self.assertRaises(PageStateError):
+            gd._read_dom_order_total()
+
+    def test_read_dom_order_total_european_decimal_comma(self):
+        """Locale-aware: bare ``49,99`` parses as 49.99, not 4999."""
+        gd, _el = self._gd_with_total_element("49,99 €")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("49.99"))
+
+    def test_read_dom_order_total_european_thousands_dot_decimal_comma(self):
+        """Locale-aware: ``1.234,56`` parses as 1234.56, not 1.23456."""
+        gd, _el = self._gd_with_total_element("€ 1.234,56")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234.56"))
+
+    def test_read_dom_order_total_us_thousands_only(self):
+        """``1,234`` (no decimal) is treated as 1234, not 1.234."""
+        gd, _el = self._gd_with_total_element("$1,234")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234"))
+
+    def test_read_dom_order_total_european_thousands_only(self):
+        """``1.234`` (no decimal) is treated as 1234, not 1.234."""
+        gd, _el = self._gd_with_total_element("1.234 €")
+        self.assertEqual(gd._read_dom_order_total(), decimal.Decimal("1234"))
 
 
 # ── TestFillEgiftFormScrolls ─────────────────────────────────────────────────

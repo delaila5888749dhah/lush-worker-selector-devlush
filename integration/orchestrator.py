@@ -1040,21 +1040,21 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
     """
     try:
         result = driver_obj.execute_script(
-            "var el = document.querySelector('.order-total, .checkout-total, [data-total]');"
+            "var el = document.querySelector('#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]');"
             "return el ? el.innerText : null;"
         )
         if isinstance(result, (int, float)):
             _validated_notify_total(worker_id, float(result))
             return
         if isinstance(result, str) and result:
-            cleaned = result.replace(',', '')
-            match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
-            if match:
-                value = float(match.group())
-                # Handle accounting-style negative numbers, e.g. "(49.99)".
-                if "(" in cleaned and ")" in cleaned and value > 0:
-                    value = -value
-                _validated_notify_total(worker_id, value)
+            # Locale-aware money parser shared with GivexDriver._read_dom_order_total
+            # so US ($1,234.56), European (1.234,56) and bare-decimal (49,99)
+            # totals all decode consistently across the watchdog DOM-fallback
+            # and submit-time cross-check paths (E3 audit).
+            from modules.cdp.driver import _parse_money_text  # noqa: PLC0415
+            parsed = _parse_money_text(result)
+            if parsed is not None:
+                _validated_notify_total(worker_id, float(parsed))
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
 
@@ -1310,6 +1310,20 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             "[trace=%s] Preflight total received for worker=%s: %s",
             _get_trace_id(), worker_id, preflight_total,
         )
+        # E3 audit: wire the Phase A total into the driver so submit_purchase
+        # can cross-check the on-page Order Total via DOM right before the
+        # irreversible COMPLETE PURCHASE click (Spec §5 line 287).  Best-
+        # effort: a wiring failure (e.g. driver does not implement the new
+        # contract in older deployments) must not block submit; the driver
+        # then falls back to the legacy no-cross-check path.
+        try:
+            cdp.set_expected_total(worker_id, preflight_total)
+        except (AttributeError, RuntimeError, ValueError) as _exp_exc:
+            _logger.warning(
+                "[trace=%s] set_expected_total failed for worker=%s: %s; "
+                "submit will proceed without DOM cross-check",
+                _get_trace_id(), worker_id, _exp_exc,
+            )
         # Re-arm watchdog for the post-submit confirmation total (Phase C).
         watchdog.enable_network_monitor(worker_id)
 

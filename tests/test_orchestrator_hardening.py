@@ -321,6 +321,16 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
         mock_wd = self._call("1,234.56")
         mock_wd.notify_total.assert_called_once_with("dom-worker", 1234.56)
 
+    def test_string_european_decimal_comma(self):
+        """Locale-aware: bare ``49,99`` must parse as 49.99, not 4999."""
+        mock_wd = self._call("49,99 €")
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 49.99)
+
+    def test_string_european_thousands_dot_decimal_comma(self):
+        """Locale-aware: ``1.234,56`` must parse as 1234.56, not 1.23456."""
+        mock_wd = self._call("€ 1.234,56")
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 1234.56)
+
     def test_accounting_style_negative(self):
         """(49.99) should be treated as -49.99 (accounting notation)."""
         mock_wd = self._call("(49.99)")
@@ -351,6 +361,25 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
             # Must not raise
             _notify_total_from_dom(driver, "dom-worker")
         mock_wd.notify_total.assert_not_called()
+
+    def test_dom_selector_includes_cws_lbl_order_total(self):
+        """E3 audit: orchestrator DOM fallback must query the same Order Total
+        node that ``GivexDriver.submit_purchase()`` cross-checks
+        (``SEL_ORDER_TOTAL_DISPLAY``).  Otherwise a page that exposes the
+        total only via ``#cws_lbl_orderTotal`` would let submit_purchase read
+        the DOM total while Phase A's DOM-only/degraded fallback cannot
+        capture the watchdog/preflight total from the same source.
+        """
+        driver = MagicMock()
+        driver.execute_script.return_value = "49.99"
+        with patch("integration.orchestrator.watchdog"):
+            _notify_total_from_dom(driver, "dom-worker")
+        driver.execute_script.assert_called_once()
+        script = driver.execute_script.call_args.args[0]
+        self.assertIn("#cws_lbl_orderTotal", script)
+        self.assertIn(".order-total", script)
+        self.assertIn(".checkout-total", script)
+        self.assertIn("[data-total]", script)
 
 
 # ── Network Listener Callback Coverage ────────────────────────────────────────

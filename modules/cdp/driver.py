@@ -17,9 +17,11 @@ import socket
 import threading
 import time
 import datetime
+import decimal
 import enum
 import importlib
 import ipaddress
+import re
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -369,6 +371,59 @@ SEL_BILLING_CITY    = "#cws_txt_billingCity"
 SEL_BILLING_ZIP     = "#cws_txt_billingPostal"
 SEL_BILLING_PHONE   = "#cws_txt_billingPhone"
 SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
+# Visible Order Total element verified against the captured watchdog/preflight
+# total in :meth:`GivexDriver.submit_purchase` right before clicking COMPLETE
+# PURCHASE so a mid-cycle cart mutation cannot reach the irreversible click
+# (Spec §5 line 287 — E3 audit).
+SEL_ORDER_TOTAL_DISPLAY = (
+    "#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]"
+)
+# Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
+_ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
+
+
+def _parse_money_text(raw):
+    """Locale-aware money parser → :class:`decimal.Decimal` or ``None``.
+
+    Handles US (``"1,234.56"``), European (``"1.234,56"``, ``"49,99"``),
+    and accounting negatives (``"($49.99)"``).  When only one separator
+    type is present, a single occurrence followed by exactly 3 digits is
+    treated as a thousands separator; otherwise as a decimal point.
+    """
+    if not raw:
+        return None
+    text = str(raw).strip()
+    neg = "(" in text and ")" in text
+    keep = re.sub(r"[^\d,.\-+]", "", text)
+    if not keep or not any(c.isdigit() for c in keep):
+        return None
+    sign = keep.startswith("-")
+    keep = keep.lstrip("+-")
+    has_dot, has_comma = "." in keep, "," in keep
+    if has_dot and has_comma:
+        if keep.rfind(",") > keep.rfind("."):
+            keep = keep.replace(".", "").replace(",", ".")
+        else:
+            keep = keep.replace(",", "")
+    elif has_dot or has_comma:
+        sep = "." if has_dot else ","
+        parts = keep.split(sep)
+        is_thousands = len(parts) > 2 or (
+            len(parts) == 2 and len(parts[-1]) == 3 and parts[0]
+        )
+        if is_thousands:
+            keep = keep.replace(sep, "")
+        elif has_comma:
+            keep = keep.replace(",", ".")
+    try:
+        value = decimal.Decimal(keep)
+    except decimal.InvalidOperation:
+        return None
+    if sign:
+        value = -value
+    if neg and value > 0:
+        value = -value
+    return value
 
 # ── Post-submit state detection (Step 5) ─────────────────────────────────────
 # Maximum seconds to wait for the TransientMonitor daemon thread to exit after
@@ -1480,6 +1535,13 @@ class GivexDriver:
         # redundant second call.  See issue: geo-check should run immediately
         # after BitBrowserSession.__enter__ (not inside run_preflight_and_fill).
         self._geo_checked_this_cycle: bool = False
+        # E3 audit: captured Phase A pricing total (watchdog/preflight) used by
+        # :meth:`submit_purchase` to cross-check the on-page Order Total via
+        # DOM right before clicking COMPLETE PURCHASE.  ``None`` means the
+        # orchestrator has not wired the expected total yet — verification is
+        # then skipped (preserves legacy callers and unit tests that drive
+        # ``submit_purchase`` directly without a Phase A capture).
+        self._expected_total: decimal.Decimal | None = None
         if persona is not None and _BehaviorStateMachine is not None:
             # Phase 5A Task 1: prefer the SM published by the behaviour
             # wrapper (via :func:`modules.delay.state.set_current_sm`)
@@ -2381,9 +2443,75 @@ class GivexDriver:
         """Backward-compatibility alias for ``fill_billing``."""
         self.fill_billing(billing_profile)
 
+    # ── Order Total cross-check (E3 audit) ──────────────────────────────────
+
+    def set_expected_total(self, value) -> None:
+        """Record the watchdog/preflight total for the submit-time cross-check.
+
+        Called by the orchestrator after Phase A's ``wait_for_total``.  ``None``
+        clears.  Raises ``ValueError`` if *value* is not a finite number.
+        """
+        if value is None:
+            self._expected_total = None
+            return
+        try:
+            # ``str()`` so a binary-float like 49.99 keeps its literal form.
+            parsed = decimal.Decimal(str(value))
+        except (decimal.InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"set_expected_total: cannot parse {value!r} as Decimal"
+            ) from exc
+        if not parsed.is_finite():
+            raise ValueError(
+                f"set_expected_total: non-finite total {value!r} rejected"
+            )
+        self._expected_total = parsed
+
+    def _read_dom_order_total(self) -> decimal.Decimal:
+        """Read the visible Order Total via :func:`_parse_money_text`.
+
+        Raises ``PageStateError`` if no element matches
+        :data:`SEL_ORDER_TOTAL_DISPLAY` or its text is unparseable.
+        """
+        elements = self.find_elements(SEL_ORDER_TOTAL_DISPLAY)
+        if not elements:
+            raise PageStateError(f"order_total:{SEL_ORDER_TOTAL_DISPLAY}")
+        try:
+            raw = elements[0].text or ""
+        except Exception as exc:  # pylint: disable=broad-except
+            raise PageStateError(
+                f"order_total:read:{_sanitize_error(str(exc))}"
+            ) from exc
+        value = _parse_money_text(raw)
+        if value is None:
+            raise PageStateError(f"order_total:parse:{SEL_ORDER_TOTAL_DISPLAY}")
+        return value
+
     def submit_purchase(self) -> None:
-        """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5)."""
+        """Hesitate 3-5s, cross-check Order Total, then click COMPLETE PURCHASE.
+
+        Spec §5 line 287.  Before the irreversible click, the DOM Order Total
+        is compared to the value wired via :meth:`set_expected_total`; drift
+        greater than :data:`_ORDER_TOTAL_TOLERANCE` raises
+        :class:`SessionFlaggedError` and skips the click.  No-op when no
+        expected total has been wired (legacy callers).
+        """
         self._hesitate_before_submit()
+        # E3: re-check Order Total *after* the hesitation window so any cart
+        # mutation during the 3-5 s pause is caught before the click.
+        if self._expected_total is not None:
+            dom_total = self._read_dom_order_total()
+            drift = abs(dom_total - self._expected_total)
+            if drift > _ORDER_TOTAL_TOLERANCE:
+                _log.warning(
+                    "submit_purchase: Order Total mismatch — dom=%s expected=%s drift=%s; "
+                    "refusing to click COMPLETE PURCHASE",
+                    dom_total, self._expected_total, drift,
+                )
+                raise SessionFlaggedError(
+                    f"Order Total mismatch: dom={dom_total} "
+                    f"expected={self._expected_total} drift={drift}"
+                )
         # Wire active-poll monitor to catch late-appearing VBV iframe after submit.
         # See PR #206 for TransientMonitor class; this is the follow-up wiring step.
         # Late import avoids A1 cross-module isolation violation flagged by
@@ -2574,5 +2702,18 @@ class GivexDriver:
         self.add_to_cart_and_checkout()
         self.select_guest_checkout(billing_profile.email)
         self.fill_payment_and_billing(task.primary_card, billing_profile)
+        # E3 audit: wire ``task.amount`` (source-of-truth expected total)
+        # before ``submit_purchase`` so the in-driver full-cycle path gets
+        # the same DOM cross-check the orchestrator path gets via
+        # ``set_expected_total``.  Skip only when a caller already pre-wired.
+        if self._expected_total is None and getattr(task, "amount", None) is not None:
+            try:
+                self.set_expected_total(task.amount)
+            except ValueError:
+                _log.warning(
+                    "run_full_cycle: task.amount=%r not parseable; "
+                    "submit will proceed without DOM cross-check",
+                    getattr(task, "amount", None),
+                )
         self.submit_purchase()
         return self.detect_page_state()
