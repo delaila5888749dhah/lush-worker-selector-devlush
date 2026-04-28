@@ -175,6 +175,58 @@ class TestLoadGreetings(unittest.TestCase):
             seq_b = [drv._random_greeting(rnd_b) for _ in range(10)]
         self.assertEqual(seq_a, seq_b)
 
+    def test_overlong_lines_are_skipped(self):
+        """Lines longer than the per-line cap are silently dropped."""
+        long_entry = "x" * (drv._GREETINGS_MAX_LINE_LENGTH + 10)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as fh:
+            fh.write(long_entry + "\nOk entry\n")
+            path = fh.name
+        try:
+            merged = drv._load_greetings(path)
+        finally:
+            os.unlink(path)
+        self.assertNotIn(long_entry, merged)
+        self.assertIn("Ok entry", merged)
+
+    def test_total_entries_are_capped(self):
+        """File with > MAX entries is truncated and a WARNING is logged."""
+        cap = drv._GREETINGS_MAX_ENTRIES
+        overflow = cap - len(drv._DEFAULT_GREETINGS) + 25
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as fh:
+            for i in range(overflow):
+                fh.write(f"Entry {i}\n")
+            path = fh.name
+        try:
+            with self.assertLogs(drv._log.name, level=logging.WARNING) as cm:
+                merged = drv._load_greetings(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(merged), cap)
+        self.assertTrue(any("truncated" in m for m in cm.output))
+
+    def test_reload_greetings_picks_up_post_import_changes(self):
+        """reload_greetings() refreshes _GREETINGS after the env var is set."""
+        original = list(drv._GREETINGS)
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as fh:
+                fh.write("Reloaded greeting\n")
+                path = fh.name
+            try:
+                with patch.dict(os.environ, {drv._GREETINGS_FILE_ENV: path}):
+                    refreshed = drv.reload_greetings()
+                self.assertIs(refreshed, drv._GREETINGS)
+                self.assertIn("Reloaded greeting", drv._GREETINGS)
+            finally:
+                os.unlink(path)
+        finally:
+            drv._GREETINGS = original
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
