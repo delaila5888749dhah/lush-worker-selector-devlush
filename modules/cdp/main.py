@@ -252,6 +252,26 @@ def submit_purchase(worker_id: str) -> None:
     _get_driver(worker_id).submit_purchase()
 
 
+def set_expected_total(worker_id: str, value) -> None:
+    """Wire the Phase A watchdog/preflight total into the registered driver.
+
+    Called by the orchestrator after :func:`modules.watchdog.main.wait_for_total`
+    captures the pricing total so :meth:`GivexDriver.submit_purchase` can
+    cross-check the on-page Order Total via DOM right before clicking
+    COMPLETE PURCHASE (Spec §5 line 287, E3 audit).
+
+    Args:
+        worker_id: Unique identifier for the worker whose driver to use.
+        value: Numeric total (``int``/``float``/``str``/``Decimal``).
+            ``None`` clears any previously-set expectation.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+        ValueError: if *value* cannot be parsed as a finite Decimal.
+    """
+    _get_driver(worker_id).set_expected_total(value)
+
+
 def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
     """Run all pre-submit purchase steps via the registered driver.
 

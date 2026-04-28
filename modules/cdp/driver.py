@@ -17,9 +17,11 @@ import socket
 import threading
 import time
 import datetime
+import decimal
 import enum
 import importlib
 import ipaddress
+import re
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -369,6 +371,19 @@ SEL_BILLING_CITY    = "#cws_txt_billingCity"
 SEL_BILLING_ZIP     = "#cws_txt_billingPostal"
 SEL_BILLING_PHONE   = "#cws_txt_billingPhone"
 SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
+# Visible Order Total element on the payment page.  Verified against the
+# captured watchdog/preflight total in :meth:`GivexDriver.submit_purchase`
+# right before clicking COMPLETE PURCHASE so a mid-cycle cart mutation or
+# concurrency leak cannot reach the irreversible click (Spec §5 line 287
+# "Kiểm tra Order Total, click COMPLETE PURCHASE." — E3 audit).
+SEL_ORDER_TOTAL_DISPLAY = (
+    "#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]"
+)
+# Tolerance for DOM-vs-expected total comparison.  Anything larger than this
+# is treated as a cart mutation and aborts the click.  Kept loose enough to
+# absorb display-rounding (e.g. 49.995 → "$50.00") yet tight enough that a
+# real price drift triggers immediately.
+_ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
 
 # ── Post-submit state detection (Step 5) ─────────────────────────────────────
 # Maximum seconds to wait for the TransientMonitor daemon thread to exit after
@@ -1480,6 +1495,13 @@ class GivexDriver:
         # redundant second call.  See issue: geo-check should run immediately
         # after BitBrowserSession.__enter__ (not inside run_preflight_and_fill).
         self._geo_checked_this_cycle: bool = False
+        # E3 audit: captured Phase A pricing total (watchdog/preflight) used by
+        # :meth:`submit_purchase` to cross-check the on-page Order Total via
+        # DOM right before clicking COMPLETE PURCHASE.  ``None`` means the
+        # orchestrator has not wired the expected total yet — verification is
+        # then skipped (preserves legacy callers and unit tests that drive
+        # ``submit_purchase`` directly without a Phase A capture).
+        self._expected_total: decimal.Decimal | None = None
         if persona is not None and _BehaviorStateMachine is not None:
             # Phase 5A Task 1: prefer the SM published by the behaviour
             # wrapper (via :func:`modules.delay.state.set_current_sm`)
@@ -2381,9 +2403,120 @@ class GivexDriver:
         """Backward-compatibility alias for ``fill_billing``."""
         self.fill_billing(billing_profile)
 
+    # ── Order Total cross-check (E3 audit) ──────────────────────────────────
+
+    def set_expected_total(self, value) -> None:
+        """Record the watchdog/preflight total expected on the payment page.
+
+        Called by the orchestrator after Phase A's ``wait_for_total`` so that
+        :meth:`submit_purchase` can cross-check the on-page Order Total via
+        DOM right before clicking COMPLETE PURCHASE (Spec §5 line 287).
+
+        Args:
+            value: Numeric total (``int``/``float``/``str``/``Decimal``).
+                ``None`` clears any previously-set expectation.
+
+        Raises:
+            ValueError: if *value* cannot be parsed as a finite Decimal.
+        """
+        if value is None:
+            self._expected_total = None
+            return
+        try:
+            # Pass through ``str()`` so a binary-float like 49.99 becomes the
+            # literal "49.99" and avoids the 49.989999999... drift that would
+            # otherwise blow past the 0.01 tolerance.
+            parsed = decimal.Decimal(str(value))
+        except (decimal.InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"set_expected_total: cannot parse {value!r} as Decimal"
+            ) from exc
+        if not parsed.is_finite():
+            raise ValueError(
+                f"set_expected_total: non-finite total {value!r} rejected"
+            )
+        self._expected_total = parsed
+
+    def _read_dom_order_total(self) -> decimal.Decimal:
+        """Read the visible Order Total from the payment page DOM.
+
+        Strips currency symbols, thousands separators, and surrounding
+        whitespace so a string like ``"  $1,234.56 USD "`` parses to
+        ``Decimal("1234.56")``.  Accounting-style negatives such as
+        ``"($49.99)"`` are returned as a negative Decimal — matching the
+        convention used by :func:`integration.orchestrator._notify_total_from_dom`.
+
+        Returns:
+            The Order Total as a :class:`decimal.Decimal`.
+
+        Raises:
+            PageStateError: if no element matches
+                :data:`SEL_ORDER_TOTAL_DISPLAY` or its text content does not
+                contain a parseable number.
+        """
+        elements = self.find_elements(SEL_ORDER_TOTAL_DISPLAY)
+        if not elements:
+            raise PageStateError(f"order_total:{SEL_ORDER_TOTAL_DISPLAY}")
+        raw = ""
+        try:
+            raw = elements[0].text or ""
+        except Exception as exc:  # pylint: disable=broad-except
+            raise PageStateError(
+                f"order_total:read:{_sanitize_error(str(exc))}"
+            ) from exc
+        cleaned = raw.replace(",", "").strip()
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
+        if not match:
+            raise PageStateError(f"order_total:parse:{SEL_ORDER_TOTAL_DISPLAY}")
+        try:
+            value = decimal.Decimal(match.group())
+        except decimal.InvalidOperation as exc:
+            raise PageStateError(
+                f"order_total:decimal:{SEL_ORDER_TOTAL_DISPLAY}"
+            ) from exc
+        # Accounting-style negative — e.g. "($49.99)" — matches the
+        # convention in integration.orchestrator._notify_total_from_dom.
+        if "(" in cleaned and ")" in cleaned and value > 0:
+            value = -value
+        return value
+
     def submit_purchase(self) -> None:
-        """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5)."""
+        """Hesitate 3-5s, cross-check Order Total, then click COMPLETE PURCHASE.
+
+        Spec §5 line 287: "Kiểm tra Order Total, click COMPLETE PURCHASE."
+        After the hesitation pause and *before* the irreversible bounding-box
+        click, the on-page Order Total is read from the DOM and compared to
+        the captured Phase A watchdog/preflight total stored via
+        :meth:`set_expected_total`.  If they differ by more than
+        :data:`_ORDER_TOTAL_TOLERANCE` the click is *not* dispatched and
+        :class:`SessionFlaggedError` is raised so the orchestrator can abort
+        the cycle.  When no expected total has been wired (legacy callers /
+        unit-tests that drive ``submit_purchase`` directly), the check is
+        skipped to preserve the existing behaviour.
+
+        Raises:
+            SessionFlaggedError: DOM total drifts from expected by more than
+                ``_ORDER_TOTAL_TOLERANCE``.
+            PageStateError: ``SEL_ORDER_TOTAL_DISPLAY`` matches no element or
+                its text cannot be parsed (E3 acceptance criteria).
+        """
         self._hesitate_before_submit()
+        # E3 audit: cross-check DOM Order Total against captured watchdog/
+        # preflight total *after* the hesitation window so any cart mutation
+        # that occurred during the 3-5 s pause is caught before the click.
+        if self._expected_total is not None:
+            dom_total = self._read_dom_order_total()
+            drift = abs(dom_total - self._expected_total)
+            if drift > _ORDER_TOTAL_TOLERANCE:
+                _log.warning(
+                    "submit_purchase: Order Total mismatch — dom=%s expected=%s drift=%s; "
+                    "refusing to click COMPLETE PURCHASE",
+                    dom_total, self._expected_total, drift,
+                )
+                raise SessionFlaggedError(
+                    f"Order Total mismatch: dom={dom_total} "
+                    f"expected={self._expected_total} drift={drift}"
+                )
         # Wire active-poll monitor to catch late-appearing VBV iframe after submit.
         # See PR #206 for TransientMonitor class; this is the follow-up wiring step.
         # Late import avoids A1 cross-module isolation violation flagged by

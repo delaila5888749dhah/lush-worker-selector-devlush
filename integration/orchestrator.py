@@ -1310,6 +1310,20 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             "[trace=%s] Preflight total received for worker=%s: %s",
             _get_trace_id(), worker_id, preflight_total,
         )
+        # E3 audit: wire the Phase A total into the driver so submit_purchase
+        # can cross-check the on-page Order Total via DOM right before the
+        # irreversible COMPLETE PURCHASE click (Spec §5 line 287).  Best-
+        # effort: a wiring failure (e.g. driver does not implement the new
+        # contract in older deployments) must not block submit; the driver
+        # then falls back to the legacy no-cross-check path.
+        try:
+            cdp.set_expected_total(worker_id, preflight_total)
+        except (AttributeError, RuntimeError, ValueError) as _exp_exc:
+            _logger.warning(
+                "[trace=%s] set_expected_total failed for worker=%s: %s; "
+                "submit will proceed without DOM cross-check",
+                _get_trace_id(), worker_id, _exp_exc,
+            )
         # Re-arm watchdog for the post-submit confirmation total (Phase C).
         watchdog.enable_network_monitor(worker_id)
 
