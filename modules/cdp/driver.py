@@ -20,10 +20,12 @@ import datetime
 import enum
 import importlib
 import ipaddress
+import re as _re
 import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
+from decimal import Decimal, InvalidOperation
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -369,6 +371,20 @@ SEL_BILLING_CITY    = "#cws_txt_billingCity"
 SEL_BILLING_ZIP     = "#cws_txt_billingPostal"
 SEL_BILLING_PHONE   = "#cws_txt_billingPhone"
 SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
+# E3 audit: visible "Order Total" element on the payment page.  Used by
+# :meth:`GivexDriver._read_dom_order_total` to cross-check the cart total
+# against the watchdog/preflight total RIGHT BEFORE the irreversible
+# COMPLETE PURCHASE click — Spec §5 line 287 ("Kiểm tra Order Total,
+# click COMPLETE PURCHASE.").  Comma-list mirrors the orchestrator's
+# DOM-fallback so the same Givex- and class-based locators are honoured.
+SEL_ORDER_TOTAL_DISPLAY = (
+    "#cws_lbl_total, #cws_lbl_orderTotal, "
+    ".order-total, .checkout-total, [data-total]"
+)
+# Tolerance for DOM-vs-watchdog total comparison (one cent).  Anything
+# greater than this raises :class:`SessionFlaggedError` and aborts the
+# submit click (E3 audit).
+_ORDER_TOTAL_TOLERANCE = Decimal("0.01")
 
 # ── Post-submit state detection (Step 5) ─────────────────────────────────────
 # Maximum seconds to wait for the TransientMonitor daemon thread to exit after
@@ -1417,6 +1433,11 @@ class GivexDriver:
         # redundant second call.  See issue: geo-check should run immediately
         # after BitBrowserSession.__enter__ (not inside run_preflight_and_fill).
         self._geo_checked_this_cycle: bool = False
+        # E3 audit: watchdog/preflight Order Total captured by Phase A, set
+        # via :meth:`set_expected_total` from the orchestrator.  When not
+        # ``None``, :meth:`submit_purchase` cross-checks the on-page DOM
+        # total against this value before the irreversible click.
+        self._expected_total: "Decimal | None" = None
         if persona is not None and _BehaviorStateMachine is not None:
             # Phase 5A Task 1: prefer the SM published by the behaviour
             # wrapper (via :func:`modules.delay.state.set_current_sm`)
@@ -2318,9 +2339,109 @@ class GivexDriver:
         """Backward-compatibility alias for ``fill_billing``."""
         self.fill_billing(billing_profile)
 
+    def set_expected_total(self, value) -> None:
+        """Record the watchdog/preflight Order Total for the next submit (E3 audit).
+
+        Called by the orchestrator after Phase A's ``watchdog.wait_for_total``
+        succeeds, so that :meth:`submit_purchase` can cross-check the on-page
+        DOM Order Total before clicking COMPLETE PURCHASE (Spec §5 line 287).
+
+        Pass ``None`` to clear a previously-set value.
+
+        Raises:
+            ValueError: if *value* cannot be coerced to :class:`~decimal.Decimal`.
+        """
+        if value is None:
+            self._expected_total = None
+            return
+        try:
+            self._expected_total = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise ValueError(
+                f"set_expected_total: cannot coerce {value!r} to Decimal"
+            ) from exc
+
+    def _read_dom_order_total(self) -> Decimal:
+        """Read the on-page Order Total element and return it as a Decimal.
+
+        Strips currency symbols, thousands separators and surrounding
+        whitespace.  Accounting-style negative numbers (``"(49.99)"``) are
+        recognised and returned as a negative ``Decimal``.
+
+        Raises:
+            PageStateError: if :data:`SEL_ORDER_TOTAL_DISPLAY` matches no
+                element, the matched element exposes no usable text, or the
+                text cannot be parsed as a number.
+        """
+        elements = self.find_elements(SEL_ORDER_TOTAL_DISPLAY)
+        if not elements:
+            raise PageStateError(
+                f"order_total_missing:{SEL_ORDER_TOTAL_DISPLAY}"
+            )
+        raw = ""
+        try:
+            raw = elements[0].text or ""
+        except Exception:  # pylint: disable=broad-except
+            raw = ""
+        if not raw or not raw.strip():
+            # Fallback for elements whose text is rendered via innerText or
+            # carried in a ``data-total`` attribute (matches the orchestrator
+            # DOM fallback in ``_notify_total_from_dom``).
+            try:
+                raw = self._driver.execute_script(
+                    "return arguments[0].innerText || "
+                    "arguments[0].textContent || "
+                    "arguments[0].getAttribute('data-total') || '';",
+                    elements[0],
+                ) or ""
+            except Exception:  # pylint: disable=broad-except
+                raw = ""
+        cleaned = (raw or "").replace(",", "").strip()
+        match = _re.search(r"-?\d+(?:\.\d+)?", cleaned)
+        if not match:
+            raise PageStateError(f"order_total_unparseable:{raw!r}")
+        try:
+            value = Decimal(match.group())
+        except InvalidOperation as exc:
+            raise PageStateError(
+                f"order_total_unparseable:{raw!r}"
+            ) from exc
+        if "(" in cleaned and ")" in cleaned and value > 0:
+            value = -value
+        return value
+
     def submit_purchase(self) -> None:
-        """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5)."""
+        """Hesitate 3-5s then click the Complete Purchase button (Blueprint §5).
+
+        E3 audit: when an expected total has been recorded via
+        :meth:`set_expected_total` (Phase A watchdog/preflight), the on-page
+        Order Total is re-read from the DOM right before the click.  If the
+        difference exceeds :data:`_ORDER_TOTAL_TOLERANCE` (one cent) the
+        click is aborted and :class:`SessionFlaggedError` is raised — Spec
+        §5 line 287: "Kiểm tra Order Total, click COMPLETE PURCHASE."
+        """
         self._hesitate_before_submit()
+        # E3 audit: cross-check on-page Order Total vs captured watchdog
+        # total BEFORE the irreversible click.  If the cart mutated between
+        # Phase A and submit (or a concurrency leak yielded the wrong
+        # worker's total), abort instead of charging the card.  The DOM
+        # selector miss raises ``PageStateError`` (subclass of
+        # ``SessionFlaggedError``) so the runtime treats it as a flagged
+        # session and cleans up the cycle.
+        if self._expected_total is not None:
+            dom_total = self._read_dom_order_total()
+            expected = self._expected_total
+            if abs(dom_total - expected) > _ORDER_TOTAL_TOLERANCE:
+                _log.error(
+                    "submit_purchase: Order Total mismatch — dom=%s "
+                    "expected=%s tolerance=%s; aborting click",
+                    dom_total, expected, _ORDER_TOTAL_TOLERANCE,
+                )
+                raise SessionFlaggedError(
+                    f"Order Total mismatch before COMPLETE PURCHASE: "
+                    f"dom={dom_total} expected={expected} "
+                    f"tolerance={_ORDER_TOTAL_TOLERANCE}"
+                )
         # Wire active-poll monitor to catch late-appearing VBV iframe after submit.
         # See PR #206 for TransientMonitor class; this is the follow-up wiring step.
         # Late import avoids A1 cross-module isolation violation flagged by

@@ -1782,6 +1782,146 @@ class TestSubmitPurchaseHesitates(unittest.TestCase):
         mock_click.assert_not_called()
 
 
+# ── TestSubmitPurchaseOrderTotalCheck ────────────────────────────────────────
+
+
+class TestSubmitPurchaseOrderTotalCheck(unittest.TestCase):
+    """submit_purchase cross-checks DOM Order Total vs watchdog total (E3 audit)."""
+
+    def _make_total_element(self, text: str):
+        el = MagicMock()
+        el.text = text
+        return el
+
+    def test_set_expected_total_accepts_numeric_types(self):
+        gd = GivexDriver(_make_driver())
+        from decimal import Decimal as _D
+        gd.set_expected_total(49.99)
+        self.assertEqual(gd._expected_total, _D("49.99"))  # pylint: disable=protected-access
+        gd.set_expected_total("12.34")
+        self.assertEqual(gd._expected_total, _D("12.34"))  # pylint: disable=protected-access
+        gd.set_expected_total(_D("7.50"))
+        self.assertEqual(gd._expected_total, _D("7.50"))  # pylint: disable=protected-access
+
+    def test_set_expected_total_none_clears(self):
+        gd = GivexDriver(_make_driver())
+        gd.set_expected_total(10)
+        gd.set_expected_total(None)
+        self.assertIsNone(gd._expected_total)  # pylint: disable=protected-access
+
+    def test_set_expected_total_rejects_garbage(self):
+        gd = GivexDriver(_make_driver())
+        with self.assertRaises(ValueError):
+            gd.set_expected_total("not-a-number")
+
+    def test_submit_purchase_no_expected_total_skips_dom_check(self):
+        """When set_expected_total was never called, click proceeds and DOM is not read."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "_read_dom_order_total") as mock_read, \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            gd.submit_purchase()
+        mock_read.assert_not_called()
+        mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
+
+    def test_submit_purchase_match_clicks(self):
+        """DOM total within 0.01 of expected → click proceeds."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("49.99")
+        from decimal import Decimal as _D
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "_read_dom_order_total", return_value=_D("50.00")), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
+
+    def test_submit_purchase_exact_match_clicks(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total(25)
+        from decimal import Decimal as _D
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "_read_dom_order_total", return_value=_D("25.00")), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            gd.submit_purchase()
+        mock_click.assert_called_once_with(drv.SEL_COMPLETE_PURCHASE)
+
+    def test_submit_purchase_mismatch_raises_sfe_no_click(self):
+        """DOM total differs > 0.01 → SessionFlaggedError, bbox click NOT invoked."""
+        from modules.common.exceptions import SessionFlaggedError
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("50.00")
+        from decimal import Decimal as _D
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "_read_dom_order_total", return_value=_D("99.99")), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            with self.assertRaises(SessionFlaggedError):
+                gd.submit_purchase()
+        mock_click.assert_not_called()
+
+    def test_submit_purchase_dom_selector_miss_raises_pagestate_no_click(self):
+        """DOM selector matches nothing → PageStateError, bbox click NOT invoked."""
+        selenium = _make_driver()
+        # Default _make_driver returns no elements for any find_elements query.
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("10.00")
+        with patch.object(gd, "_hesitate_before_submit"), \
+             patch.object(gd, "bounding_box_click") as mock_click:
+            with self.assertRaises(PageStateError):
+                gd.submit_purchase()
+        mock_click.assert_not_called()
+
+    def test_read_dom_order_total_strips_currency(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [self._make_total_element("$1,234.56")]
+        gd = GivexDriver(selenium)
+        from decimal import Decimal as _D
+        self.assertEqual(gd._read_dom_order_total(), _D("1234.56"))  # pylint: disable=protected-access
+
+    def test_read_dom_order_total_handles_accounting_negative(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [self._make_total_element("$(49.99)")]
+        gd = GivexDriver(selenium)
+        from decimal import Decimal as _D
+        self.assertEqual(gd._read_dom_order_total(), _D("-49.99"))  # pylint: disable=protected-access
+
+    def test_read_dom_order_total_falls_back_to_innertext_when_text_blank(self):
+        selenium = _make_driver()
+        el = MagicMock()
+        el.text = ""
+        selenium.find_elements.return_value = [el]
+        selenium.execute_script.return_value = "USD 75.00"
+        gd = GivexDriver(selenium)
+        from decimal import Decimal as _D
+        self.assertEqual(gd._read_dom_order_total(), _D("75.00"))  # pylint: disable=protected-access
+
+    def test_read_dom_order_total_unparseable_raises_pagestate(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [self._make_total_element("???")]
+        gd = GivexDriver(selenium)
+        with self.assertRaises(PageStateError):
+            gd._read_dom_order_total()  # pylint: disable=protected-access
+
+    def test_submit_purchase_dom_check_runs_after_hesitate_before_click(self):
+        """Order: hesitate → DOM read → bbox click."""
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        gd.set_expected_total("50.00")
+        from decimal import Decimal as _D
+        call_log = []
+        with patch.object(gd, "_hesitate_before_submit",
+                          side_effect=lambda: call_log.append("hesitate")), \
+             patch.object(gd, "_read_dom_order_total",
+                          side_effect=lambda: (call_log.append("read"), _D("50.00"))[1]), \
+             patch.object(gd, "bounding_box_click",
+                          side_effect=lambda s: call_log.append(("click", s))):
+            gd.submit_purchase()
+        self.assertEqual(call_log, ["hesitate", "read", ("click", drv.SEL_COMPLETE_PURCHASE)])
+
+
 # ── TestFillEgiftFormScrolls ─────────────────────────────────────────────────
 
 

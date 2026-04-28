@@ -1310,6 +1310,20 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             "[trace=%s] Preflight total received for worker=%s: %s",
             _get_trace_id(), worker_id, preflight_total,
         )
+        # E3 audit: forward the captured total to the driver so that
+        # ``submit_purchase`` can cross-check the on-page DOM Order Total
+        # right before the irreversible COMPLETE PURCHASE click
+        # (Spec §5 line 287).  Best-effort: a wiring failure must not
+        # abort the cycle on its own, but is logged so operators can
+        # spot drivers that don't expose ``set_expected_total``.
+        try:
+            cdp.set_expected_total(worker_id, preflight_total)
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.warning(
+                "[trace=%s] cdp.set_expected_total failed for worker=%s; "
+                "DOM-vs-watchdog cross-check disabled for this cycle",
+                _get_trace_id(), worker_id, exc_info=True,
+            )
         # Re-arm watchdog for the post-submit confirmation total (Phase C).
         watchdog.enable_network_monitor(worker_id)
 
