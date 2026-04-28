@@ -1087,6 +1087,11 @@ def _popup_xpath_click_close(driver) -> bool:
     Native Selenium ``element.click()`` is intentionally **not** used in
     the FSM handler path — it would emit ``isTrusted=False`` events and
     degrade anti-bot quality (audit finding [D7]).
+
+    Each candidate element is first scrolled into the viewport via
+    ``scrollIntoView({block:'center'})`` before its bounding rect is read,
+    so an off-screen close control still receives a hit-testable click —
+    matching the implicit behavior of Selenium ``element.click()``.
     """
     base = getattr(driver, "_driver", driver)
     try:
@@ -1098,6 +1103,7 @@ def _popup_xpath_click_close(driver) -> bool:
     for element in elements:
         try:
             rect = base.execute_script(
+                "arguments[0].scrollIntoView({block:'center',inline:'center'});"
                 "var r=arguments[0].getBoundingClientRect();"
                 "return {left:r.left,top:r.top,width:r.width,height:r.height};",
                 element,
@@ -1197,7 +1203,21 @@ def handle_something_wrong_popup(
                 attempt, max_retries, exc,
             )
             if _popup_xpath_click_close(driver):
-                closed = True
+                # D7 review follow-up: a successful CDP dispatch does NOT
+                # guarantee the popup actually closed (the click may have
+                # landed on an occluded/transformed element). Verify the
+                # popup is gone before declaring success, matching the
+                # CSS-path retry contract below.
+                if not _popup_still_present(
+                        base, locator, _POPUP_CLOSE_VERIFY_TIMEOUT):
+                    closed = True
+                else:
+                    last_exc = exc
+                    _log.warning(
+                        "popup XPath close dispatched but popup still"
+                        " present (attempt %d/%d)",
+                        attempt, max_retries,
+                    )
             else:
                 last_exc = exc
             break

@@ -646,7 +646,12 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
             clear_card_fields_cdp=MagicMock(),
         )
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            # First call = initial presence check (popup present);
+            # second call = post-XPath-dispatch verify (popup gone).
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(),
+                TimeoutException(),
+            ]
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
@@ -687,6 +692,34 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
         self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
         wrapper.clear_card_fields_cdp.assert_not_called()
 
+    def test_xpath_dispatch_succeeds_but_popup_still_present_returns_close_failed(self):
+        """D7 review: a successful CDP dispatch on an occluded/off-screen
+        element must NOT be reported as ``CLOSED_NEEDS_REFILL`` if the popup
+        is still present after the dispatch."""
+        fake_el = MagicMock()
+        base_driver = MagicMock()
+        base_driver.find_elements.return_value = [fake_el]
+        base_driver.execute_script.return_value = {
+            "left": 100.0, "top": 200.0, "width": 50.0, "height": 30.0,
+        }
+        wrapper = SimpleNamespace(
+            _driver=base_driver,
+            _rnd=__import__("random").Random(42),
+            bounding_box_click=MagicMock(
+                side_effect=SelectorTimeoutError(SEL_POPUP_CLOSE, 0)
+            ),
+            clear_card_fields_cdp=MagicMock(),
+        )
+        with patch.object(drv, "WebDriverWait") as mock_wait:
+            # Initial presence check + post-dispatch verify both find the
+            # popup → dispatch was a no-op against the close button.
+            mock_wait.return_value.until.return_value = MagicMock()
+            result = handle_something_wrong_popup(wrapper, timeout=0.1)
+
+        self.assertIs(result, PopupCloseOutcome.CLOSE_FAILED)
+        # clear must NOT run when the popup is still present.
+        wrapper.clear_card_fields_cdp.assert_not_called()
+
     def test_xpath_fallback_tries_next_element_when_first_click_raises(self):
         """If the first XPath match's CDP dispatch raises, fallback must try the next."""
         bad_el = MagicMock()
@@ -715,7 +748,12 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
             clear_card_fields_cdp=MagicMock(),
         )
         with patch.object(drv, "WebDriverWait") as mock_wait:
-            mock_wait.return_value.until.return_value = MagicMock()
+            # First call = initial presence check (popup present);
+            # second call = post-XPath-dispatch verify (popup gone).
+            mock_wait.return_value.until.side_effect = [
+                MagicMock(),
+                TimeoutException(),
+            ]
             result = handle_something_wrong_popup(wrapper, timeout=0.1)
 
         self.assertIs(result, PopupCloseOutcome.CLOSED_NEEDS_REFILL)
