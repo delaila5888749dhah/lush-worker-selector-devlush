@@ -163,10 +163,12 @@ class TestNightTypoRateWiring(unittest.TestCase):
         gd = GivexDriver(selenium, persona=persona)
         return gd, selenium, element, persona
 
-    def _count_typos(self, gd, n_keystrokes: int) -> int:
+    def _count_typos(self, gd, n_keystrokes: int, **kwargs) -> int:
         """Drive ``_realistic_type_field`` once with ``n_keystrokes`` chars
         and return how many typos the keyboard layer would inject given the
-        ``typo_rate`` it was passed."""
+        ``typo_rate`` it was passed.  ``**kwargs`` is forwarded to
+        ``_realistic_type_field`` so callers can exercise the explicit
+        ``typo_rate=`` override path."""
         from unittest.mock import patch  # noqa: PLC0415
 
         captured: dict = {}
@@ -181,32 +183,52 @@ class TestNightTypoRateWiring(unittest.TestCase):
         value = "a" * n_keystrokes
         with patch("modules.cdp.driver._type_value", side_effect=fake_tv), \
              patch("time.sleep"):
-            gd._realistic_type_field("#f", value)  # noqa: SLF001
+            gd._realistic_type_field("#f", value, **kwargs)  # noqa: SLF001
         # Expected typo count is rate × N (the keyboard layer Bernoulli-tests
         # rnd.random() < eff per keystroke). For N≥10000 the law of large
         # numbers makes the ratio comparison stable.
         return int(captured["typo_rate"] * n_keystrokes)
 
     def test_night_typo_rate_higher_than_day(self):
-        """Mock UTC offset → NIGHT, count typos over N≥10000 keystrokes."""
+        """Exercise the real ``get_time_state`` path: pin ``time.gmtime``
+        to a fixed UTC and choose ``utc_offset_hours`` so the local hour
+        falls inside the persona's NIGHT window. The NIGHT bonus must
+        actually be additively layered on top of the persona base rate."""
+        import time as _time  # noqa: PLC0415
         from unittest.mock import patch  # noqa: PLC0415
 
         gd, _selenium, _element, _persona = self._build_driver()
         n = 10_000
-        # DAY: night bonus is 0.0
-        with patch.object(
-            gd._temporal, "get_night_typo_increase", return_value=0.0,  # noqa: SLF001
-        ):
+        # Fix UTC to 12:00:00 so that a UTC offset of 0 → local=12:00 (DAY,
+        # inside DAY_START..DAY_END = 6..21) and an offset of -13 →
+        # local=23:00 (NIGHT, outside the day window).
+        fixed_utc = _time.struct_time((2026, 1, 1, 12, 0, 0, 3, 1, 0))
+        with patch("modules.delay.temporal.time.gmtime", return_value=fixed_utc):
+            # DAY path: utc offset 0 → local 12:00 → DAY → bonus 0.0.
+            gd._utc_offset_hours = 0  # noqa: SLF001
+            self.assertEqual(
+                gd._temporal.get_time_state(  # noqa: SLF001
+                    gd._utc_offset_hours,  # noqa: SLF001
+                ),
+                "DAY",
+            )
             day_typos = self._count_typos(gd, n)
-        # NIGHT: bonus is 1–2% absolute (use mid-range 0.015)
-        with patch.object(
-            gd._temporal, "get_night_typo_increase", return_value=0.015,  # noqa: SLF001
-        ):
+            # NIGHT path: utc offset -13 → local 23:00 → NIGHT → bonus
+            # uniform(0.01, 0.02), additive on top of persona typo_rate=0.02.
+            gd._utc_offset_hours = -13  # noqa: SLF001
+            self.assertEqual(
+                gd._temporal.get_time_state(  # noqa: SLF001
+                    gd._utc_offset_hours,  # noqa: SLF001
+                ),
+                "NIGHT",
+            )
             night_typos = self._count_typos(gd, n)
+        # Persona base = 0.02 → DAY = 200/10000. NIGHT bonus is in
+        # [0.01, 0.02] absolute → NIGHT total in [0.03, 0.04] → ≥ 300/10000.
+        self.assertEqual(day_typos, 200)
+        self.assertGreaterEqual(night_typos, 300)
+        self.assertLessEqual(night_typos, 400)
         self.assertGreater(night_typos, day_typos)
-        # _count_typos returns int(rate × N) deterministically. With persona
-        # typo_rate=0.02 and NIGHT bonus 0.015: DAY=200, NIGHT=350 → diff=150.
-        self.assertEqual(night_typos - day_typos, 150)
 
     def test_typo_rate_zero_in_critical_section(self):
         """While the engine forbids delay (VBV / POST_ACTION / critical
@@ -230,6 +252,25 @@ class TestNightTypoRateWiring(unittest.TestCase):
             gd._sm.transition("VBV")  # noqa: SLF001
             self.assertFalse(gd._engine.is_delay_permitted())  # noqa: SLF001
             self.assertEqual(self._count_typos(gd, 10_000), 0)
+
+    def test_explicit_typo_rate_override_zeroed_in_critical_section(self):
+        """Even an explicit ``typo_rate=`` override from the caller must be
+        forced to 0 while the engine forbids delay — the critical-section
+        guard is authoritative for ``_realistic_type_field``."""
+        gd, _selenium, _element, _persona = self._build_driver()
+        # Sanity: outside critical section the explicit override is honoured.
+        self.assertEqual(self._count_typos(gd, 10_000, typo_rate=0.5), 5_000)
+        # In Phase-9 critical section, a high explicit rate must be zeroed.
+        gd._sm.set_critical_section(True)  # noqa: SLF001
+        self.assertFalse(gd._engine.is_delay_permitted())  # noqa: SLF001
+        self.assertEqual(self._count_typos(gd, 10_000, typo_rate=0.5), 0)
+        gd._sm.set_critical_section(False)  # noqa: SLF001
+        # In VBV the explicit override must also be zeroed.
+        gd._sm.transition("FILLING_FORM")  # noqa: SLF001
+        gd._sm.transition("PAYMENT")  # noqa: SLF001
+        gd._sm.transition("VBV")  # noqa: SLF001
+        self.assertFalse(gd._engine.is_delay_permitted())  # noqa: SLF001
+        self.assertEqual(self._count_typos(gd, 10_000, typo_rate=0.5), 0)
 
 
 # ---------------------------------------------------------------------------
