@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 7.2
+spec-version: 8.2
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward

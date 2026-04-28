@@ -1,6 +1,6 @@
 # Interface Contract — Core (FSM)
 
-spec-version: 7.0
+spec-version: 8.0
 
 > **v7.0 Breaking Changes:**
 > - Added CDPError exception type to modules.common.exceptions (raised by GivexDriver.clear_card_fields_cdp on CDP failure — P1-4)
