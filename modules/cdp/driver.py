@@ -448,16 +448,16 @@ def _load_greetings(path: str | None = None) -> list[str]:
     file_path = path if path is not None else os.environ.get(_GREETINGS_FILE_ENV)
     if not file_path:
         return greetings
-    seen = set(greetings)
     try:
         with open(file_path, "r", encoding="utf-8-sig") as fh:
+            seen = set(greetings)
             for line in fh:
                 entry = line.strip()
                 if not entry or entry in seen:
                     continue
                 greetings.append(entry)
                 seen.add(entry)
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         _log.warning(
             "_load_greetings: cannot read %s=%r (%s); using defaults",
             _GREETINGS_FILE_ENV,

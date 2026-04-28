@@ -8,6 +8,7 @@ raising — when the file is missing or malformed.
 
 import logging
 import os
+import random
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -24,11 +25,6 @@ _BLUEPRINT_REQUIRED = (
 
 
 class TestLoadGreetings(unittest.TestCase):
-    def _missing_path(self) -> str:
-        tmpdir = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.rmdir(tmpdir))
-        return os.path.join(tmpdir, "missing-greetings.txt")
-
     def test_file_with_three_entries_merged_with_defaults(self):
         """tmp file with 3 entries → list contains defaults + 3 new."""
         with tempfile.NamedTemporaryFile(
@@ -52,19 +48,20 @@ class TestLoadGreetings(unittest.TestCase):
 
     def test_missing_file_falls_back_to_defaults_no_exception(self):
         """missing file → defaults only, no exception, WARNING logged."""
-        missing_path = self._missing_path()
-        with self.assertLogs(drv._log.name, level=logging.WARNING) as cm:
-            merged = drv._load_greetings(missing_path)
-        self.assertEqual(merged, list(drv._DEFAULT_GREETINGS))
-        # WARNING must name the env var and include the offending path so
-        # operators can diagnose misconfiguration from the log.
-        self.assertTrue(
-            any(
-                drv._GREETINGS_FILE_ENV in m and missing_path in m
-                for m in cm.output
-            ),
-            f"expected warning naming {drv._GREETINGS_FILE_ENV} and {missing_path}; got {cm.output!r}",
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = os.path.join(tmpdir, "missing-greetings.txt")
+            with self.assertLogs(drv._log.name, level=logging.WARNING) as cm:
+                merged = drv._load_greetings(missing_path)
+            self.assertEqual(merged, list(drv._DEFAULT_GREETINGS))
+            # WARNING must name the env var and include the offending path so
+            # operators can diagnose misconfiguration from the log.
+            self.assertTrue(
+                any(
+                    drv._GREETINGS_FILE_ENV in m and missing_path in m
+                    for m in cm.output
+                ),
+                f"expected warning naming {drv._GREETINGS_FILE_ENV} and {missing_path}; got {cm.output!r}",
+            )
 
     def test_empty_file_falls_back_to_defaults(self):
         """empty file → defaults only."""
@@ -99,11 +96,11 @@ class TestLoadGreetings(unittest.TestCase):
         ) as fh:
             fh.write("From env\n")
             path = fh.name
-        try:
-            with patch.dict(os.environ, {drv._GREETINGS_FILE_ENV: path}):
+        with patch.dict(os.environ, {drv._GREETINGS_FILE_ENV: path}):
+            try:
                 merged = drv._load_greetings()
-        finally:
-            os.unlink(path)
+            finally:
+                os.unlink(path)
         self.assertIn("From env", merged)
 
     def test_blueprint_greetings_remain_after_merge(self):
@@ -170,8 +167,6 @@ class TestLoadGreetings(unittest.TestCase):
 
     def test_random_greeting_stays_deterministic_with_extended_list(self):
         """Extending _GREETINGS must not change seeded choice semantics."""
-        import random
-
         extended = list(drv._DEFAULT_GREETINGS) + ["Extra one", "Extra two"]
         with patch.object(drv, "_GREETINGS", extended):
             rnd_a = random.Random(42)
