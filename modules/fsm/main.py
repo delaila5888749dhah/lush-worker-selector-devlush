@@ -160,7 +160,6 @@ def transition_for_worker(
         if target_state not in entry["states"]:
             raise InvalidTransitionError(f"state '{target_state}' not registered for worker '{worker_id}'")
         current = entry["current"]
-        prev_name = current.name if current is not None else None
         if current is not None:
             current_name = current.name
             if current_name in TERMINAL_STATES:
@@ -182,7 +181,7 @@ def transition_for_worker(
         entry["current"] = entry["states"][target_state]
         _logger.info(
             "FSM_TRANSITION worker_id=%s from=%s to=%s trace_id=%s",
-            worker_id, prev_name if prev_name is not None else "-", target_state, _trace,
+            worker_id, current.name if current is not None else "-", target_state, _trace,
         )
         return entry["current"]
 
