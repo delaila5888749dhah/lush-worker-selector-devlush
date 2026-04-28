@@ -748,15 +748,10 @@ def _validate_billing_pool_preflight() -> None:  # pylint: disable=protected-acc
             )
     _logger.info("Billing pool preflight OK: dir=%s", pool_dir)
 def is_dom_only_watchdog_allowed() -> bool:
-    """Return ``True`` when ``ALLOW_DOM_ONLY_WATCHDOG`` is enabled.
+    """Return ``True`` when ``ALLOW_DOM_ONLY_WATCHDOG`` is set to 1/true/yes.
 
-    Production deployments must default to **False** (strict mode: a stock
-    Selenium driver lacking ``add_cdp_listener`` aborts bring-up).  Operators
-    can opt into the documented degraded mode by setting the env var to one of
-    ``1``, ``true``, or ``yes`` (case-insensitive).  When enabled the network
-    watchdog falls back to DOM polling for both Phase A (pre-fill pricing) and
-    Phase C (post-submit confirmation) signal sources — see
-    ``docs/audit/addendum-selenium-flavor.md`` for the full contract.
+    Documented degraded-mode opt-in for drivers lacking ``add_cdp_listener``.
+    See ``docs/audit/addendum-selenium-flavor.md`` for the full contract.
     """
     return os.environ.get("ALLOW_DOM_ONLY_WATCHDOG", "").strip().lower() in (
         "1",
@@ -768,53 +763,31 @@ def is_dom_only_watchdog_allowed() -> bool:
 def probe_cdp_listener_support(driver_obj: object) -> bool:
     """Assert *driver_obj* exposes a callable ``add_cdp_listener`` method.
 
-    Returns ``True`` when the driver exposes a usable CDP listener hook.
-    Returns ``False`` when the hook is **missing** but the operator has
-    explicitly opted into the documented DOM-only fallback by setting the
-    ``ALLOW_DOM_ONLY_WATCHDOG`` env var; in that case a WARNING is logged so
-    the degraded mode is auditable in production logs.
-
-    Raises ``RuntimeError`` with a clear operator message when the hook is
-    missing **and** the fallback is not allowed, so that mis-configured
-    Selenium flavors are caught at driver bring-up time rather than silently
-    at the first network-watchdog attach (which currently surfaces as a
-    10-second Phase A cycle timeout — see issue F2 audit).
+    Returns ``True`` when the hook is callable. Returns ``False`` and logs a
+    WARNING when the hook is missing **and** ``ALLOW_DOM_ONLY_WATCHDOG`` is
+    set (DOM-polling fallback for Phase A + Phase C signal sources). Raises
+    ``RuntimeError`` otherwise so misconfigured Selenium flavors are caught
+    at driver bring-up time rather than silently as a 10s Phase A cycle
+    timeout (issue F2 audit).
 
     Called from ``integration/worker_task.py`` immediately after the
-    seleniumwire driver is constructed so the probe fires once per cycle
-    before any CDP listener is registered.  Keep this helper as the single
-    source of truth for the check; callers should not re-implement it.
-
-    Runtime contract:
-
-    * Strict mode (``ALLOW_DOM_ONLY_WATCHDOG`` unset or false) → driver
-      MUST expose a callable ``add_cdp_listener`` (selenium-wire==5.1.0,
-      undetected-chromedriver, or any equivalent that ships the hook).
-    * Fallback mode (``ALLOW_DOM_ONLY_WATCHDOG=1``) → driver MAY lack the
-      hook; the orchestrator switches to DOM polling for Phase A *and*
-      Phase C signal sources.  Production deployments should treat this as
-      a degraded mode and re-install the pinned Selenium flavor.
+    seleniumwire driver is constructed; single source of truth for the check.
     """
     if (hasattr(driver_obj, "add_cdp_listener")
             and callable(getattr(driver_obj, "add_cdp_listener", None))):
         return True
     if is_dom_only_watchdog_allowed():
         _logger.warning(
-            "Driver does not expose a callable 'add_cdp_listener'; "
-            "ALLOW_DOM_ONLY_WATCHDOG=1 is enabled, falling back to DOM "
-            "polling for BOTH Phase A (pre-fill pricing) and Phase C "
-            "(post-submit confirmation) signal sources.  This is a "
-            "DEGRADED mode — re-install selenium-wire==5.1.0 (or an "
-            "equivalent CDP-capable Selenium flavor) to restore the "
-            "Network.responseReceived path."
+            "Driver lacks callable 'add_cdp_listener'; "
+            "ALLOW_DOM_ONLY_WATCHDOG=1 — DOM polling for Phase A + Phase C. "
+            "DEGRADED mode; re-install selenium-wire==5.1.0 to restore CDP."
         )
         return False
     raise RuntimeError(
         "Driver does not expose a callable 'add_cdp_listener'. "
-        "Ensure the pinned Selenium flavor (selenium-wire==5.1.0) "
-        "is installed and the driver is a seleniumwire WebDriver instance, "
-        "or set ALLOW_DOM_ONLY_WATCHDOG=1 to opt into the documented "
-        "DOM-polling fallback (see docs/audit/addendum-selenium-flavor.md)."
+        "Install selenium-wire==5.1.0 (or equivalent CDP-capable flavor), "
+        "or set ALLOW_DOM_ONLY_WATCHDOG=1 to opt into DOM-polling fallback "
+        "(see docs/audit/addendum-selenium-flavor.md)."
     )
 
 
