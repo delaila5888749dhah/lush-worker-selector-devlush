@@ -1798,7 +1798,18 @@ class GivexDriver:
             self._send_keys_fallback(sel, val)
             return
         typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
-        if self._persona and self._temporal:
+        # Phase 10 §10 / audit [L3]: NIGHT typo bonus is gated by the engine's
+        # delay-permitted check so that VBV / POST_ACTION / Phase-9
+        # CRITICAL_SECTION never see *any* typo behaviour modulation. This
+        # also zeroes the persona base rate while in critical section, since
+        # typo injection is itself a behaviour modulation that must not fire
+        # in safe-zone contracts.
+        delay_permitted = (
+            self._engine is None or self._engine.is_delay_permitted()
+        )
+        if not delay_permitted:
+            typo_prob = 0.0
+        elif self._persona and self._temporal:
             typo_prob += self._temporal.get_night_typo_increase(self._utc_offset_hours)
         if typo_rate is not None:
             typo_prob = typo_rate

@@ -141,6 +141,97 @@ class TestSafePointCompatibility(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 2b. NIGHT typo bonus wiring (audit [L3] / Blueprint §10)
+# ---------------------------------------------------------------------------
+class TestNightTypoRateWiring(unittest.TestCase):
+    """``_realistic_type_field`` must wire ``get_night_typo_increase`` and
+    suppress all typo modulation while delay is not permitted."""
+
+    @staticmethod
+    def _build_driver(seed: int = 7):
+        from unittest.mock import MagicMock  # noqa: PLC0415
+
+        from modules.cdp.driver import GivexDriver  # noqa: PLC0415
+
+        selenium = MagicMock()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        persona = PersonaProfile(seed)
+        # Pin the persona base typo rate to a deterministic value so the
+        # DAY/NIGHT delta is dominated by the NIGHT bonus (1–2% absolute).
+        persona.typo_rate = 0.02
+        gd = GivexDriver(selenium, persona=persona)
+        return gd, selenium, element, persona
+
+    def _count_typos(self, gd, n_keystrokes: int) -> int:
+        """Drive ``_realistic_type_field`` once with ``n_keystrokes`` chars
+        and return how many typos the keyboard layer would inject given the
+        ``typo_rate`` it was passed."""
+        from unittest.mock import patch  # noqa: PLC0415
+
+        captured: dict = {}
+
+        def fake_tv(driver, element, value, rnd, **kw):
+            captured["typo_rate"] = kw.get("typo_rate", 0.0)
+            return {
+                "typed_chars": len(value), "typos_injected": 0,
+                "corrections_made": 0, "mode": "cdp_key",
+            }
+
+        value = "a" * n_keystrokes
+        with patch("modules.cdp.driver._type_value", side_effect=fake_tv), \
+             patch("time.sleep"):
+            gd._realistic_type_field("#f", value)  # noqa: SLF001
+        # Expected typo count is rate × N (the keyboard layer Bernoulli-tests
+        # rnd.random() < eff per keystroke). For N≥10000 the law of large
+        # numbers makes the ratio comparison stable.
+        return int(captured["typo_rate"] * n_keystrokes)
+
+    def test_night_typo_rate_higher_than_day(self):
+        """Mock UTC offset → NIGHT, count typos over N≥10000 keystrokes."""
+        from unittest.mock import patch  # noqa: PLC0415
+
+        gd, _selenium, _element, _persona = self._build_driver()
+        n = 10_000
+        # DAY: night bonus is 0.0
+        with patch.object(
+            gd._temporal, "get_night_typo_increase", return_value=0.0,  # noqa: SLF001
+        ):
+            day_typos = self._count_typos(gd, n)
+        # NIGHT: bonus is 1–2% absolute (use mid-range 0.015)
+        with patch.object(
+            gd._temporal, "get_night_typo_increase", return_value=0.015,  # noqa: SLF001
+        ):
+            night_typos = self._count_typos(gd, n)
+        self.assertGreater(night_typos, day_typos)
+        # The bonus should be at least ~50 over 10k keystrokes (0.015×10000=150)
+        self.assertGreaterEqual(night_typos - day_typos, 50)
+
+    def test_typo_rate_zero_in_critical_section(self):
+        """While the engine forbids delay (VBV / POST_ACTION / critical
+        flag), no typo modulation — neither the persona base nor the NIGHT
+        bonus — must reach the keyboard layer."""
+        from unittest.mock import patch  # noqa: PLC0415
+
+        gd, _selenium, _element, _persona = self._build_driver()
+        # Force NIGHT so the bonus is non-zero and would otherwise add to typo_rate
+        with patch.object(
+            gd._temporal, "get_night_typo_increase", return_value=0.02,  # noqa: SLF001
+        ):
+            # Phase-9 critical section flag (works in any safe state)
+            gd._sm.set_critical_section(True)  # noqa: SLF001
+            self.assertFalse(gd._engine.is_delay_permitted())  # noqa: SLF001
+            self.assertEqual(self._count_typos(gd, 10_000), 0)
+            gd._sm.set_critical_section(False)  # noqa: SLF001
+            # VBV state — also blocks delay
+            gd._sm.transition("FILLING_FORM")  # noqa: SLF001
+            gd._sm.transition("PAYMENT")  # noqa: SLF001
+            gd._sm.transition("VBV")  # noqa: SLF001
+            self.assertFalse(gd._engine.is_delay_permitted())  # noqa: SLF001
+            self.assertEqual(self._count_typos(gd, 10_000), 0)
+
+
+# ---------------------------------------------------------------------------
 # 3. Watchdog headroom
 # ---------------------------------------------------------------------------
 class TestWatchdogHeadroom(unittest.TestCase):
