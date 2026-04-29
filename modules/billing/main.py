@@ -144,7 +144,14 @@ def _pool_dir() -> Path:
         for raw_prefix in os.environ.get("BILLING_ALLOWED_PREFIXES", "").split(";"):
             raw_prefix = raw_prefix.strip()
             if raw_prefix:
-                extra_allowed_prefixes.append(Path(raw_prefix).resolve())
+                try:
+                    extra_allowed_prefixes.append(Path(raw_prefix).resolve())
+                except (OSError, RuntimeError, ValueError) as exc:
+                    _logger.warning(
+                        "Ignoring invalid BILLING_ALLOWED_PREFIXES entry %r: %s",
+                        raw_prefix,
+                        exc,
+                    )
         if _is_production_mode():
             allowed_prefixes = (project_root, Path("/data"), *extra_allowed_prefixes)
             tmp_path = Path("/tmp").resolve()

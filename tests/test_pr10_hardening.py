@@ -121,22 +121,16 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
         self._prod_patch.stop()
 
     @staticmethod
-    def _external_tempdir():
-        """Return a temp dir outside the project root and outside /tmp.
-
-        Production mode intentionally rejects /tmp, so these tests need a
-        writable non-/tmp base.  CI may override the default with
-        BILLING_PREFIX_TEST_TMPDIR if the checkout parent is not writable.
-        """
+    def _repo_tempdir():
+        """Return a temp dir inside the checkout for path hardening tests."""
         repo_root = Path(__file__).resolve().parents[1]
-        base = Path(
-            os.environ.get("BILLING_PREFIX_TEST_TMPDIR", str(repo_root.parent))
-        ).resolve()
-        if not os.access(base, os.W_OK):
-            raise unittest.SkipTest(
-                f"External billing prefix test base is not writable: {base}"
-            )
-        return tempfile.TemporaryDirectory(dir=str(base))
+        if not os.access(repo_root, os.W_OK):
+            raise unittest.SkipTest(f"Repository root is not writable: {repo_root}")
+        return tempfile.TemporaryDirectory(dir=str(repo_root))
+
+    @staticmethod
+    def _fake_billing_file(base: str) -> Path:
+        return Path(base) / "fake_project" / "modules" / "billing" / "main.py"
 
     def test_tmp_path_rejected_in_production(self):
         """/tmp/... BILLING_POOL_DIR falls back to default billing_pool in production."""
@@ -164,37 +158,54 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
 
     def test_allowed_external_prefix_accepted_in_production(self):
         """BILLING_POOL_DIR under BILLING_ALLOWED_PREFIXES is accepted."""
-        with self._external_tempdir() as root:
-            pool_dir = Path(root) / "billing_pool"
-            with patch.dict(
-                os.environ,
-                {
-                    "BILLING_POOL_DIR": str(pool_dir),
-                    "BILLING_ALLOWED_PREFIXES": root,
-                },
+        with self._repo_tempdir() as base:
+            external_root = Path(base) / "external"
+            external_root.mkdir()
+            pool_dir = external_root / "billing_pool"
+            with (
+                patch.object(billing, "__file__", str(self._fake_billing_file(base))),
+                patch.dict(
+                    os.environ,
+                    {
+                        "BILLING_POOL_DIR": str(pool_dir),
+                        "BILLING_ALLOWED_PREFIXES": str(external_root),
+                    },
+                ),
             ):
                 result = billing._pool_dir()
         self.assertEqual(result, pool_dir.resolve())
 
     def test_semicolon_separated_allowed_prefixes_accept_second_match(self):
         """Multiple BILLING_ALLOWED_PREFIXES entries separated by ';' work."""
-        with self._external_tempdir() as first, self._external_tempdir() as second:
-            pool_dir = Path(second) / "billing_pool"
-            with patch.dict(
-                os.environ,
-                {
-                    "BILLING_POOL_DIR": str(pool_dir),
-                    "BILLING_ALLOWED_PREFIXES": f"{first}; {second}",
-                },
+        with self._repo_tempdir() as base:
+            first = Path(base) / "first_external"
+            second = Path(base) / "second_external"
+            first.mkdir()
+            second.mkdir()
+            pool_dir = second / "billing_pool"
+            with (
+                patch.object(billing, "__file__", str(self._fake_billing_file(base))),
+                patch.dict(
+                    os.environ,
+                    {
+                        "BILLING_POOL_DIR": str(pool_dir),
+                        "BILLING_ALLOWED_PREFIXES": f"{first}; {second}",
+                    },
+                ),
             ):
                 result = billing._pool_dir()
         self.assertEqual(result, pool_dir.resolve())
 
     def test_unlisted_external_path_still_rejected_in_production(self):
         """External BILLING_POOL_DIR without an allowed prefix falls back."""
-        with self._external_tempdir() as root:
-            pool_dir = Path(root) / "billing_pool"
-            with patch.dict(os.environ, {"BILLING_POOL_DIR": str(pool_dir)}):
+        with self._repo_tempdir() as base:
+            external_root = Path(base) / "external"
+            external_root.mkdir()
+            pool_dir = external_root / "billing_pool"
+            with (
+                patch.object(billing, "__file__", str(self._fake_billing_file(base))),
+                patch.dict(os.environ, {"BILLING_POOL_DIR": str(pool_dir)}),
+            ):
                 with self.assertLogs(
                     "modules.billing.main",
                     level="WARNING",
