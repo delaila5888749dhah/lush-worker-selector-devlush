@@ -1415,9 +1415,10 @@ class TestResolveMmdbPath(unittest.TestCase):
             {"GEOIP_DB_PATH": "/from/geoip.mmdb", "MAXMIND_DB_PATH": "/from/maxmind.mmdb"},
             clear=True,
         ):
-            self.assertEqual(drv.resolve_mmdb_path(), "/from/geoip.mmdb")
+            resolved_path = drv.resolve_mmdb_path()
+            self.assertEqual(resolved_path, "/from/geoip.mmdb")
             self.assertEqual(
-                drv.resolve_mmdb_path(),
+                resolved_path,
                 drv._resolve_mmdb_path(),  # pylint: disable=protected-access
             )
 
