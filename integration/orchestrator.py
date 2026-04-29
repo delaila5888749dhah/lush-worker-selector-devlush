@@ -944,6 +944,7 @@ def _emit_billing_audit_event(
     worker_id: str,
     task_id: str | None,
     zip_code: str | int | None,
+    selection_method: str | None = None,
 ) -> None:
     """Emit a structured audit event for a successful billing profile selection.
 
@@ -952,6 +953,15 @@ def _emit_billing_audit_event(
     - profile_id is a one-way SHA-256 hash of 'first_name|last_name|zip_code'.
     - requested_zip is the raw zip_code argument (proxy zip), logged for tracing only.
 
+    Selection method contract (Blueprint §12):
+    - ``selection_method`` reflects the *actual outcome* of the selection, not
+      the request intent.  When provided by the caller it is used verbatim.
+    - When ``selection_method`` is ``None`` (legacy callers), the value is
+      inferred from whether a non-blank zip was requested.  This preserves
+      backward compatibility for direct callers that have not yet adopted the
+      outcome-based propagation; the canonical ``_select_profile_with_audit``
+      call-site always supplies the actual outcome.
+
     Non-interference contract:
     - This function MUST only be called AFTER billing.select_profile() has returned.
     - Exceptions are caught and logged as warnings; they never propagate.
@@ -959,10 +969,12 @@ def _emit_billing_audit_event(
     """
     try:
         requested_zip = None if zip_code is None else str(zip_code)
-        # Preserve the raw requested zip for tracing, but treat blank/whitespace
-        # input as "no zip" when determining the selection strategy.
-        has_requested_zip = bool(requested_zip and requested_zip.strip())
-        selection_method = "zip_match" if has_requested_zip else "round_robin"
+        if selection_method is None:
+            # Legacy fallback for direct callers (e.g., privacy/PAN-mask tests)
+            # that do not propagate the actual outcome.  Treat blank/whitespace
+            # input as "no zip" when determining the selection strategy.
+            has_requested_zip = bool(requested_zip and requested_zip.strip())
+            selection_method = "zip_match" if has_requested_zip else "round_robin"
         event = {
             "event_type": "billing_selection",
             "worker_id": worker_id,
@@ -995,16 +1007,32 @@ def _select_profile_with_audit(
     This helper is the single call-site for ``_emit_billing_audit_event`` so
     both ``run_cycle`` and direct ``run_payment_step(..., _profile=None)``
     paths share the same "select -> emit" contract without duplicating logic.
+
+    The actual selection outcome (``zip_match`` vs ``round_robin``) is
+    captured via the ``_method_out`` out-channel so the audit event reflects
+    what really happened — not just whether a zip was requested (Blueprint §12).
     """
     if include_worker_id:
         profile = billing.select_profile(zip_code, worker_id=worker_id)
     else:
         profile = billing.select_profile(zip_code)
+    # Read the *actual* outcome via billing's thread-local side channel.
+    # In production select_profile() sets this on every successful return.
+    # When ``billing`` is wholesale-mocked in tests the accessor may return
+    # a non-string MagicMock; coerce that to ``None`` so the audit emitter
+    # falls back to its legacy intent-based label and existing tests stay
+    # compatible.
+    try:
+        raw_method = billing.get_last_selection_method()
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        raw_method = None
+    selection_method = raw_method if isinstance(raw_method, str) else None
     _emit_billing_audit_event(
         profile=profile,
         worker_id=worker_id,
         task_id=task_id,
         zip_code=zip_code,
+        selection_method=selection_method,
     )
     return profile
 

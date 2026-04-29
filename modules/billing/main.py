@@ -8,7 +8,7 @@ import random
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from modules.common.exceptions import CycleExhaustedError
 from modules.common.types import BillingProfile
@@ -16,6 +16,10 @@ from modules.common.types import BillingProfile
 _lock = threading.Lock()
 _LOAD_LOCK = threading.Lock()  # serializes cold-start pool loading; exactly one thread reads disk
 _local_fill_rng = threading.local()  # pylint: disable=invalid-name
+# Thread-local channel used by select_profile() to publish the *actual* selection
+# outcome (zip_match / round_robin) so callers (e.g., audit pipeline) can label
+# events based on what really happened, not just on request intent (Blueprint §12).
+_last_selection_method = threading.local()  # pylint: disable=invalid-name
 _profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
 _reload_requested: bool = False  # pylint: disable=invalid-name
@@ -41,6 +45,13 @@ class WorkerBillingState:
     profiles: List[BillingProfile]
     index: int = 0
     rng: random.Random = field(default_factory=random.Random)
+
+# ── Selection method labels ───────────────────────────────────────────────
+# These constants identify the *actual outcome* of a profile selection, used
+# by the audit pipeline (Blueprint §12) to record whether a profile was picked
+# via zip-affinity match or via the round-robin sequential pointer fallback.
+SELECTION_METHOD_ZIP_MATCH = "zip_match"
+SELECTION_METHOD_ROUND_ROBIN = "round_robin"
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "hotmail.com")
 _PHONE_FIRST_DIGITS = "23456789"
@@ -485,17 +496,47 @@ def select_profile(
         CycleExhaustedError: If the billing pool is empty or below the
             configured minimum threshold.
         ValueError: If *zip_code* has an unsupported type.
+
+    Side effect:
+        The *actual* selection method (``SELECTION_METHOD_ZIP_MATCH`` or
+        ``SELECTION_METHOD_ROUND_ROBIN``) is recorded in a thread-local
+        accessible via :func:`get_last_selection_method`.  Used by the audit
+        pipeline (Blueprint §12) to label the outcome correctly even when a
+        zip was requested but no profile in the pool matched it.
     """
     if worker_id is not None:
-        return _select_profile_per_worker(zip_code, worker_id)
-    return _select_profile_legacy(zip_code)
+        profile, method = _select_profile_per_worker(zip_code, worker_id)
+    else:
+        profile, method = _select_profile_legacy(zip_code)
+    _last_selection_method.value = method
+    return profile
+
+
+def get_last_selection_method() -> Optional[str]:
+    """Return the selection method recorded by the most recent successful
+    :func:`select_profile` call on the current thread, or ``None`` if no such
+    call has been made yet on this thread.
+
+    This is the canonical way for callers (e.g., the audit pipeline) to learn
+    the *actual outcome* of selection — ``SELECTION_METHOD_ZIP_MATCH`` when a
+    profile matching the requested zip was found, ``SELECTION_METHOD_ROUND_ROBIN``
+    otherwise (including the "zip requested but no match" fallback case).
+    """
+    return getattr(_last_selection_method, "value", None)
 
 
 def _select_profile_per_worker(
     zip_code: str | int | None,
     worker_id: str,
-) -> BillingProfile:
-    """Per-worker profile selection with independent shuffled list + index pointer."""
+) -> Tuple[BillingProfile, str]:
+    """Per-worker profile selection with independent shuffled list + index pointer.
+
+    Returns a ``(profile, selection_method)`` tuple where ``selection_method``
+    reflects the *actual* outcome (``SELECTION_METHOD_ZIP_MATCH`` when a profile
+    matching the requested zip was found, ``SELECTION_METHOD_ROUND_ROBIN``
+    otherwise — including the case where a zip was requested but no profile in
+    the pool matched it).
+    """
     normalized_zip = _normalize_zip(zip_code)
     state = get_worker_state(worker_id)
 
@@ -524,7 +565,7 @@ def _select_profile_per_worker(
                         profile = _fill_missing(profile)
                         profiles[i] = profile
                     # Do NOT advance state.index (blueprint rule).
-                    return profile
+                    return profile, SELECTION_METHOD_ZIP_MATCH
 
         # No zip match (or no zip requested): use sequential pointer, advance it.
         profile = profiles[state.index]
@@ -532,11 +573,17 @@ def _select_profile_per_worker(
             profile = _fill_missing(profile)
             profiles[state.index] = profile
         state.index = (state.index + 1) % n
-        return profile
+        return profile, SELECTION_METHOD_ROUND_ROBIN
 
 
-def _select_profile_legacy(zip_code: str | int | None) -> BillingProfile:
-    """Legacy global-deque profile selection (unchanged behaviour)."""
+def _select_profile_legacy(zip_code: str | int | None) -> Tuple[BillingProfile, str]:
+    """Legacy global-deque profile selection (unchanged behaviour).
+
+    Returns a ``(profile, selection_method)`` tuple where ``selection_method``
+    reflects the *actual* outcome (``SELECTION_METHOD_ZIP_MATCH`` when a profile
+    matching the requested zip was found, ``SELECTION_METHOD_ROUND_ROBIN``
+    otherwise).
+    """
     global _profiles, _reload_requested  # pylint: disable=global-statement
     normalized_zip = _normalize_zip(zip_code)
 
@@ -591,11 +638,11 @@ def _select_profile_legacy(zip_code: str | int | None) -> BillingProfile:
             if profile.phone is None or profile.email is None:
                 profile = _fill_missing(profile)
             _profiles.append(profile)
-            return profile
+            return profile, SELECTION_METHOD_ROUND_ROBIN
 
         profile = _profiles[index]
         del _profiles[index]
         if profile.phone is None or profile.email is None:
             profile = _fill_missing(profile)
         _profiles.append(profile)
-        return profile
+        return profile, SELECTION_METHOD_ZIP_MATCH

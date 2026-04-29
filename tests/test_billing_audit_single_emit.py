@@ -162,5 +162,91 @@ class BillingAuditGrepAcceptanceTests(unittest.TestCase):
         self.assertNotIn("_emit_billing_audit_event(", run_cycle_src)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Issue #N — selection_method must reflect the *actual* outcome of profile
+# selection (zip_match vs round_robin), not just whether a zip was requested.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _audit_profile(name: str, zip_code: str) -> "BillingProfile":
+    return BillingProfile(
+        first_name=name, last_name="User", address="1 Test St",
+        city="Testcity", state="NY", zip_code=zip_code,
+        phone="2125550001", email="test@example.com",
+    )
+
+
+def _set_audit_master_pool(profiles: list) -> None:
+    """Populate the billing master pool directly so a real select_profile
+    call can run end-to-end without disk I/O."""
+    from modules.billing import main as billing_main
+    with billing_main._MASTER_POOL_LOCK:  # pylint: disable=protected-access
+        billing_main._MASTER_POOL = list(profiles)  # pylint: disable=protected-access
+        billing_main._MASTER_POOL_LOADED = True  # pylint: disable=protected-access
+
+
+class BillingAuditOutcomeMethodTests(unittest.TestCase):
+    """selection_method must reflect the *actual* outcome — including the
+    case where a zip was requested but no profile in the pool matched it
+    (must label as round_robin, not zip_match)."""
+
+    def setUp(self):
+        from modules.billing import main as billing_main
+        billing_main._reset_state()  # pylint: disable=protected-access
+
+    def tearDown(self):
+        from modules.billing import main as billing_main
+        billing_main._reset_state()  # pylint: disable=protected-access
+
+    def _capture_audit_event(self, zip_code: str, worker_id: str) -> dict:
+        captured: list[str] = []
+
+        def _audit_info(fmt, *args, **_kw):
+            msg = fmt % args if args else fmt
+            if "billing_selection" in msg:
+                captured.append(msg)
+
+        with patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit:
+            mock_audit.info.side_effect = _audit_info
+            orchestrator._select_profile_with_audit(  # pylint: disable=protected-access
+                zip_code=zip_code,
+                worker_id=worker_id,
+                task_id="t-method",
+                include_worker_id=True,
+            )
+
+        self.assertEqual(
+            len(captured), 1,
+            msg=f"Expected exactly 1 billing_selection event, got {len(captured)}",
+        )
+        payload = captured[0].split("billing_selection ", 1)[1]
+        return json.loads(payload)
+
+    def test_audit_method_round_robin_when_zip_no_match(self):
+        """Pool of profiles whose zips ≠ requested zip → audit must label
+        the outcome as ``round_robin`` (the actual sequential fallback that
+        executed), not ``zip_match`` (which is just the request intent)."""
+        _set_audit_master_pool([
+            _audit_profile("A", "11111"),
+            _audit_profile("B", "22222"),
+            _audit_profile("C", "33333"),
+        ])
+        evt = self._capture_audit_event(zip_code="99999", worker_id="w-rr")
+        self.assertEqual(evt["selection_method"], "round_robin")
+        self.assertEqual(evt["requested_zip"], "99999")
+
+    def test_audit_method_zip_match_when_zip_hits(self):
+        """Pool contains a profile with matching zip → audit must label the
+        outcome as ``zip_match``."""
+        _set_audit_master_pool([
+            _audit_profile("A", "00001"),
+            _audit_profile("Match", "10001"),
+            _audit_profile("B", "00002"),
+        ])
+        evt = self._capture_audit_event(zip_code="10001", worker_id="w-zm")
+        self.assertEqual(evt["selection_method"], "zip_match")
+        self.assertEqual(evt["requested_zip"], "10001")
+
+
 if __name__ == "__main__":
     unittest.main()
