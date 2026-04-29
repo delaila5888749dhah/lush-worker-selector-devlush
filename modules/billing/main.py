@@ -298,7 +298,7 @@ def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
             try:
                 with path.open("r", encoding="utf-8") as handle:
                     n_opened += 1
-                    for line in handle:
+                    for line_no, line in enumerate(handle, start=1):
                         n_lines += 1
                         if len(profiles) >= _MAX_BILLING_PROFILES:
                             break
@@ -308,6 +308,11 @@ def _read_profiles_from_disk() -> collections.deque[BillingProfile]:
                             profiles.append(profile)
                         elif line.strip():
                             n_rejected += 1
+                            # DEBUG-only: filename + line number, no raw content (PII).
+                            _logger.debug(
+                                "Billing pool reject %s:L%d (malformed)",
+                                path.name, line_no,
+                            )
             except UnicodeDecodeError as exc:
                 n_skipped += 1
                 _logger.warning("Skipping %s: decode error (%s).", path.name, exc)
