@@ -151,5 +151,97 @@ class ParseLineSkipMalformedTests(unittest.TestCase):
         self.assertIn("malformed line", full_log)
 
 
+class ParseLineEmailValidationTests(unittest.TestCase):
+    def _write(self, text: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def _load_one(self, line: str):
+        path = self._write(line + "\n")
+        loader = FileTaskLoader(file_path=path)
+        return loader, loader.get_task("w1")
+
+    def test_parse_rejects_email_without_at(self):
+        line = "badmail|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        full_log = "\n".join(cm.output)
+        self.assertIn("invalid email/amount", full_log)
+        # Privacy: log message must not echo the recipient string.
+        self.assertNotIn("badmail", full_log)
+
+    def test_parse_rejects_email_no_domain(self):
+        line = "a@|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        full_log = "\n".join(cm.output)
+        self.assertIn("invalid email/amount", full_log)
+        self.assertNotIn("a@", full_log)
+
+    def test_parse_rejects_email_no_tld(self):
+        line = "a@b|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        full_log = "\n".join(cm.output)
+        self.assertIn("invalid email/amount", full_log)
+        self.assertNotIn("a@b", full_log)
+
+    def test_parse_accepts_spec_example(self):
+        line = "nguyenvana@yahoo.com|100|4111111111111111|07|27|123"
+        _, task = self._load_one(line)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.recipient_email, "nguyenvana@yahoo.com")
+        self.assertEqual(task.amount, 100)
+
+    def test_parse_rejects_consecutive_dots_in_domain(self):
+        line = "a@b..com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_rejects_domain_starting_with_dot(self):
+        line = "a@.example.com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_rejects_domain_label_starting_with_hyphen(self):
+        line = "a@-example.com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_rejects_domain_label_ending_with_hyphen(self):
+        line = "a@example-.com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_accepts_plus_tag_and_subdomain(self):
+        line = "user.name+tag@mail.example.co.uk|100|4111111111111111|07|27|123"
+        _, task = self._load_one(line)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.recipient_email, "user.name+tag@mail.example.co.uk")
+
+    def test_parse_strips_utf8_bom_on_first_line(self):
+        # A UTF-8 BOM at the very start of the file must not leak into the
+        # parsed recipient email; the loader normalizes it via utf-8-sig.
+        line = "\ufeffuser@example.com|100|4111111111111111|07|27|123"
+        _, task = self._load_one(line)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.recipient_email, "user@example.com")
+
+
 if __name__ == "__main__":
     unittest.main()

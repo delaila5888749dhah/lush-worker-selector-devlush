@@ -26,6 +26,12 @@ _RE_EXP_MONTH = re.compile(r"^(0?[1-9]|1[0-2])$")
 _RE_EXP_YEAR = re.compile(r"^\d{2}$|^\d{4}$")
 # _RE_CVV: 3 or 4 digits (3 for most brands, 4 for AmEx).
 _RE_CVV = re.compile(r"^\d{3,4}$")
+# _RE_EMAIL: format-only email validation — local@domain.tld where each domain
+# label starts/ends with an alphanumeric (no leading/trailing hyphen or dot, no
+# consecutive dots) and the TLD is at least two letters.
+_RE_EMAIL = re.compile(
+    r"^[^@\s]+@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
 
 
 def _make_card(fields: List[str]) -> CardInfo:
@@ -71,7 +77,10 @@ class FileTaskLoader:
 
     def _load(self) -> None:
         try:
-            with open(self._file_path, encoding="utf-8") as fh:
+            # ``utf-8-sig`` transparently strips a UTF-8 BOM (``\ufeff``) from
+            # the first line so a BOM-prefixed recipient like
+            # ``\ufeffuser@example.com`` cannot leak into ``recipient_email``.
+            with open(self._file_path, encoding="utf-8-sig") as fh:
                 raw = fh.readlines()
         except OSError as exc:
             _logger.error("FileTaskLoader: cannot open %r: %s", self._file_path, exc)
@@ -94,7 +103,7 @@ class FileTaskLoader:
         except ValueError:
             _logger.warning("FileTaskLoader: bad amount on line %d", line_no)
             return None
-        if amount <= 0 or not recipient:
+        if amount <= 0 or not recipient or not _RE_EMAIL.match(recipient):
             _logger.warning(
                 "FileTaskLoader: invalid email/amount on line %d", line_no
             )
