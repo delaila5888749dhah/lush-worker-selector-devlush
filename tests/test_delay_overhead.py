@@ -1,9 +1,19 @@
 """Benchmark for §8.6 overhead invariant (Phase 5B Task 5).
 
-Measures **pure bookkeeping overhead** of the behavior wrapper —
-state-machine transitions, RNG draws, accumulator math, log-formatting —
-relative to a baseline task. Real ``time.sleep`` calls inside
-``inject_step_delay`` are stubbed out so we measure CPU time only.
+.. note::
+
+    This benchmark measures **CPU bookkeeping overhead with stubbed
+    sleeps** — *not* real wall-clock overhead. Real ``time.sleep``
+    calls inside ``inject_step_delay`` are replaced with a no-op,
+    so the elapsed time captured here reflects only the wrapper's
+    bookkeeping work (state-machine transitions, RNG draws,
+    accumulator math, log-formatting) measured against a baseline
+    CPU task. The 15% ratio asserted below is therefore **relative
+    to the baseline CPU workload**, not to ``MAX_STEP_DELAY``.
+
+    For the real wall-clock comparison against ``MAX_STEP_DELAY``
+    (the actual Blueprint §8.6 budget) see
+    :mod:`tests.test_delay_overhead_realtime`.
 
 Per Blueprint §8.6 the bookkeeping must add ≤ 15% on top of the baseline
 task. CI runners flake under load, so the test allows one retry with a
