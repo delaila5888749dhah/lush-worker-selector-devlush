@@ -87,6 +87,37 @@ _log = logging.getLogger(__name__)
 _MAXMIND_READER = None  # pylint: disable=invalid-name
 _MAXMIND_READER_LOCK = threading.Lock()
 
+# Default location for the GeoLite2 City database (relative to repo root).
+_DEFAULT_MMDB_PATH = "data/GeoLite2-City.mmdb"
+
+
+def _resolve_mmdb_path() -> str:
+    """Return the configured MaxMind database file path.
+
+    Resolution order:
+
+    1. ``GEOIP_DB_PATH`` environment variable (preferred / canonical name).
+    2. ``MAXMIND_DB_PATH`` environment variable (legacy alias accepted for
+       compatibility with the spec / blueprint and older operator scripts).
+    3. The built-in default ``data/GeoLite2-City.mmdb``.
+
+    When both env vars are set, ``GEOIP_DB_PATH`` wins.
+    """
+    return (
+        os.environ.get("GEOIP_DB_PATH")
+        or os.environ.get("MAXMIND_DB_PATH")
+        or _DEFAULT_MMDB_PATH
+    )
+
+
+# Public alias of :func:`_resolve_mmdb_path` for cross-module use (e.g. the
+# application entrypoint).  The underscored name is retained for internal
+# call sites and existing tests; new callers outside this module should
+# prefer :func:`resolve_mmdb_path`.
+def resolve_mmdb_path() -> str:
+    """Return the configured MaxMind database file path (public API)."""
+    return _resolve_mmdb_path()
+
 
 def init_maxmind_reader(mmdb_path: str | None = None) -> None:
     """Load the GeoLite2-City database into the module-level singleton.
@@ -97,7 +128,8 @@ def init_maxmind_reader(mmdb_path: str | None = None) -> None:
 
     Args:
         mmdb_path: Override path to the ``.mmdb`` file.  Falls back to the
-            ``GEOIP_DB_PATH`` environment variable, then the default
+            ``GEOIP_DB_PATH`` environment variable (preferred), then to the
+            ``MAXMIND_DB_PATH`` legacy alias, then to the default
             ``data/GeoLite2-City.mmdb``.
 
     Raises:
@@ -105,7 +137,7 @@ def init_maxmind_reader(mmdb_path: str | None = None) -> None:
         ImportError: If the ``geoip2`` package is not installed.
     """
     global _MAXMIND_READER  # pylint: disable=global-statement,invalid-name
-    path = mmdb_path or os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+    path = mmdb_path or _resolve_mmdb_path()
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"MaxMind GeoLite2 database not found at '{path}'. "
@@ -145,8 +177,11 @@ _MAXMIND_SWAP_GRACE_SECONDS = 5
 
 
 def _get_mmdb_path() -> str:
-    """Return the configured MaxMind database file path."""
-    return os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+    """Return the configured MaxMind database file path.
+
+    Backwards-compatible alias for :func:`_resolve_mmdb_path`.
+    """
+    return _resolve_mmdb_path()
 
 
 def _atomic_swap_reader() -> None:
@@ -670,7 +705,7 @@ def _lookup_maxmind_utc_offset(ip_addr: str) -> float | None:
     reader = _MAXMIND_READER
     if reader is None:
         # Lazy per-call fallback for test/stub mode; not latency-optimal.
-        mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+        mmdb_path = _resolve_mmdb_path()
         if not os.path.exists(mmdb_path):
             return None
         try:
@@ -725,7 +760,7 @@ def maxmind_lookup_zip(ip_addr: str) -> str | None:
     reader = _MAXMIND_READER
     if reader is None:
         # Lazy per-call fallback for test/stub mode.
-        mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+        mmdb_path = _resolve_mmdb_path()
         if not os.path.exists(mmdb_path):
             return None
         try:

@@ -36,6 +36,7 @@ Set the following variables before starting:
 | `ALLOW_NON_PROD_GIVEX_HOSTS` | no | `0` | **Security flag — staging/sandbox only.** When truthy (`1`/`true`/`yes`, case-insensitive), `GIVEX_EGIFT_URL` / `GIVEX_PAYMENT_URL` may point at a host outside `_ALLOWED_GIVEX_HOSTS`; the override is accepted but a `WARNING` is logged labelling the worker as `INSECURE/DEGRADED`. Any falsy / unset value re-enables strict allowlist enforcement. **MUST NOT be enabled in production** — see §2.5 below. The HTTPS scheme is always required; this flag does not allow `http://` downgrades. |
 | `PROXY_LIST_FILE` | no | — | Path to a newline-delimited proxy list file consumed by the proxy rotator. |
 | `GEOIP_DB_PATH` | no | `data/GeoLite2-City.mmdb` | Path to the MaxMind GeoLite2 City database used for zip-code derivation (F-07). |
+| `MAXMIND_DB_PATH` | no | — | Legacy alias of `GEOIP_DB_PATH`, accepted for spec/blueprint compatibility. If both are set, `GEOIP_DB_PATH` wins. |
 | `REDIS_URL` | no | `""` | Redis connection URL used for deduplication and idempotency. Leave unset to disable Redis-backed idempotency. |
 | `WORKER_COUNT` | no | `1` | Number of concurrent worker threads. Valid range: 1–50. Must be ≤ `MAX_WORKER_COUNT`. |
 | `MAX_WORKER_COUNT` | no | `10` | Upper bound (cap) for rollout worker count. Valid range: 1–50. `SCALE_STEPS` in `modules/rollout/main.py` is derived from this value; the cap is always the final step and rollout never exceeds it. See `docs/canary_rollout.md` §7 and the "Scaling the worker pool" section of `README.md`. |
