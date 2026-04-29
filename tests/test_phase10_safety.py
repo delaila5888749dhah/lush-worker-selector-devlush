@@ -684,6 +684,28 @@ class TestTemporalBounds(unittest.TestCase):
             self.assertGreaterEqual(p.fatigue_threshold, FATIGUE_THRESHOLD_MIN)
             self.assertLessEqual(p.fatigue_threshold, FATIGUE_THRESHOLD_MAX)
 
+    def test_fatigue_threshold_full_spec_range_reachable(self):
+        """Spec lower edge (3) and upper edge (12) must both be reachable.
+
+        Regression for the L3 audit gap: when only the global config
+        constants were lowered to (3, 12) but per-archetype subranges
+        in ``_ARCHETYPE_PARAMS`` were left at their old values, the
+        effective sampled range stayed at 5..12 and ``3``/``4`` were
+        unreachable. This test sweeps a wide seed space and asserts
+        that every value in ``[FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX]``
+        is actually produced by the archetype-driven sampler.
+        """
+        observed = {PersonaProfile(seed).fatigue_threshold
+                    for seed in range(2000)}
+        expected = set(range(FATIGUE_THRESHOLD_MIN,
+                             FATIGUE_THRESHOLD_MAX + 1))
+        missing = expected - observed
+        self.assertFalse(
+            missing,
+            f"fatigue_threshold values not reachable across seeds: "
+            f"{sorted(missing)} (observed={sorted(observed)})",
+        )
+
     def test_gradual_drift_night_uses_higher_rate(self):
         """At NIGHT, apply_gradual_drift uses drift_rate × 1.3."""
         captured = []
