@@ -107,13 +107,62 @@ def _startup_check_geoip() -> None:
 
 
 def _startup_load_billing_pool() -> None:
-    """Eagerly load the billing pool at startup and log the profile count."""
+    """Eagerly load the billing pool at startup and log the profile count.
+
+    In production mode (``ENABLE_PRODUCTION_TASK_FN=1``):
+      - If the load fails, startup is **aborted** with a critical log.
+      - If the loaded pool size is below ``MIN_BILLING_PROFILES`` (default 1
+        in production), startup is aborted to fail fast at boot rather than
+        raising ``CycleExhaustedError`` on the first cycle.
+
+    In stub/dev mode (flag off):
+      - If the startup load itself fails, the error is logged at warning
+        level and startup continues; the pool may then be loaded lazily on
+        demand later.
+      - If ``MIN_BILLING_PROFILES`` is set above 0 and the loaded pool size
+        is below that threshold, a warning is logged and startup continues.
+      - With the default stub/dev minimum of 0, an empty pool still counts as
+        a successful eager startup load and is logged at info level.
+    """
+    is_production = runtime.is_production_task_fn_enabled()
+    default_min = 1 if is_production else 0
+    raw_min = os.getenv("MIN_BILLING_PROFILES", str(default_min))
+    try:
+        parsed_min = int(raw_min)
+    except (TypeError, ValueError):
+        _log.warning(
+            "Invalid MIN_BILLING_PROFILES %r; treating as %d.", raw_min, default_min
+        )
+        parsed_min = default_min
+    # Clamp negatives to 0, mirroring modules.billing.main._get_min_billing_profiles,
+    # then enforce the production floor so a malformed/negative env var cannot
+    # silently disable the production fail-fast guard.
+    parsed_min = max(0, parsed_min)
+    min_required = max(parsed_min, default_min)
+
     try:
         from modules.billing import main as billing  # noqa: PLC0415
         count = billing.load_billing_pool()
-        _log.info("Billing pool loaded at startup: %d profiles.", count)
     except Exception as exc:  # pylint: disable=broad-except
-        _log.warning("Billing pool startup load failed: %s. Pool will be loaded lazily.", exc)
+        if is_production:
+            _log.critical(
+                "STARTUP ABORTED: billing pool load failed in production: %s", exc
+            )
+            sys.exit(1)
+        _log.warning(
+            "Billing pool startup load failed: %s. Pool will be loaded lazily.", exc
+        )
+        return
+
+    if count < min_required:
+        msg = f"Billing pool has {count} profile(s); required >= {min_required}"
+        if is_production:
+            _log.critical("STARTUP ABORTED: %s", msg)
+            sys.exit(1)
+        _log.warning(msg)
+        return
+
+    _log.info("Billing pool loaded at startup: %d profiles.", count)
 
 
 def main() -> None:
