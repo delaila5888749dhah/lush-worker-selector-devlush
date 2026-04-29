@@ -654,6 +654,7 @@ class TestAppMainProductionPath(unittest.TestCase):
                 "integration.worker_task.make_task_fn",
                 return_value=fake_task_fn,
             ),
+            patch.dict("os.environ", {"MIN_BILLING_PROFILES": "1"}, clear=False),
             # Patch at the implementation level so the patches survive importlib.reload.
             # _startup_check_geoip calls os.path.exists for the MMDB file;
             # make it look like the file exists, and no-op the actual reader init.
