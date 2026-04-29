@@ -64,6 +64,22 @@ class StartupBillingPoolTests(unittest.TestCase):
                 # Should not raise.
                 _startup_load_billing_pool()
 
+    def test_negative_min_does_not_disable_production_guard(self):
+        """Negative MIN_BILLING_PROFILES must not bypass the production fail-fast.
+
+        Mirrors modules.billing.main._get_min_billing_profiles which clamps
+        negatives to 0; in production we then enforce the default floor (1)
+        so a malformed/negative env var cannot silently let an empty pool boot.
+        """
+        with tempfile.TemporaryDirectory(dir=str(_PROJECT_ROOT)) as tmpdir:
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ["ENABLE_PRODUCTION_TASK_FN"] = "1"
+                os.environ["BILLING_POOL_DIR"] = tmpdir
+                os.environ["MIN_BILLING_PROFILES"] = "-1"
+                with self.assertRaises(SystemExit) as cm:
+                    _startup_load_billing_pool()
+                self.assertEqual(cm.exception.code, 1)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

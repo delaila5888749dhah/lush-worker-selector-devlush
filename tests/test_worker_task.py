@@ -659,8 +659,9 @@ class TestAppMainProductionPath(unittest.TestCase):
             # make it look like the file exists, and no-op the actual reader init.
             patch("os.path.exists", return_value=True),
             patch("modules.cdp.driver.init_maxmind_reader"),
-            # _startup_load_billing_pool calls billing.load_billing_pool; no-op it.
-            patch("modules.billing.main.load_billing_pool", return_value=0),
+            # _startup_load_billing_pool calls billing.load_billing_pool; return a
+            # value that satisfies the production min-profile threshold (default 1).
+            patch("modules.billing.main.load_billing_pool", return_value=1),
         ):
             import app.__main__ as app_main
             import importlib

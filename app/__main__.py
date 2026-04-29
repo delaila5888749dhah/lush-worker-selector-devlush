@@ -120,13 +120,20 @@ def _startup_load_billing_pool() -> None:
         continues; the pool will be loaded lazily on demand.
     """
     is_production = runtime.is_production_task_fn_enabled()
-    default_min = "1" if is_production else "0"
-    raw_min = os.getenv("MIN_BILLING_PROFILES", default_min)
+    default_min = 1 if is_production else 0
+    raw_min = os.getenv("MIN_BILLING_PROFILES", str(default_min))
     try:
-        min_required = int(raw_min)
+        parsed_min = int(raw_min)
     except (TypeError, ValueError):
-        _log.warning("Invalid MIN_BILLING_PROFILES %r; treating as %s.", raw_min, default_min)
-        min_required = int(default_min)
+        _log.warning(
+            "Invalid MIN_BILLING_PROFILES %r; treating as %d.", raw_min, default_min
+        )
+        parsed_min = default_min
+    # Clamp negatives to 0, mirroring modules.billing.main._get_min_billing_profiles,
+    # then enforce the production floor so a malformed/negative env var cannot
+    # silently disable the production fail-fast guard.
+    parsed_min = max(0, parsed_min)
+    min_required = max(parsed_min, default_min)
 
     try:
         from modules.billing import main as billing  # noqa: PLC0415
