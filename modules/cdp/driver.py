@@ -110,10 +110,10 @@ def _resolve_mmdb_path() -> str:
     )
 
 
-# Public alias of :func:`_resolve_mmdb_path` for cross-module use (e.g. the
-# application entrypoint).  The underscored name is retained for internal
-# call sites and existing tests; new callers outside this module should
-# prefer :func:`resolve_mmdb_path`.
+# Public alias of :func:`_resolve_mmdb_path` for callers outside this
+# module/package boundary (e.g. the application entrypoint). The
+# underscored name is retained for internal call sites and existing tests;
+# external callers should prefer :func:`resolve_mmdb_path`.
 def resolve_mmdb_path() -> str:
     """Return the configured MaxMind database file path (public API)."""
     return _resolve_mmdb_path()
