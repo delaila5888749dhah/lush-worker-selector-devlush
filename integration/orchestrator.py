@@ -1022,7 +1022,10 @@ def _select_profile_with_audit(
     try:
         billing.clear_last_selection_method()
     except AttributeError:
-        pass
+        logging.debug(
+            "billing.clear_last_selection_method unavailable; "
+            "continuing without pre-clear (expected for some test mocks)."
+        )
     if include_worker_id:
         profile = billing.select_profile(zip_code, worker_id=worker_id)
     else:
