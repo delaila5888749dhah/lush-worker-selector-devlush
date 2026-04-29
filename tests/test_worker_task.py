@@ -642,6 +642,16 @@ class TestBuildRemoteDriver(unittest.TestCase):
         Chrome.assert_called_once_with(service=service_instance, options=options_instance)
         Remote.assert_not_called()
 
+    def test_incomplete_launch_endpoint_error_lists_required_fields(self):
+        from integration.worker_task import _build_remote_driver
+
+        with self.assertRaises(RuntimeError) as ctx:
+            _build_remote_driver(object())
+        msg = str(ctx.exception)
+        self.assertIn("webdriver_url", msg)
+        self.assertIn("debugger_address", msg)
+        self.assertIn("driver_path", msg)
+
     def test_falls_back_to_desired_capabilities_on_typeerror(self):
         """Legacy Selenium that rejects ``options=`` falls back gracefully."""
         sentinel_driver = object()

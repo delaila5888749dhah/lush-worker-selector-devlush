@@ -277,7 +277,10 @@ def _build_remote_driver(launch_endpoint):
             debugger_address=launch_endpoint.debugger_address,
             driver_path=launch_endpoint.driver_path,
         )
-    raise RuntimeError("BitBrowser launch endpoint is incomplete")
+    raise RuntimeError(
+        "BitBrowser launch endpoint requires either webdriver_url or both "
+        "debugger_address and driver_path"
+    )
 
 
 def _build_legacy_remote_driver(webdriver_url: str):

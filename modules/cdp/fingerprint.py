@@ -24,6 +24,20 @@ class BitBrowserLaunchEndpoint:
     debugger_address: Optional[str] = None
     driver_path: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        has_webdriver = isinstance(self.webdriver_url, str) and bool(self.webdriver_url)
+        has_attach = (
+            isinstance(self.debugger_address, str)
+            and bool(self.debugger_address)
+            and isinstance(self.driver_path, str)
+            and bool(self.driver_path)
+        )
+        if not (has_webdriver or has_attach):
+            raise ValueError(
+                "BitBrowserLaunchEndpoint requires either webdriver_url "
+                "or both debugger_address and driver_path"
+            )
+
 
 def _normalise_debugger_address(http_endpoint: str) -> str:
     """Return ``host:port`` from BitBrowser's DevTools ``http`` endpoint."""
