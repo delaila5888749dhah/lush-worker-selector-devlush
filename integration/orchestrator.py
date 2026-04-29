@@ -1038,8 +1038,9 @@ def _select_profile_with_audit(
     # In production select_profile() sets this on every successful return.
     # When ``billing`` is wholesale-mocked in tests the accessor may be
     # missing or return a non-string MagicMock; coerce either case to
-    # ``None`` so the audit emitter falls back to its legacy intent-based
-    # label and existing tests stay compatible.
+    # ``None`` so the audit emitter labels the event with the explicit
+    # ``SELECTION_METHOD_UNKNOWN`` sentinel — never inferred from request
+    # intent — preserving outcome-only semantics (Blueprint §12).
     try:
         raw_method = billing.get_last_selection_method()
     except AttributeError:
