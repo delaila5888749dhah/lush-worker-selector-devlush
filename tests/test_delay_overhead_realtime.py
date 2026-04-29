@@ -43,6 +43,7 @@ _WARMUP = 2
 # Bookkeeping overhead caps as a fraction of MAX_STEP_DELAY (Blueprint §8.6).
 _MEDIAN_RATIO_CAP = 0.05  # strict: median < 5% of MAX_STEP_DELAY
 _P95_RATIO_CAP = 0.10     # relaxed for OS jitter: p95 < 10% of MAX_STEP_DELAY
+_UNDERSHOOT_TOLERANCE = 0.010  # allow 10 ms for timer granularity / clock jitter
 
 _BENCH_OPT_IN = os.getenv("DELAY_OVERHEAD_BENCH") in ("1", "true", "yes")
 
@@ -83,7 +84,7 @@ def _measure_overhead_samples(seed: int, action: str = "typing") -> list[float]:
             # call is essentially pure bookkeeping with no sleep, so it
             # is not a meaningful overhead-vs-real-sleep sample.
             continue
-        samples.append(max(elapsed - delay, 0.0))
+        samples.append(elapsed - delay)
     return samples
 
 
@@ -110,6 +111,14 @@ class TestDelayOverheadRealtime(unittest.TestCase):
         self.assertGreater(
             len(samples), 0,
             f"{label}: no overhead samples collected (delays were all 0?)",
+        )
+        min_overhead = min(samples)
+        self.assertGreaterEqual(
+            min_overhead,
+            -_UNDERSHOOT_TOLERANCE,
+            f"{label}: wall-clock elapsed time undershot the requested delay by "
+            f"{(-min_overhead) * 1000:.2f} ms; benchmark must record actual - "
+            f"expected without masking real sleep undershoot",
         )
         median = statistics.median(samples)
         p95 = _percentile(samples, 0.95)
