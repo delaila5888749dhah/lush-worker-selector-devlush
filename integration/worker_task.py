@@ -264,13 +264,20 @@ def _build_remote_driver(launch_endpoint):
     if isinstance(launch_endpoint, str):
         return _build_legacy_remote_driver(launch_endpoint)
     if isinstance(launch_endpoint, BitBrowserLaunchEndpoint):
-        if launch_endpoint.webdriver_url is not None:
+        if launch_endpoint.uses_remote() and launch_endpoint.webdriver_url is not None:
             return _build_legacy_remote_driver(launch_endpoint.webdriver_url)
-        assert launch_endpoint.debugger_address is not None
-        assert launch_endpoint.driver_path is not None
-        return _build_chromedriver_attach_driver(
-            debugger_address=launch_endpoint.debugger_address,
-            driver_path=launch_endpoint.driver_path,
+        if (
+            launch_endpoint.uses_chromedriver_attach()
+            and launch_endpoint.debugger_address is not None
+            and launch_endpoint.driver_path is not None
+        ):
+            return _build_chromedriver_attach_driver(
+                debugger_address=launch_endpoint.debugger_address,
+                driver_path=launch_endpoint.driver_path,
+            )
+        raise RuntimeError(
+            "BitBrowser launch endpoint requires either webdriver_url or both "
+            "debugger_address and driver_path"
         )
     raise RuntimeError(
         "BitBrowser launch endpoint requires either webdriver_url or both "

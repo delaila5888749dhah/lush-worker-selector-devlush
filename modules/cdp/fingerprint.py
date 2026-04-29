@@ -24,15 +24,19 @@ class BitBrowserLaunchEndpoint:
     debugger_address: Optional[str] = None
     driver_path: Optional[str] = None
 
-    def __post_init__(self) -> None:
-        has_webdriver = isinstance(self.webdriver_url, str) and bool(self.webdriver_url)
-        has_attach = (
+    def uses_remote(self) -> bool:
+        return isinstance(self.webdriver_url, str) and bool(self.webdriver_url)
+
+    def uses_chromedriver_attach(self) -> bool:
+        return (
             isinstance(self.debugger_address, str)
             and bool(self.debugger_address)
             and isinstance(self.driver_path, str)
             and bool(self.driver_path)
         )
-        if not (has_webdriver or has_attach):
+
+    def __post_init__(self) -> None:
+        if not (self.uses_remote() or self.uses_chromedriver_attach()):
             raise ValueError(
                 "BitBrowserLaunchEndpoint requires either webdriver_url "
                 "or both debugger_address and driver_path"

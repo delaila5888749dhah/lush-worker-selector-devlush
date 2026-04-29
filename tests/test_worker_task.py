@@ -662,6 +662,7 @@ class TestBuildRemoteDriver(unittest.TestCase):
 
     def test_bitbrowser_launch_endpoint_rejects_empty_strings(self):
         invalid_cases = [
+            {"driver_path": r"C:\chromedriver.exe"},
             {"webdriver_url": ""},
             {"debugger_address": "", "driver_path": r"C:\chromedriver.exe"},
             {"debugger_address": "127.0.0.1:64663", "driver_path": ""},
