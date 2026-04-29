@@ -1405,6 +1405,71 @@ class TestMaxMindZipLookup(unittest.TestCase):
         mock_exists.assert_called_with("/custom/path.mmdb")
 
 
+class TestResolveMmdbPath(unittest.TestCase):
+    """_resolve_mmdb_path honours GEOIP_DB_PATH, MAXMIND_DB_PATH alias, and default."""
+
+    def test_public_resolve_mmdb_path_matches_internal_resolver(self):
+        """Public resolve_mmdb_path mirrors the internal resolver behavior."""
+        with patch.dict(
+            "os.environ",
+            {"GEOIP_DB_PATH": "/from/geoip.mmdb", "MAXMIND_DB_PATH": "/from/maxmind.mmdb"},
+            clear=True,
+        ):
+            resolved_path = drv.resolve_mmdb_path()
+            self.assertEqual(resolved_path, "/from/geoip.mmdb")
+            self.assertEqual(
+                resolved_path,
+                drv._resolve_mmdb_path(),  # pylint: disable=protected-access
+            )
+
+    def test_resolve_mmdb_prefers_geoip_db_path(self):
+        """When both env vars are set, GEOIP_DB_PATH wins."""
+        with patch.dict(
+            "os.environ",
+            {"GEOIP_DB_PATH": "/from/geoip.mmdb", "MAXMIND_DB_PATH": "/from/maxmind.mmdb"},
+            clear=True,
+        ):
+            self.assertEqual(drv._resolve_mmdb_path(), "/from/geoip.mmdb")  # pylint: disable=protected-access
+
+    def test_resolve_mmdb_fallback_to_maxmind_db_path(self):
+        """When only the legacy MAXMIND_DB_PATH alias is set, it is used."""
+        with patch.dict(
+            "os.environ",
+            {"MAXMIND_DB_PATH": "/legacy/path.mmdb"},
+            clear=True,
+        ):
+            self.assertEqual(drv._resolve_mmdb_path(), "/legacy/path.mmdb")  # pylint: disable=protected-access
+
+    def test_resolve_mmdb_default(self):
+        """When neither env var is set, the built-in default is returned."""
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(
+                drv._resolve_mmdb_path(),  # pylint: disable=protected-access
+                "data/GeoLite2-City.mmdb",
+            )
+
+    def test_resolve_mmdb_empty_geoip_falls_back_to_maxmind(self):
+        """An empty GEOIP_DB_PATH falls back to MAXMIND_DB_PATH (truthy semantics)."""
+        with patch.dict(
+            "os.environ",
+            {"GEOIP_DB_PATH": "", "MAXMIND_DB_PATH": "/legacy/path.mmdb"},
+            clear=True,
+        ):
+            self.assertEqual(drv._resolve_mmdb_path(), "/legacy/path.mmdb")  # pylint: disable=protected-access
+
+    def test_get_mmdb_path_alias_matches_resolve(self):
+        """_get_mmdb_path is a backwards-compatible alias of _resolve_mmdb_path."""
+        with patch.dict(
+            "os.environ",
+            {"MAXMIND_DB_PATH": "/legacy/path.mmdb"},
+            clear=True,
+        ):
+            self.assertEqual(
+                drv._get_mmdb_path(),  # pylint: disable=protected-access
+                drv._resolve_mmdb_path(),  # pylint: disable=protected-access
+            )
+
+
 # ── Helpers for persona-aware tests ─────────────────────────────────────────
 
 

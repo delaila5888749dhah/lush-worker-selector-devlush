@@ -55,8 +55,8 @@ def _startup_check_geoip() -> None:
       - The MaxMind reader singleton is not initialised (lookups fall back to
         per-call lazy mode or return ``None``).
     """
-    from modules.cdp.driver import init_maxmind_reader  # noqa: PLC0415
-    mmdb_path = os.environ.get("GEOIP_DB_PATH", "data/GeoLite2-City.mmdb")
+    from modules.cdp.driver import init_maxmind_reader, resolve_mmdb_path  # noqa: PLC0415
+    mmdb_path = resolve_mmdb_path()
     is_production = runtime.is_production_task_fn_enabled()
 
     if not os.path.exists(mmdb_path):
