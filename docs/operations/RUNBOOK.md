@@ -27,27 +27,27 @@ Set the following variables before starting:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `ENABLE_PRODUCTION_TASK_FN` | **yes** (production) | `""` (off) | Set to `1`, `true`, or `yes` to activate the production browser lifecycle (`make_task_fn`). Omit or set to any other value to run a no-op stub (safe for staging validation). |
+| `ENABLE_PRODUCTION_TASK_FN` | **yes** (production) | `""` (off) | Set to `1`, `true`, or `yes` to activate the production browser lifecycle (`make_task_fn`). Omit or set to any other value to ru[...]
 | `BITBROWSER_API_KEY` | **yes** (production) | — | API key for the BitBrowser automation service. Required when `ENABLE_PRODUCTION_TASK_FN` is on. |
 | `BITBROWSER_ENDPOINT` | no | `http://127.0.0.1:54345` | Base URL for the local BitBrowser API server. |
 | `GIVEX_ENDPOINT` | no | — | Givex service endpoint URL. A warning is logged on startup if unset. |
-| `GIVEX_EGIFT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/` | Override the eGift page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. Validated at import time against the Givex host allowlist (`modules/cdp/driver.py:_ALLOWED_GIVEX_HOSTS`); HTTPS is required. |
-| `GIVEX_PAYMENT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html` | Override the payment page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target production. Validated at import time against the Givex host allowlist; HTTPS is required. |
-| `ALLOW_NON_PROD_GIVEX_HOSTS` | no | `0` | **Security flag — staging/sandbox only.** When truthy (`1`/`true`/`yes`, case-insensitive), `GIVEX_EGIFT_URL` / `GIVEX_PAYMENT_URL` may point at a host outside `_ALLOWED_GIVEX_HOSTS`; the override is accepted but a `WARNING` is logged labelling the worker as `INSECURE/DEGRADED`. Any falsy / unset value re-enables strict allowlist enforcement. **MUST NOT be enabled in production** — see §2.5 below. The HTTPS scheme is always required; this flag does not allow `http://` downgrades. |
+| `GIVEX_EGIFT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/` | Override the eGift page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; leave unset to target p[...]
+| `GIVEX_PAYMENT_URL` | no | `https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/guest/payment.html` | Override the payment page URL (P2-2). Set to a staging/sandbox URL when Givex provides one; l[...]
+| `ALLOW_NON_PROD_GIVEX_HOSTS` | no | `0` | **Security flag — staging/sandbox only.** When truthy (`1`/`true`/`yes`, case-insensitive), `GIVEX_EGIFT_URL` / `GIVEX_PAYMENT_URL` may point at a hos[...]
 | `PROXY_LIST_FILE` | no | — | Path to a newline-delimited proxy list file consumed by the proxy rotator. |
 | `GEOIP_DB_PATH` | no | `data/GeoLite2-City.mmdb` | Path to the MaxMind GeoLite2 City database used for zip-code derivation (F-07). |
 | `MAXMIND_DB_PATH` | no | — | Legacy alias of `GEOIP_DB_PATH`, accepted for spec/blueprint compatibility. If both are set, `GEOIP_DB_PATH` wins. |
 | `REDIS_URL` | no | `""` | Redis connection URL used for deduplication and idempotency. Leave unset to disable Redis-backed idempotency. |
 | `WORKER_COUNT` | no | `1` | Number of concurrent worker threads. Valid range: 1–50. Must be ≤ `MAX_WORKER_COUNT`. |
-| `MAX_WORKER_COUNT` | no | `10` | Upper bound (cap) for rollout worker count. Valid range: 1–50. `SCALE_STEPS` in `modules/rollout/main.py` is derived from this value; the cap is always the final step and rollout never exceeds it. See `docs/canary_rollout.md` §7 and the "Scaling the worker pool" section of `README.md`. |
+| `MAX_WORKER_COUNT` | no | `10` | Upper bound (cap) for rollout worker count. Valid range: 1–50. `SCALE_STEPS` in `modules/rollout/main.py` is derived from this value; the cap is always the fin[...]
 | `BILLING_POOL_DIR` | no | `billing_pool` | Directory containing `.txt` billing profile files. |
 | `BILLING_CB_THRESHOLD` | no | `3` | Number of consecutive billing failures before the circuit breaker trips. |
 | `BILLING_CB_PAUSE` | no | `120` | Seconds the circuit breaker pauses new billing after tripping. |
 | `IDEMPOTENCY_STORE_PATH` | no | `.idempotency_store.json` | File path for the local idempotency store. |
 | `CDP_CALL_TIMEOUT_SECONDS` | no | `10.0` | Timeout (seconds) for synchronous CDP command calls. |
 | `CDP_EXECUTOR_MAX_WORKERS` | no | `8` | Thread-pool size for the CDP command executor. |
-| `BITBROWSER_POOL_MODE` | no | `0` | `1` = bật pool mode (round-robin trên profile có sẵn, tránh Operation Password). `0` giữ hành vi legacy create/delete. Xem §2.4 và Blueprint §2.1. |
-| `BITBROWSER_PROFILE_IDS` | khi `POOL_MODE=1` | — | CSV profile IDs (không khoảng trắng), ví dụ `abc123,def456,ghi789`. Bắt buộc khi `BITBROWSER_POOL_MODE=1`; rỗng → startup abort rõ ràng. |
+| `BITBROWSER_POOL_MODE` | no | `0` | `1` = bật pool mode (round-robin trên profile có sẵn, tránh Operation Password). `0` giữ hành vi legacy create/delete. Xem §2.4 và Blueprint §2.1[...]
+| `BITBROWSER_PROFILE_IDS` | khi `POOL_MODE=1` | — | CSV profile IDs (không khoảng trắng), ví dụ `abc123,def456,ghi789`. Bắt buộc khi `BITBROWSER_POOL_MODE=1`; rỗng → startup abo[...]
 
 ### 2.4 BitBrowser Pool Mode Setup (Blueprint §2.1)
 
@@ -85,24 +85,70 @@ Rollback: đặt `BITBROWSER_POOL_MODE=0` → quay về legacy create/delete flo
 
 ### 2.4.1 BitBrowser business-error troubleshooting
 
-If you see:
+`BitBrowserClient._post()` raises a `RuntimeError` carrying the verbatim
+`msg` / `code` for any `{"success": false, ...}` envelope returned by the
+BitBrowser API.  The error wording is:
 
 ```
-RuntimeError: BitBrowser API /browser/open returned business error: msg='The IP changed, stop open profile.'
+RuntimeError: BitBrowser API <path> returned business error: msg='...' code=...
 ```
 
-the BitBrowser profile has IP-change protection enabled and the proxy assigned
-to it is producing a different egress IP than the recorded baseline.  Either
-disable IP detection on the profile, switch to a sticky-session proxy, or reset
-the profile's IP baseline in the BitBrowser GUI.
+The `msg` is BitBrowser's own text — treat it as authoritative.
 
-Other common business errors surfaced the same way:
+#### IP-change protection — `msg='The IP changed, stop open profile.'`
+
+The profile recorded an IP baseline on a previous open and the current
+proxy is producing a different egress IP.  **A "live" proxy is not
+sufficient — the IP must be stable across opens of the same profile.**
+Rotating / residential exits commonly trip this guard even when basic
+connectivity tests pass.
+
+Try the remedies in this order:
+
+1. **Use a sticky / session-stable proxy** (preferred root fix).  Encode
+   a session id and lifetime into the proxy URL (e.g. Bright Data
+   `…-session-<id>-sesstime-30…`, IPRoyal `…-session-<id>-lifetime-30…`)
+   or, for a local proxy tool, give each BitBrowser profile its own
+   sticky local port (e.g. profile-1 → `socks5://127.0.0.1:10102`,
+   profile-2 → `socks5://127.0.0.1:10103`).  Verify with
+   `curl --proxy <addr> https://api.ipify.org` repeated several times
+   spaced over ≥ 60 s — every call must return the **same** IP.
+2. **Reset or recreate the profile's IP baseline.**  Open the profile
+   from the BitBrowser GUI (not via the API) after updating the proxy,
+   click *Test proxy* / *Check connection* if the GUI exposes it, then
+   close the profile.  This rewrites the baseline to the current proxy's
+   egress IP.  If the GUI rejects the open, delete and recreate the
+   profile with the sticky proxy configured **before** the first open;
+   remember to update `BITBROWSER_PROFILE_IDS` with the new id.
+3. **Disable IP-change blocking on the profile** *only if* your
+   BitBrowser build exposes the toggle (older builds did, current builds
+   often do not).  Note that IP detection is coupled to fingerprint
+   synchronisation (timezone, language, geolocation, WebRTC), so
+   disabling it weakens the anti-detect guarantees of the profile —
+   prefer remedies (1) and (2) when available.
+
+After applying a remedy, probe `/browser/open` directly before restarting
+the worker:
+
+```powershell
+Invoke-RestMethod -Uri "$env:BITBROWSER_ENDPOINT/browser/open" `
+  -Method Post `
+  -Headers @{ "X-Api-Key" = $env:BITBROWSER_API_KEY; "Content-Type" = "application/json" } `
+  -Body (@{ id = "<profile-id>" } | ConvertTo-Json) |
+  ConvertTo-Json -Depth 20
+```
+
+A successful response carries either a `webdriver` field (legacy) or an
+`http` + `driver` pair (v144+).  Always pair the probe with a follow-up
+`POST /browser/close` so the profile is not left open.
+
+#### Other common business errors
 
 | `msg` | Likely cause | Remedy |
 |---|---|---|
-| `The IP changed, stop open profile.` | IP-change protection triggered | Disable IP detection or use sticky-session proxy |
+| `The IP changed, stop open profile.` | IP baseline mismatch (see above) | Sticky proxy → reset baseline → (last resort) disable IP blocking if available |
 | `proxy authentication failure` | Wrong proxy credentials | Update proxy credentials in the BitBrowser profile |
-| `profile already open` | Another process has the profile open | Close the profile in BitBrowser GUI then retry |
+| `profile already open` | Another process / a previous crashed cycle still holds the profile | Close the profile in the BitBrowser GUI, then retry |
 
 ### 2.5 Givex host allowlist (`ALLOW_NON_PROD_GIVEX_HOSTS`)
 
