@@ -107,13 +107,50 @@ def _startup_check_geoip() -> None:
 
 
 def _startup_load_billing_pool() -> None:
-    """Eagerly load the billing pool at startup and log the profile count."""
+    """Eagerly load the billing pool at startup and log the profile count.
+
+    In production mode (``ENABLE_PRODUCTION_TASK_FN=1``):
+      - If the load fails, startup is **aborted** with a critical log.
+      - If the loaded pool size is below ``MIN_BILLING_PROFILES`` (default 1
+        in production), startup is aborted to fail fast at boot rather than
+        raising ``CycleExhaustedError`` on the first cycle.
+
+    In stub/dev mode (flag off):
+      - Failures and empty pools are logged at warning level and startup
+        continues; the pool will be loaded lazily on demand.
+    """
+    is_production = runtime.is_production_task_fn_enabled()
+    default_min = "1" if is_production else "0"
+    raw_min = os.getenv("MIN_BILLING_PROFILES", default_min)
+    try:
+        min_required = int(raw_min)
+    except (TypeError, ValueError):
+        _log.warning("Invalid MIN_BILLING_PROFILES %r; treating as %s.", raw_min, default_min)
+        min_required = int(default_min)
+
     try:
         from modules.billing import main as billing  # noqa: PLC0415
         count = billing.load_billing_pool()
-        _log.info("Billing pool loaded at startup: %d profiles.", count)
     except Exception as exc:  # pylint: disable=broad-except
-        _log.warning("Billing pool startup load failed: %s. Pool will be loaded lazily.", exc)
+        if is_production:
+            _log.critical(
+                "STARTUP ABORTED: billing pool load failed in production: %s", exc
+            )
+            sys.exit(1)
+        _log.warning(
+            "Billing pool startup load failed: %s. Pool will be loaded lazily.", exc
+        )
+        return
+
+    if count < min_required:
+        msg = f"Billing pool has {count} profile(s); required >= {min_required}"
+        if is_production:
+            _log.critical("STARTUP ABORTED: %s", msg)
+            sys.exit(1)
+        _log.warning(msg)
+        return
+
+    _log.info("Billing pool loaded at startup: %d profiles.", count)
 
 
 def main() -> None:
