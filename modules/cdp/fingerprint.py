@@ -157,6 +157,15 @@ class BitBrowserClient:
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
                     body = json.loads(resp.read().decode("utf-8"))
+                # Detect business-level error BEFORE unwrap so 'msg' is not lost
+                # when 'data' happens to be a dict. BitBrowser returns HTTP 200
+                # with {"success": false, "msg": "..."} for cases like proxy/IP
+                # mismatch, profile already open, etc.
+                if isinstance(body, dict) and body.get("success") is False:
+                    raise RuntimeError(
+                        f"BitBrowser API {path} returned business error: "
+                        f"msg={body.get('msg')!r} code={body.get('code')!r}"
+                    )
                 if isinstance(body, dict) and isinstance(body.get("data"), dict):
                     return body["data"]
                 if isinstance(body, dict):

@@ -16,6 +16,7 @@ from http.server import ThreadingHTTPServer  # pylint: disable=no-name-in-module
 
 from modules.cdp.fingerprint import (
     BitBrowserClient,
+    BitBrowserPoolClient,
     BitBrowserSession,
     get_bitbrowser_client,
 )
@@ -195,3 +196,102 @@ class RuntimeBrowserProfileAccessorTests(unittest.TestCase):
     def test_runtime_returns_none_for_unregistered_worker(self):
         """Unregistered worker returns None via runtime accessor."""
         self.assertIsNone(runtime.get_worker_browser_profile("worker-missing"))
+
+
+def _make_mock_response(body_dict):
+    """Return a mock file-like object that urllib.request.urlopen would return."""
+    encoded = json.dumps(body_dict).encode("utf-8")
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = encoded
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    return mock_resp
+
+
+class BitBrowserClientPostBusinessErrorTests(unittest.TestCase):
+    """Tests for _post() business-error detection (success: false)."""
+
+    def _make_client(self):
+        return BitBrowserClient("http://127.0.0.1:54345", api_key="k")
+
+    def test_post_raises_on_success_false_with_msg(self):
+        """_post raises RuntimeError carrying the 'msg' when success is false."""
+        body = {"success": False, "msg": "The IP changed, stop open profile."}
+        with patch("urllib.request.urlopen", return_value=_make_mock_response(body)):
+            client = self._make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client._post("/browser/open", {})  # pylint: disable=protected-access
+        self.assertIn("The IP changed, stop open profile.", str(ctx.exception))
+
+    def test_post_raises_on_success_false_with_data_dict(self):
+        """_post raises RuntimeError (not silently returning {}) when success is false
+        and 'data' happens to be a dict."""
+        body = {"success": False, "msg": "x", "data": {}}
+        with patch("urllib.request.urlopen", return_value=_make_mock_response(body)):
+            client = self._make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client._post("/browser/open", {})  # pylint: disable=protected-access
+        self.assertIn("x", str(ctx.exception))
+
+    def test_post_returns_data_when_success_true(self):
+        """_post unwraps 'data' and returns it when success is true (backward compat)."""
+        body = {"success": True, "data": {"webdriver": "ws://127.0.0.1:9222/x"}}
+        with patch("urllib.request.urlopen", return_value=_make_mock_response(body)):
+            client = self._make_client()
+            result = client._post("/browser/open", {})  # pylint: disable=protected-access
+        self.assertEqual(result, {"webdriver": "ws://127.0.0.1:9222/x"})
+
+    def test_post_returns_body_when_no_data_key_and_no_success_false(self):
+        """_post returns the full dict when there's no 'data' key and no success:false."""
+        body = {"webdriver": "ws://127.0.0.1:9222/x"}
+        with patch("urllib.request.urlopen", return_value=_make_mock_response(body)):
+            client = self._make_client()
+            result = client._post("/browser/open", {})  # pylint: disable=protected-access
+        self.assertEqual(result, {"webdriver": "ws://127.0.0.1:9222/x"})
+
+    def test_post_business_error_not_retried(self):
+        """_post calls urlopen exactly once on a business error (no retry)."""
+        body = {"success": False, "msg": "profile already open"}
+        call_count = {"n": 0}
+
+        def fake_urlopen(_req, timeout=10):  # pylint: disable=unused-argument
+            call_count["n"] += 1
+            return _make_mock_response(body)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            client = self._make_client()
+            with self.assertRaises(RuntimeError):
+                client._post("/browser/open", {})  # pylint: disable=protected-access
+        self.assertEqual(call_count["n"], 1)
+
+    def test_launch_profile_propagates_business_error_message(self):
+        """Full path: launch_profile on a pool client propagates the BitBrowser
+        business-error 'msg' verbatim — not the misleading 'missing webdriver/http/driver'
+        text."""
+        client = BitBrowserPoolClient(
+            endpoint="http://127.0.0.1:54345",
+            api_key="k",
+            profile_ids=["pid1"],
+        )
+        business_error_body = {
+            "success": False,
+            "msg": "The IP changed, stop open profile.",
+        }
+
+        def fake_post(path, _payload, timeout=10):  # pylint: disable=unused-argument
+            if path == "/browser/open":
+                # Simulate what _post would do if it weren't mocked: raise RuntimeError
+                raise RuntimeError(
+                    f"BitBrowser API {path} returned business error: "
+                    f"msg={business_error_body.get('msg')!r} "
+                    f"code={business_error_body.get('code')!r}"
+                )
+            return {}
+
+        with patch.object(BitBrowserPoolClient, "_post", side_effect=fake_post):
+            with self.assertRaises(RuntimeError) as ctx:
+                with BitBrowserSession(client):
+                    pass  # pragma: no cover — __enter__ must raise
+        error_msg = str(ctx.exception)
+        self.assertIn("The IP changed, stop open profile.", error_msg)
+        self.assertNotIn("missing both", error_msg)
