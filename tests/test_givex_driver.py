@@ -1176,6 +1176,70 @@ class TestPreflightGeoCheck(unittest.TestCase):
         self.assertEqual(geo_nav, [])
         self.assertIn("preflight_geo_check failed", str(ctx.exception))
 
+    def test_preflight_skips_devtools_handle_for_geo_check(self):
+        """preflight_geo_check selects the first real content window, not devtools://."""
+        selenium = _make_driver()
+        body_el = MagicMock()
+        body_el.text = '{"country": "US"}'
+        selenium.find_element.return_value = body_el
+        selenium.window_handles = ["DT", "REAL"]
+
+        url_map = {"DT": "devtools://devtools/bundled/devtools_app.html", "REAL": "about:blank"}
+
+        def _url_for_current():
+            # Return URL based on last switch_to.window call.
+            calls = selenium.switch_to.window.call_args_list
+            last = calls[-1].args[0] if calls else "DT"
+            return url_map.get(last, "")
+
+        type(selenium).current_url = property(lambda self: _url_for_current())
+        driver = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            result = driver.preflight_geo_check()
+
+        self.assertEqual(result, "US")
+        # REAL must have been switched to before URL_GEO_CHECK navigation.
+        switch_calls = [c.args[0] for c in selenium.switch_to.window.call_args_list]
+        geo_nav_indices = [
+            i for i, c in enumerate(selenium.get.call_args_list)
+            if c.args and "lumtest" in str(c.args[0])
+        ]
+        self.assertTrue(geo_nav_indices, "URL_GEO_CHECK must be navigated to")
+        # Ensure "REAL" was switched to (not only "DT").
+        self.assertIn("REAL", switch_calls)
+
+    def test_preflight_raises_clear_error_when_only_devtools_handles(self):
+        """When all window_handles are devtools://, raises RuntimeError mentioning preflight_geo_check."""
+        selenium = _make_driver()
+        selenium.window_handles = ["DT1", "DT2"]
+
+        url_map = {
+            "DT1": "devtools://devtools/bundled/inspector.html",
+            "DT2": "devtools://devtools/bundled/inspector.html",
+        }
+
+        def _url_for_current():
+            calls = selenium.switch_to.window.call_args_list
+            last = calls[-1].args[0] if calls else "DT1"
+            return url_map.get(last, "")
+
+        type(selenium).current_url = property(lambda self: _url_for_current())
+        driver = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                driver.preflight_geo_check()
+
+        self.assertIn("preflight_geo_check", str(ctx.exception))
+        # No geo-check navigation must have happened.
+        geo_nav = [
+            c for c in selenium.get.call_args_list
+            if c.args and "lumtest" in str(c.args[0])
+        ]
+        self.assertEqual(geo_nav, [])
+
+
 
 class TestMaxMindGeoLookup(unittest.TestCase):
     """_lookup_maxmind_utc_offset returns offset from MaxMind DB or None."""

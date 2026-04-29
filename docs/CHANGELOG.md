@@ -5,6 +5,18 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Fixed (BitBrowser v146 / chromedriver 146 — devtools:// handle as window_handles[0])
+- BitBrowser v146 / chromedriver 146 attach exposes a `devtools://` target
+  as `window_handles[0]`. The tab janitor (`close_extra_tabs`) used to keep
+  this DevTools handle as "main" and closed every real content tab, causing
+  Chrome to exit and the Selenium session to die with `InvalidSessionIdException`
+  on the very next CDP/Selenium command. `preflight_geo_check` had the same
+  `handles[0]` assumption. Both call sites now select the first window whose
+  URL does not match an internal scheme (`devtools://`, `chrome://`,
+  `chrome-extension://`). Internal windows are left untouched. When no real
+  content window exists, the janitor logs a warning and is a no-op, and
+  preflight raises a clear `RuntimeError`.
+
 ### Fixed (BitBrowser business errors now surfaced verbatim)
 - BitBrowser business errors (`{"success": false, "msg": "..."}`) are now
   surfaced verbatim instead of being masked as a "missing webdriver/http/driver

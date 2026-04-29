@@ -6,19 +6,25 @@ from modules.cdp.driver import GivexDriver, URL_GEO_CHECK, close_extra_tabs
 
 
 class _FakeDriver:
-    def __init__(self, handles, close_error_on=None):
+    def __init__(self, handles, close_error_on=None, urls=None):
         self.window_handles = list(handles)
         self.switch_to = MagicMock()
         self._close_error_on = close_error_on
         self._current = handles[0] if handles else None
         self.switched = []
         self.closed = []
+        # Per-handle URL map; defaults to "" (treated as real content).
+        self._urls = urls or {}
 
         def _switch(h):
             self._current = h
             self.switched.append(h)
 
         self.switch_to.window.side_effect = _switch
+
+    @property
+    def current_url(self):
+        return self._urls.get(self._current, "")
 
     def close(self):
         self.closed.append(self._current)
@@ -32,8 +38,9 @@ class TestCloseExtraTabs(unittest.TestCase):
         closed = close_extra_tabs(drv)
         self.assertEqual(closed, 3)
         self.assertEqual(drv.closed, ["H1", "H2", "H3"])
-        # Switched to H1, H2, H3, then back to H0.
-        self.assertEqual(drv.switched, ["H1", "H2", "H3", "H0"])
+        # Switched to probe each handle, then closed H1/H2/H3, then back to H0.
+        self.assertIn("H0", drv.switched)
+        self.assertEqual(drv.switched[-1], "H0")
 
     def test_close_extra_tabs_handles_close_exception(self):
         drv = _FakeDriver(["H0", "H1", "H2"], close_error_on="H1")
@@ -48,11 +55,54 @@ class TestCloseExtraTabs(unittest.TestCase):
         closed = close_extra_tabs(drv)
         self.assertEqual(closed, 0)
         self.assertEqual(drv.closed, [])
-        self.assertEqual(drv.switched, [])
 
     def test_close_extra_tabs_empty_handles_noop(self):
         drv = _FakeDriver([])
         self.assertEqual(close_extra_tabs(drv), 0)
+
+    def test_close_extra_tabs_handles0_is_devtools_keeps_real_tab(self):
+        """When handles[0] is a devtools:// target, keep the first real tab."""
+        urls = {
+            "DT": "devtools://devtools/bundled/devtools_app.html?targetType=tab",
+            "REAL1": "https://example.com/",
+            "REAL2": "about:blank",
+        }
+        drv = _FakeDriver(["DT", "REAL1", "REAL2"], urls=urls)
+        closed = close_extra_tabs(drv)
+        # Only REAL2 should be closed; DT is internal and REAL1 is the main.
+        self.assertEqual(closed, 1)
+        self.assertIn("REAL2", drv.closed)
+        self.assertNotIn("REAL1", drv.closed)
+        self.assertNotIn("DT", drv.closed)
+        # Final switch back to the real main tab.
+        self.assertEqual(drv.switched[-1], "REAL1")
+
+    def test_close_extra_tabs_all_devtools_returns_zero_with_warning(self):
+        """When all handles are devtools://, return 0 and log a warning."""
+        urls = {
+            "DT1": "devtools://devtools/bundled/inspector.html",
+            "DT2": "devtools://devtools/bundled/inspector.html",
+        }
+        drv = _FakeDriver(["DT1", "DT2"], urls=urls)
+        with self.assertLogs("modules.cdp.driver", level="WARNING") as cm:
+            closed = close_extra_tabs(drv)
+        self.assertEqual(closed, 0)
+        self.assertEqual(drv.closed, [])
+        self.assertTrue(any("no real content windows" in msg for msg in cm.output))
+
+    def test_close_extra_tabs_chrome_scheme_treated_as_internal(self):
+        """chrome:// handles are treated as internal and never closed."""
+        urls = {
+            "CHROME": "chrome://newtab/",
+            "REAL": "https://example.com/",
+        }
+        drv = _FakeDriver(["CHROME", "REAL"], urls=urls)
+        closed = close_extra_tabs(drv)
+        # REAL is selected as main; CHROME is internal so nothing is closed.
+        self.assertEqual(closed, 0)
+        self.assertNotIn("CHROME", drv.closed)
+        self.assertNotIn("REAL", drv.closed)
+        self.assertEqual(drv.switched[-1], "REAL")
 
 
 class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
@@ -62,6 +112,7 @@ class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
         """close_extra_tabs and about:blank navigate before get(URL_GEO_CHECK)."""
         selenium = MagicMock()
         selenium.window_handles = ["H0", "H1"]
+        selenium.current_url = "https://example.com/"
         body_el = MagicMock()
         body_el.text = '{"country": "US"}'
         selenium.find_element.return_value = body_el
@@ -93,6 +144,7 @@ class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
         """time.sleep(2) is called by _run_tab_janitor before get(URL_GEO_CHECK)."""
         selenium = MagicMock()
         selenium.window_handles = ["H0"]
+        selenium.current_url = "https://example.com/"
         body_el = MagicMock()
         body_el.text = '{"country": "US"}'
         selenium.find_element.return_value = body_el

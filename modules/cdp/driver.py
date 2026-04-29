@@ -934,8 +934,83 @@ def _get_current_ip_best_effort() -> str | None:
 
 # ── Session init helpers (Blueprint §2, §3, §6) ────────────────────────────
 
+# URL schemes that identify internal browser windows (DevTools targets,
+# chrome:// pages, extensions).  BitBrowser/chromedriver attach can expose
+# these as ``window_handles`` entries that must not be treated as real
+# content tabs during tab-janitor or preflight window selection.
+_INTERNAL_WINDOW_SCHEMES = (
+    "devtools://",
+    "chrome://",
+    "chrome-extension://",
+)
+
+
+def _is_internal_browser_window_url(url: str) -> bool:
+    """Return True if *url* belongs to an internal browser window scheme.
+
+    BitBrowser/chromedriver attach can expose DevTools or chrome:// targets
+    as window_handles entries; these must not be treated as the main
+    content tab during tab-janitor or preflight selection.
+    """
+    return str(url or "").lower().startswith(_INTERNAL_WINDOW_SCHEMES)
+
+
+def _select_real_content_window(driver):
+    """Switch to and return the first non-internal browser window handle.
+
+    Iterates ``driver.window_handles`` in order, switching to each handle
+    just long enough to read ``current_url``. Returns the first handle
+    whose URL does NOT match :data:`_INTERNAL_WINDOW_SCHEMES`. The driver
+    is left focused on that handle on success. Returns ``None`` when no
+    real content window is found (caller decides how to react — the
+    janitor returns 0 with a warning; preflight raises a clear error).
+
+    Defensive against transient ``switch_to.window`` failures: any
+    exception during URL probing is logged and the loop continues.
+    """
+    try:
+        handles = list(driver.window_handles)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("_select_real_content_window: window_handles failed: %s", exc)
+        return None
+    selected = None
+    for handle in handles:
+        try:
+            driver.switch_to.window(handle)
+            url = driver.current_url or ""
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug(
+                "_select_real_content_window: probe failed for %s: %s",
+                handle, exc,
+            )
+            continue
+        if not _is_internal_browser_window_url(url):
+            selected = handle
+            break
+    if selected is None:
+        return None
+    try:
+        driver.switch_to.window(selected)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning(
+            "_select_real_content_window: failed to focus selected handle %s: %s",
+            selected, exc,
+        )
+        return None
+    return selected
+
+
 def close_extra_tabs(driver) -> int:
-    """Close all browser tabs except the first one. Return count closed.
+    """Close all browser tabs except the first real content tab.
+
+    BitBrowser/chromedriver attach can expose a ``devtools://`` target as
+    ``window_handles[0]``. The previous implementation kept ``handles[0]``
+    and closed everything else, which closed every real content tab and
+    caused Chrome to exit (kills the Selenium session). The new logic
+    selects the first non-internal-scheme window as the main tab and
+    leaves internal windows (DevTools, chrome://, chrome-extension://)
+    untouched. If no real content tab exists the function logs a warning
+    and returns 0 without closing anything.
 
     Blueprint §2 Tab Janitor: BitBrowser profiles often open with extra
     ad/junk tabs.  The janitor must close them BEFORE pre-flight geo check
@@ -943,19 +1018,51 @@ def close_extra_tabs(driver) -> int:
 
     Args:
         driver: A Selenium-compatible driver exposing ``window_handles``,
-            ``switch_to.window(handle)`` and ``close()``.
+            ``switch_to.window(handle)``, ``current_url`` and ``close()``.
 
     Returns:
         The number of extra tabs successfully closed.  Individual close
         failures are swallowed with a warning log so the janitor never
         crashes the calling flow.
     """
-    handles = driver.window_handles
+    try:
+        handles = list(driver.window_handles)
+    except Exception as exc:  # pylint: disable=broad-except
+        _log.warning("close_extra_tabs: window_handles failed: %s", exc)
+        return 0
     if len(handles) <= 1:
         return 0
-    main = handles[0]
+
+    # Classify handles by URL.
+    classified = []  # list of (handle, url, is_internal)
+    for handle in handles:
+        try:
+            driver.switch_to.window(handle)
+            url = driver.current_url or ""
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug(
+                "close_extra_tabs: could not probe handle %s: %s", handle, exc,
+            )
+            classified.append((handle, "", False))  # treat as real to avoid skipping closes blindly
+            continue
+        classified.append((handle, url, _is_internal_browser_window_url(url)))
+
+    real = [h for (h, _u, internal) in classified if not internal]
+    if not real:
+        _log.warning(
+            "close_extra_tabs: no real content windows found among %d handles; skipping",
+            len(handles),
+        )
+        return 0
+
+    main = real[0]
     closed = 0
-    for handle in handles[1:]:
+    for handle, _url, is_internal in classified:
+        if handle == main or is_internal:
+            # Never close the chosen main tab and never close internal
+            # browser windows (DevTools etc.) — closing internal targets
+            # can also kill the session on some Chrome builds.
+            continue
         try:
             driver.switch_to.window(handle)
             driver.close()
@@ -2236,18 +2343,20 @@ class GivexDriver:
         max_attempts = 3  # 1 initial + 2 retries
         last_exc: Exception | None = None
         for attempt in range(1, max_attempts + 1):
-            # Always ensure focus on the main window on each attempt so
-            # that a stray popup or closed tab does not starve the check.
-            # If we cannot focus the main window, the attempt itself is
-            # considered failed: running geo-check on the wrong context
-            # would defeat the safeguard this method provides.
+            # Always ensure focus on the first real content window on each
+            # attempt so that a stray popup, DevTools target, or closed tab
+            # does not starve the check.  BitBrowser/chromedriver attach can
+            # expose a devtools:// target as window_handles[0]; using
+            # _select_real_content_window skips internal-scheme handles and
+            # returns the first genuine content window.  If we cannot focus
+            # a real window, the attempt itself is considered failed: running
+            # geo-check on the wrong context would defeat the safeguard.
             try:
-                handles = self._driver.window_handles
-                if not handles:
+                selected = _select_real_content_window(self._driver)
+                if selected is None:
                     raise RuntimeError(
-                        "preflight_geo_check: no window handles available"
+                        "preflight_geo_check: no real content window available"
                     )
-                self._driver.switch_to.window(handles[0])
             except Exception as switch_exc:  # pylint: disable=broad-except
                 last_exc = switch_exc
                 _log.warning(
