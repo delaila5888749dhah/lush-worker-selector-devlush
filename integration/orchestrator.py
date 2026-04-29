@@ -971,8 +971,14 @@ def _emit_billing_audit_event(
     """
     try:
         requested_zip = None if zip_code is None else str(zip_code)
-        if selection_method is None:
-            selection_method = billing.SELECTION_METHOD_UNKNOWN
+        if not isinstance(selection_method, str):
+            # Fall back to the explicit unknown sentinel.  Use ``getattr`` so a
+            # wholesale-mocked ``billing`` module (common in integration tests)
+            # cannot poison the audit payload with a non-string MagicMock; if
+            # the constant isn't a real ``str`` we hard-code the literal
+            # "unknown" value so the event remains JSON-serializable.
+            unknown_const = getattr(billing, "SELECTION_METHOD_UNKNOWN", "unknown")
+            selection_method = unknown_const if isinstance(unknown_const, str) else "unknown"
         event = {
             "event_type": "billing_selection",
             "worker_id": worker_id,
