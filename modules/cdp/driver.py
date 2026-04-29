@@ -2322,6 +2322,8 @@ class GivexDriver:
         that a real content window is focused and in a clean state.
         """
         close_extra_tabs(self._driver)
+        # _select_real_content_window returns the focused handle; its side
+        # effect of switching focus is required before navigating.
         selected = _select_real_content_window(self._driver)
         if selected is None:
             raise RuntimeError(
