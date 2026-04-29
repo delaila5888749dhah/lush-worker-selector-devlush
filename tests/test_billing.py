@@ -352,6 +352,28 @@ class BillingHardeningTests(unittest.TestCase):
         self.assertIn("accepted=1", summary)
         self.assertIn("rejected=1", summary)
 
+    def test_malformed_line_emits_debug_log(self):
+        """Each malformed line emits a DEBUG log with filename + line number, no PII."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "pool.txt")
+            malformed_content = "totally-foo-bar-secret"
+            with open(path, "w") as handle:
+                handle.write("Alice|Smith|1 St|City|NY|10001|2125550001|a@e.com\n")
+                handle.write("Bob|Jones|2 St|City|CA|90001|2125550002|b@e.com\n")
+                handle.write(f"{malformed_content}\n")
+            with patch.dict(os.environ, {"BILLING_POOL_DIR": tmpdir}):
+                with self.assertLogs("modules.billing.main", level="DEBUG") as logs:
+                    billing._read_profiles_from_disk()
+        debug_msgs = [m for m in logs.output if m.startswith("DEBUG") and "reject" in m]
+        self.assertEqual(len(debug_msgs), 1, f"Expected 1 reject DEBUG log, got: {debug_msgs}")
+        self.assertIn("pool.txt:L3 (malformed)", debug_msgs[0])
+        # No raw line content (PII guard)
+        self.assertNotIn(malformed_content, debug_msgs[0])
+        # Aggregate INFO summary still reports rejected=1
+        summary = next((m for m in logs.output if "scanned=" in m), None)
+        self.assertIsNotNone(summary)
+        self.assertIn("rejected=1", summary)
+
     def test_normalize_zip_rejects_bool(self):
         """Boolean ZIP input must be rejected instead of coercing to 1/0."""
         with self.assertRaises(ValueError):
