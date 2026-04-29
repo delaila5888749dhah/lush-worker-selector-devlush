@@ -956,11 +956,13 @@ def _emit_billing_audit_event(
     Selection method contract (Blueprint §12):
     - ``selection_method`` reflects the *actual outcome* of the selection, not
       the request intent.  When provided by the caller it is used verbatim.
-    - When ``selection_method`` is ``None`` (legacy callers), the value is
-      inferred from whether a non-blank zip was requested.  This preserves
-      backward compatibility for direct callers that have not yet adopted the
-      outcome-based propagation; the canonical ``_select_profile_with_audit``
-      call-site always supplies the actual outcome.
+    - When ``selection_method`` is ``None`` the event is labeled with the
+      explicit ``billing.SELECTION_METHOD_UNKNOWN`` sentinel.  The audit MUST
+      NEVER infer the label from the request (e.g. "zip was provided →
+      zip_match"); doing so causes the §12 monitoring drift this contract
+      exists to prevent.  Direct callers that bypass ``select_profile`` are
+      expected to either pass the resolved outcome or accept the
+      ``unknown`` label.
 
     Non-interference contract:
     - This function MUST only be called AFTER billing.select_profile() has returned.
@@ -970,11 +972,7 @@ def _emit_billing_audit_event(
     try:
         requested_zip = None if zip_code is None else str(zip_code)
         if selection_method is None:
-            # Legacy fallback for direct callers (e.g., privacy/PAN-mask tests)
-            # that do not propagate the actual outcome.  Treat blank/whitespace
-            # input as "no zip" when determining the selection strategy.
-            has_requested_zip = bool(requested_zip and requested_zip.strip())
-            selection_method = "zip_match" if has_requested_zip else "round_robin"
+            selection_method = billing.SELECTION_METHOD_UNKNOWN
         event = {
             "event_type": "billing_selection",
             "worker_id": worker_id,

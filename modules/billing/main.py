@@ -52,6 +52,11 @@ class WorkerBillingState:
 # via zip-affinity match or via the round-robin sequential pointer fallback.
 SELECTION_METHOD_ZIP_MATCH = "zip_match"
 SELECTION_METHOD_ROUND_ROBIN = "round_robin"
+# Sentinel used by the audit pipeline when no actual selection outcome was
+# propagated by the caller (e.g., direct callers that did not invoke
+# select_profile).  Distinct from any real selection strategy so observability
+# can never silently misattribute a request intent as an actual outcome.
+SELECTION_METHOD_UNKNOWN = "unknown"
 
 _EMAIL_DOMAINS = ("gmail.com", "yahoo.com", "outlook.com", "hotmail.com")
 _PHONE_FIRST_DIGITS = "23456789"
