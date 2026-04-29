@@ -13,6 +13,7 @@ class _FakeDriver:
         self._current = handles[0] if handles else None
         self.switched = []
         self.closed = []
+        self.get_calls = []
         # Per-handle URL map; defaults to "" (treated as real content).
         self._urls = urls or {}
 
@@ -24,12 +25,18 @@ class _FakeDriver:
 
     @property
     def current_url(self):
-        return self._urls.get(self._current, "")
+        value = self._urls.get(self._current, "")
+        if isinstance(value, Exception):
+            raise value
+        return value
 
     def close(self):
         self.closed.append(self._current)
         if self._close_error_on and self._current == self._close_error_on:
             raise RuntimeError("simulated close failure")
+
+    def get(self, url):
+        self.get_calls.append((self._current, url))
 
 
 class TestCloseExtraTabs(unittest.TestCase):
@@ -104,6 +111,19 @@ class TestCloseExtraTabs(unittest.TestCase):
         self.assertNotIn("REAL", drv.closed)
         self.assertEqual(drv.switched[-1], "REAL")
 
+    def test_close_extra_tabs_probe_failed_handle_is_not_selected_or_closed(self):
+        """Probe-failed handles are unknown: never selected and never closed."""
+        urls = {
+            "DT": RuntimeError("transient probe failure"),
+            "REAL": "https://example.com/",
+        }
+        drv = _FakeDriver(["DT", "REAL"], urls=urls)
+        closed = close_extra_tabs(drv)
+        self.assertEqual(closed, 0)
+        self.assertNotIn("DT", drv.closed)
+        self.assertNotIn("REAL", drv.closed)
+        self.assertEqual(drv.switched[-1], "REAL")
+
 
 class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
     """Verify that _run_tab_janitor executes before geo check in production path."""
@@ -162,6 +182,32 @@ class TestTabJanitorWiredBeforeGeoCheck(unittest.TestCase):
         self.assertIn(2, sleep_calls, "time.sleep(2) must be called by _run_tab_janitor")
         get_calls = [c[0][0] for c in selenium.get.call_args_list]
         self.assertIn(URL_GEO_CHECK, get_calls)
+
+    def test_run_tab_janitor_single_devtools_handle_raises_before_blank(self):
+        """_run_tab_janitor refuses about:blank when no real window exists."""
+        urls = {"DT": "devtools://devtools/bundled/inspector.html"}
+        selenium = _FakeDriver(["DT"], urls=urls)
+        givex_driver = GivexDriver(selenium)
+
+        with self.assertRaisesRegex(RuntimeError, "no real content window"):
+            givex_driver._run_tab_janitor()
+
+        self.assertEqual(selenium.get_calls, [])
+
+    def test_run_tab_janitor_devtools_plus_real_navigates_real_handle(self):
+        """_run_tab_janitor focuses the real handle before about:blank."""
+        urls = {
+            "DT": "devtools://devtools/bundled/inspector.html",
+            "REAL": "https://example.com/",
+        }
+        selenium = _FakeDriver(["DT", "REAL"], urls=urls)
+        givex_driver = GivexDriver(selenium)
+
+        with patch("time.sleep"):
+            givex_driver._run_tab_janitor()
+
+        self.assertEqual(selenium.switched[-1], "REAL")
+        self.assertEqual(selenium.get_calls, [("REAL", "about:blank")])
 
 
 if __name__ == "__main__":

@@ -1043,7 +1043,10 @@ def close_extra_tabs(driver) -> int:
             _log.debug(
                 "close_extra_tabs: could not probe handle %s: %s", handle, exc,
             )
-            classified.append((handle, "", False))  # treat as real to avoid skipping closes blindly
+            # A probe failure may be a DevTools target, stale handle, or
+            # transient CDP error. Treat as internal-like: never select it as
+            # main and never close it.
+            classified.append((handle, "", True))
             continue
         classified.append((handle, url, _is_internal_browser_window_url(url)))
 
@@ -2316,9 +2319,15 @@ class GivexDriver:
         """Close extra tabs, navigate to about:blank, and wait 2 s to settle.
 
         Blueprint §2 Tab Janitor: must run before the pre-flight geo check so
-        that only one window handle exists and it is in a clean state.
+        that a real content window is focused and in a clean state.
         """
         close_extra_tabs(self._driver)
+        selected = _select_real_content_window(self._driver)
+        if selected is None:
+            raise RuntimeError(
+                "_run_tab_janitor: no real content window available "
+                "after close_extra_tabs"
+            )
         self._driver.get("about:blank")
         time.sleep(2)
 
@@ -2339,7 +2348,12 @@ class GivexDriver:
             RuntimeError: if the detected country is not ``"US"`` or the
                 API remains unreachable after two retries.
         """
-        self._run_tab_janitor()
+        try:
+            self._run_tab_janitor()
+        except Exception as exc:
+            raise RuntimeError(
+                f"preflight_geo_check failed before geo check: {exc}"
+            ) from exc
         max_attempts = 3  # 1 initial + 2 retries
         last_exc: Exception | None = None
         for attempt in range(1, max_attempts + 1):
