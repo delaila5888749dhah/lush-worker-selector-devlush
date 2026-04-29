@@ -196,6 +196,25 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
                 result = billing._pool_dir()
         self.assertEqual(result, pool_dir.resolve())
 
+    def test_allowed_prefixes_trim_surrounding_whitespace(self):
+        """BILLING_ALLOWED_PREFIXES entries are stripped before validation."""
+        with self._repo_tempdir() as base:
+            external_root = Path(base) / "external"
+            external_root.mkdir()
+            pool_dir = external_root / "billing_pool"
+            with (
+                patch.object(billing, "__file__", str(self._fake_billing_file(base))),
+                patch.dict(
+                    os.environ,
+                    {
+                        "BILLING_POOL_DIR": str(pool_dir),
+                        "BILLING_ALLOWED_PREFIXES": f"  \t{external_root}  ",
+                    },
+                ),
+            ):
+                result = billing._pool_dir()
+        self.assertEqual(result, pool_dir.resolve())
+
     def test_unlisted_external_path_still_rejected_in_production(self):
         """External BILLING_POOL_DIR without an allowed prefix falls back."""
         with self._repo_tempdir() as base:
