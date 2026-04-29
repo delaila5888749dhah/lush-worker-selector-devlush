@@ -10,11 +10,11 @@
 > here. Each sub-section links back to its §8.x counterpart.
 >
 > **Mapping:** §10.1 ↔ §8.1, §10.2 ↔ §8.2, …, §10.8 ↔ §8.8 (1-to-1).
-> See also [`spec/blueprint.md` §11 — Synchronization Matrix](./blueprint.md#L649).
+> See also [`spec/blueprint.md`](./blueprint.md) §11 — Synchronization Matrix.
 
 ---
 
-## §10.1. Architecture (↔ [Blueprint §8.1](./blueprint.md#L411))
+## §10.1. TÍCH HỢP THỰC THI — ARCHITECTURE (↔ [Blueprint §8.1](./blueprint.md))
 
 · Cơ chế: Behavior được inject tại worker execution layer thông qua pattern wrapper:
 
@@ -30,7 +30,7 @@
 
 ---
 
-## §10.2. FSM Context — BehaviorState (↔ [Blueprint §8.2](./blueprint.md#L427))
+## §10.2. FSM CONTEXT — BEHAVIORSTATE (↔ [Blueprint §8.2](./blueprint.md))
 
 · Theo dõi ngữ cảnh hiện tại của worker trong cycle:
   - `IDLE` — chờ bước tiếp theo (giữa các thao tác)
@@ -43,7 +43,7 @@
 
 ---
 
-## §10.3. CRITICAL_SECTION Awareness (↔ [Blueprint §8.3](./blueprint.md#L440))
+## §10.3. CRITICAL_SECTION AWARENESS (↔ [Blueprint §8.3](./blueprint.md))
 
 · Behavior layer KHÔNG can thiệp `CRITICAL_SECTION`:
 
@@ -57,7 +57,7 @@
 
 ---
 
-## §10.4. SAFE POINT / SAFE ZONE Rule (↔ [Blueprint §8.4](./blueprint.md#L454))
+## §10.4. SAFE POINT / SAFE ZONE RULE (↔ [Blueprint §8.4](./blueprint.md))
 
 · Nguyên tắc: Wrapper chỉ thêm delay tại các điểm an toàn (SAFE ZONE). Logic
   execution không bị thay đổi. Kết quả success/failure không bị ảnh hưởng.
@@ -77,7 +77,7 @@
 
 ---
 
-## §10.5. NO-DELAY Zone (↔ [Blueprint §8.5](./blueprint.md#L473))
+## §10.5. VÙNG CẤM DELAY — NO-DELAY ZONE (↔ [Blueprint §8.5](./blueprint.md))
 
 · Behavior layer KHÔNG được inject delay vào:
   - Payment submit (Complete Purchase click event)
@@ -96,7 +96,7 @@
 
 ---
 
-## §10.6. Action-Aware Delay (↔ [Blueprint §8.6](./blueprint.md#L492))
+## §10.6. KIỂM SOÁT HIỆU NĂNG & MÔ HÌNH XÁC ĐỊNH — ACTION-AWARE DELAY (↔ [Blueprint §8.6](./blueprint.md))
 
 · Hard constraints (ràng buộc cứng):
 
@@ -131,7 +131,7 @@
 
 ---
 
-## §10.7. Non-Interference Rule (↔ [Blueprint §8.7](./blueprint.md#L527))
+## §10.7. QUY TẮC KHÔNG CAN THIỆP — NON-INTERFERENCE RULE (↔ [Blueprint §8.7](./blueprint.md))
 
 · Behavior layer KHÔNG thay đổi outcome:
   - FSM flow giữ nguyên 100% (4 ngã rẽ — §6)
@@ -141,7 +141,7 @@
 
 ---
 
-## §10.8. Phase 9 Alignment (↔ [Blueprint §8.8](./blueprint.md#L537))
+## §10.8. ĐỒNG BỘ VỚI PHASE 9 — PHASE 9 ALIGNMENT (↔ [Blueprint §8.8](./blueprint.md))
 
 · Phase 10 PHẢI tuân thủ:
   - `SAFE_POINT` — behavior chỉ hoạt động trong ranh giới an toàn (§10.4 ↔ Blueprint §8.4)
