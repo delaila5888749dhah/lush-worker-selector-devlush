@@ -5,6 +5,14 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Fixed (BitBrowser business errors now surfaced verbatim)
+- BitBrowser business errors (`{"success": false, "msg": "..."}`) are now
+  surfaced verbatim instead of being masked as a "missing webdriver/http/driver
+  endpoints" parser error.  Common cases: profile IP-change protection, proxy
+  authentication failure, profile already open.  Previously, `_post()` discarded
+  the `msg` field entirely when `data` was also present as a dict, sending
+  operators down the wrong debug path (PR #354 was shipped for this reason).
+
 ### Fixed (BitBrowser v144+/v146 compatibility — `launch_profile` response format)
 - **Bug:** BitBrowser v144 and v146 changed the `/api/v1/browser/open`
   (`launch_profile`) response format: the `webdriver` field is no longer

@@ -83,6 +83,27 @@ Bước vận hành:
 Rollback: đặt `BITBROWSER_POOL_MODE=0` → quay về legacy create/delete flow
 (hành vi không đổi, hoàn toàn backward-compatible).
 
+### 2.4.1 BitBrowser business-error troubleshooting
+
+If you see:
+
+```
+RuntimeError: BitBrowser API /browser/open returned business error: msg='The IP changed, stop open profile.'
+```
+
+the BitBrowser profile has IP-change protection enabled and the proxy assigned
+to it is producing a different egress IP than the recorded baseline.  Either
+disable IP detection on the profile, switch to a sticky-session proxy, or reset
+the profile's IP baseline in the BitBrowser GUI.
+
+Other common business errors surfaced the same way:
+
+| `msg` | Likely cause | Remedy |
+|---|---|---|
+| `The IP changed, stop open profile.` | IP-change protection triggered | Disable IP detection or use sticky-session proxy |
+| `proxy authentication failure` | Wrong proxy credentials | Update proxy credentials in the BitBrowser profile |
+| `profile already open` | Another process has the profile open | Close the profile in BitBrowser GUI then retry |
+
 ### 2.5 Givex host allowlist (`ALLOW_NON_PROD_GIVEX_HOSTS`)
 
 `modules/cdp/driver.py` validates `GIVEX_EGIFT_URL` and `GIVEX_PAYMENT_URL`
