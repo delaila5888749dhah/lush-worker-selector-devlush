@@ -163,8 +163,8 @@ class BillingAuditGrepAcceptanceTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Issue #N — selection_method must reflect the *actual* outcome of profile
-# selection (zip_match vs round_robin), not just whether a zip was requested.
+# selection_method must reflect the *actual* outcome of profile selection
+# (zip_match vs round_robin), not just whether a zip was requested.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
