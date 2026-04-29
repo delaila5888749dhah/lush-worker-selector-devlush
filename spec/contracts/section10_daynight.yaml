@@ -76,8 +76,9 @@ contracts:
       Temporal modifier bounded output: `apply_temporal_modifier()` returns
       0.0 immediately for non-positive input and clamps all outputs to
       [0.0, MAX_*] for typing / hesitation / step constants.
-      `apply_micro_variation()` returns `max(0.0, base * uniform(0.90, 1.10))`
-      — never negative. All Day/Night-modified delays remain clamped by
+      `apply_micro_variation()` returns `max(0.0, base * (1 + sign * uniform(0.05, U)))`
+      where U=0.10 for DAY and U=0.15 for NIGHT (Blueprint §8.6 / §10) —
+      never negative. All Day/Night-modified delays remain clamped by
       §8.6 hard constants.
     blueprint_ref: "spec/blueprint.md#section-10"
     audit_lock_ref: "spec/audit-lock.md#INV-DELAY-04"

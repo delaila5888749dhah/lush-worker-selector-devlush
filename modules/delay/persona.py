@@ -27,29 +27,37 @@ _PERSONA_TYPES = _PERSONA_ARCHETYPES
 #   - night_penalty gives an archetype-specific (min,max) sub-range
 # Sub-ranges are clamped to the global config bounds at sample time so env
 # overrides of FATIGUE_THRESHOLD_* / NIGHT_PENALTY_* still take precedence.
+# Per-archetype fatigue_threshold sub-ranges are shifted down so that the
+# spec lower bound (`3+ cycles`, Blueprint §10) is actually reachable at
+# runtime. The union of the four subranges spans the full
+# ``[FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX]`` = ``[3, 12]`` band:
+#   - "old"   → (3, 7)  : most fatigue-prone, owns the lower edge (3, 4)
+#   - "man"   → (5, 9)
+#   - "woman" → (6, 10)
+#   - "young" → (8, 12) : least fatigue-prone, owns the upper edge
 _ARCHETYPE_PARAMS: dict = {
     "young": {
         "typing_mult": 0.85,
         "hesitation_mult": 0.85,
-        "fatigue_threshold": (10, 15),
+        "fatigue_threshold": (8, 12),
         "night_penalty": (0.15, 0.22),
     },
     "woman": {
         "typing_mult": 0.95,
         "hesitation_mult": 1.00,
-        "fatigue_threshold": (8, 13),
+        "fatigue_threshold": (6, 10),
         "night_penalty": (0.18, 0.25),
     },
     "man": {
         "typing_mult": 1.05,
         "hesitation_mult": 1.00,
-        "fatigue_threshold": (7, 12),
+        "fatigue_threshold": (5, 9),
         "night_penalty": (0.18, 0.25),
     },
     "old": {
         "typing_mult": 1.25,
         "hesitation_mult": 1.20,
-        "fatigue_threshold": (5, 9),
+        "fatigue_threshold": (3, 7),
         "night_penalty": (0.22, 0.30),
     },
 }

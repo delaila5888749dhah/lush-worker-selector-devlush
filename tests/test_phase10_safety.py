@@ -621,3 +621,108 @@ class TestDeterministicReproducibility(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# 12. TemporalBounds — micro-variation / drift / fatigue threshold spec checks
+# ---------------------------------------------------------------------------
+from unittest.mock import patch  # noqa: E402
+
+from modules.delay.config import (  # noqa: E402
+    FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX,
+)
+
+
+class TestTemporalBounds(unittest.TestCase):
+    """L3 / L6 spec audit: NIGHT variance, micro-variation range, fatigue.
+
+    Blueprint §8.6 / §10:
+      * micro-variation per call is ±5–10% (DAY), widening to ±5–15% (NIGHT)
+      * gradual drift Gaussian step is wider at NIGHT (×1.3)
+      * fatigue threshold sampled from (3, 12) cycles
+    """
+
+    def test_micro_variation_day_within_5_to_10_percent(self):
+        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+            tm = TemporalModel(PersonaProfile(1))
+            for _ in range(200):
+                v = tm.apply_micro_variation(1.0)
+                self.assertGreaterEqual(v, 0.9 - 1e-9)
+                self.assertLessEqual(v, 1.1 + 1e-9)
+
+    def test_micro_variation_night_within_5_to_15_percent(self):
+        with patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
+            tm = TemporalModel(PersonaProfile(1))
+            for _ in range(200):
+                v = tm.apply_micro_variation(1.0)
+                self.assertGreaterEqual(v, 0.85 - 1e-9)
+                self.assertLessEqual(v, 1.15 + 1e-9)
+
+    def test_night_variance_higher_than_day(self):
+        """NIGHT micro-variation must have measurably wider spread than DAY."""
+        def _samples(state):
+            with patch.object(TemporalModel, "get_time_state", return_value=state):
+                tm = TemporalModel(PersonaProfile(2026))
+                return [tm.apply_micro_variation(1.0) for _ in range(500)]
+
+        def _variance(xs):
+            mean = sum(xs) / len(xs)
+            return sum((x - mean) ** 2 for x in xs) / len(xs)
+
+        day = _samples("DAY")
+        night = _samples("NIGHT")
+        self.assertGreater(_variance(night), _variance(day))
+
+    def test_fatigue_threshold_default_range(self):
+        """Default FATIGUE_THRESHOLD bounds match spec (3..12)."""
+        self.assertEqual(FATIGUE_THRESHOLD_MIN, 3)
+        self.assertEqual(FATIGUE_THRESHOLD_MAX, 12)
+
+    def test_fatigue_threshold_within_bounds_across_seeds(self):
+        for seed in range(50):
+            p = PersonaProfile(seed)
+            self.assertGreaterEqual(p.fatigue_threshold, FATIGUE_THRESHOLD_MIN)
+            self.assertLessEqual(p.fatigue_threshold, FATIGUE_THRESHOLD_MAX)
+
+    def test_fatigue_threshold_full_spec_range_reachable(self):
+        """Spec lower edge (3) and upper edge (12) must both be reachable.
+
+        Regression for the L3 audit gap: when only the global config
+        constants were lowered to (3, 12) but per-archetype subranges
+        in ``_ARCHETYPE_PARAMS`` were left at their old values, the
+        effective sampled range stayed at 5..12 and ``3``/``4`` were
+        unreachable. This test sweeps a wide seed space and asserts
+        that every value in ``[FATIGUE_THRESHOLD_MIN, FATIGUE_THRESHOLD_MAX]``
+        is actually produced by the archetype-driven sampler.
+        """
+        observed = {PersonaProfile(seed).fatigue_threshold
+                    for seed in range(2000)}
+        expected = set(range(FATIGUE_THRESHOLD_MIN,
+                             FATIGUE_THRESHOLD_MAX + 1))
+        missing = expected - observed
+        self.assertFalse(
+            missing,
+            f"fatigue_threshold values not reachable across seeds: "
+            f"{sorted(missing)} (observed={sorted(observed)})",
+        )
+
+    def test_gradual_drift_night_uses_higher_rate(self):
+        """At NIGHT, apply_gradual_drift uses drift_rate × 1.3."""
+        captured = []
+
+        class _Stub:
+            def gauss(self, mu, sigma):
+                captured.append(sigma)
+                return 0.0
+
+        tm = TemporalModel(PersonaProfile(7))
+        tm._rnd = _Stub()
+        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+            tm.apply_gradual_drift(1.0, drift_rate=0.02)
+        with patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
+            tm.apply_gradual_drift(1.0, drift_rate=0.02)
+
+        self.assertEqual(len(captured), 2)
+        self.assertAlmostEqual(captured[0], 0.02, places=6)
+        self.assertAlmostEqual(captured[1], 0.02 * 1.3, places=6)
+
