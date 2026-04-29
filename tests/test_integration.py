@@ -1303,8 +1303,17 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             email="jane@example.com",
         )
 
-    def _run_payment_step_with_known_profile(self, profile, zip_code=None, worker_id="default"):
-        """Run run_payment_step with a known profile and return captured audit log args."""
+    def _run_payment_step_with_known_profile(
+        self, profile, zip_code=None, worker_id="default",
+        outcome="round_robin",
+    ):
+        """Run run_payment_step with a known profile and return captured audit log args.
+
+        ``outcome`` is the *actual* selection outcome that the (mocked)
+        billing module reports via ``get_last_selection_method()``.  The audit
+        label must reflect this value, not the request-intent ``zip_code``
+        (Blueprint §12).
+        """
         captured = []
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -1314,6 +1323,8 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit,
         ):
             mock_billing.select_profile.return_value = profile
+            mock_billing.get_last_selection_method.return_value = outcome
+            mock_billing.SELECTION_METHOD_UNKNOWN = "unknown"
             mock_watchdog.wait_for_total.return_value = 10.0
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_audit.info.side_effect = lambda fmt, payload: captured.append(payload)
@@ -1349,26 +1360,37 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
         self.assertIsInstance(event["trace_id"], str)
         self.assertIsInstance(event["timestamp_utc"], str)
 
-    def test_selection_method_zip_match_when_zip_provided(self):
-        """selection_method must be 'zip_match' when zip_code is non-empty."""
+    def test_selection_method_zip_match_when_billing_reports_zip_match(self):
+        """selection_method must reflect the *actual* outcome reported by
+        billing — ``zip_match`` when billing matched the requested zip."""
         profile = self._make_profile()
-        captured = self._run_payment_step_with_known_profile(profile, zip_code="90210")
+        captured = self._run_payment_step_with_known_profile(
+            profile, zip_code="90210", outcome="zip_match",
+        )
         event = _json.loads(captured[0])
         self.assertEqual(event["selection_method"], "zip_match")
         self.assertEqual(event["requested_zip"], "90210")
 
-    def test_selection_method_round_robin_when_no_zip(self):
-        """selection_method must be 'round_robin' when zip_code is None."""
+    def test_selection_method_round_robin_when_billing_reports_round_robin(self):
+        """selection_method must be ``round_robin`` when billing actually fell
+        back to round-robin, regardless of whether a zip was requested."""
         profile = self._make_profile()
-        captured = self._run_payment_step_with_known_profile(profile, zip_code=None)
+        captured = self._run_payment_step_with_known_profile(
+            profile, zip_code=None, outcome="round_robin",
+        )
         event = _json.loads(captured[0])
         self.assertEqual(event["selection_method"], "round_robin")
         self.assertIsNone(event["requested_zip"])
 
-    def test_selection_method_round_robin_when_zip_is_empty(self):
-        """selection_method must be 'round_robin' when zip_code is empty/blank."""
+    def test_selection_method_round_robin_when_zip_requested_but_no_match(self):
+        """The very bug this contract guards against: a zip *was* requested
+        but no profile in the pool matched, so billing fell back to
+        round-robin.  The audit MUST label the outcome ``round_robin`` (the
+        actual outcome), NOT ``zip_match`` (the request intent)."""
         profile = self._make_profile()
-        captured = self._run_payment_step_with_known_profile(profile, zip_code="   ")
+        captured = self._run_payment_step_with_known_profile(
+            profile, zip_code="   ", outcome="round_robin",
+        )
         event = _json.loads(captured[0])
         self.assertEqual(event["selection_method"], "round_robin")
         self.assertEqual(event["requested_zip"], "   ")

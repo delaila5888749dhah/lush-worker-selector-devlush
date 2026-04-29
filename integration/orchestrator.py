@@ -944,6 +944,7 @@ def _emit_billing_audit_event(
     worker_id: str,
     task_id: str | None,
     zip_code: str | int | None,
+    selection_method: str | None = None,
 ) -> None:
     """Emit a structured audit event for a successful billing profile selection.
 
@@ -952,6 +953,17 @@ def _emit_billing_audit_event(
     - profile_id is a one-way SHA-256 hash of 'first_name|last_name|zip_code'.
     - requested_zip is the raw zip_code argument (proxy zip), logged for tracing only.
 
+    Selection method contract (Blueprint §12):
+    - ``selection_method`` reflects the *actual outcome* of the selection, not
+      the request intent.  When provided by the caller it is used verbatim.
+    - When ``selection_method`` is ``None`` the event is labeled with the
+      explicit ``billing.SELECTION_METHOD_UNKNOWN`` sentinel.  The audit MUST
+      NEVER infer the label from the request (e.g. "zip was provided →
+      zip_match"); doing so causes the §12 monitoring drift this contract
+      exists to prevent.  Direct callers that bypass ``select_profile`` are
+      expected to either pass the resolved outcome or accept the
+      ``unknown`` label.
+
     Non-interference contract:
     - This function MUST only be called AFTER billing.select_profile() has returned.
     - Exceptions are caught and logged as warnings; they never propagate.
@@ -959,10 +971,14 @@ def _emit_billing_audit_event(
     """
     try:
         requested_zip = None if zip_code is None else str(zip_code)
-        # Preserve the raw requested zip for tracing, but treat blank/whitespace
-        # input as "no zip" when determining the selection strategy.
-        has_requested_zip = bool(requested_zip and requested_zip.strip())
-        selection_method = "zip_match" if has_requested_zip else "round_robin"
+        if not isinstance(selection_method, str):
+            # Fall back to the explicit unknown sentinel.  Use ``getattr`` so a
+            # wholesale-mocked ``billing`` module (common in integration tests)
+            # cannot poison the audit payload with a non-string MagicMock; if
+            # the constant isn't a real ``str`` we hard-code the literal
+            # "unknown" value so the event remains JSON-serializable.
+            unknown_const = getattr(billing, "SELECTION_METHOD_UNKNOWN", "unknown")
+            selection_method = unknown_const if isinstance(unknown_const, str) else "unknown"
         event = {
             "event_type": "billing_selection",
             "worker_id": worker_id,
@@ -995,16 +1011,47 @@ def _select_profile_with_audit(
     This helper is the single call-site for ``_emit_billing_audit_event`` so
     both ``run_cycle`` and direct ``run_payment_step(..., _profile=None)``
     paths share the same "select -> emit" contract without duplicating logic.
+
+    The actual selection outcome (``zip_match`` vs ``round_robin``) is
+    captured from billing's thread-local side channel via
+    ``billing.get_last_selection_method()`` so the audit event reflects what
+    really happened — not just whether a zip was requested (Blueprint §12).
+    The thread-local is cleared *before* the select call so a stale value
+    from a prior real selection cannot leak into this audit when
+    ``billing.select_profile`` is wholesale-mocked in tests.
     """
+    # Clear the side channel up-front: if billing is fully mocked (common in
+    # tests) select_profile() won't write a fresh outcome, and we must not
+    # observe whatever the previous real call left behind.
+    try:
+        billing.clear_last_selection_method()
+    except AttributeError:
+        logging.debug(
+            "billing.clear_last_selection_method unavailable; "
+            "continuing without pre-clear (expected for some test mocks)."
+        )
     if include_worker_id:
         profile = billing.select_profile(zip_code, worker_id=worker_id)
     else:
         profile = billing.select_profile(zip_code)
+    # Read the *actual* outcome via billing's thread-local side channel.
+    # In production select_profile() sets this on every successful return.
+    # When ``billing`` is wholesale-mocked in tests the accessor may be
+    # missing or return a non-string MagicMock; coerce either case to
+    # ``None`` so the audit emitter labels the event with the explicit
+    # ``SELECTION_METHOD_UNKNOWN`` sentinel — never inferred from request
+    # intent — preserving outcome-only semantics (Blueprint §12).
+    try:
+        raw_method = billing.get_last_selection_method()
+    except AttributeError:
+        raw_method = None
+    selection_method = raw_method if isinstance(raw_method, str) else None
     _emit_billing_audit_event(
         profile=profile,
         worker_id=worker_id,
         task_id=task_id,
         zip_code=zip_code,
+        selection_method=selection_method,
     )
     return profile
 
