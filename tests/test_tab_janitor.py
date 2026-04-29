@@ -36,6 +36,7 @@ class _FakeDriver:
             raise RuntimeError("simulated close failure")
 
     def get(self, url):
+        """Record navigation calls with the handle focused at call time."""
         self.get_calls.append((self._current, url))
 
 

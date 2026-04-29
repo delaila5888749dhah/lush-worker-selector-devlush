@@ -2352,7 +2352,8 @@ class GivexDriver:
             self._run_tab_janitor()
         except Exception as exc:
             raise RuntimeError(
-                f"preflight_geo_check failed before geo check: {exc}"
+                f"preflight_geo_check failed: tab janitor could not prepare "
+                f"a real browser window for geo check: {exc}"
             ) from exc
         max_attempts = 3  # 1 initial + 2 retries
         last_exc: Exception | None = None
