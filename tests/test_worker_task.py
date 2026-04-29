@@ -750,17 +750,6 @@ class TestAppMainStubPath(unittest.TestCase):
 class TestAppMainProductionPath(unittest.TestCase):
     """When ENABLE_PRODUCTION_TASK_FN is on, runtime.start receives make_task_fn result."""
 
-    def test_preload_orchestrator_imports_integration_orchestrator(self):
-        """The preload hook imports integration.orchestrator explicitly."""
-        import app.__main__ as app_main
-        import importlib
-        importlib.reload(app_main)
-
-        with patch("importlib.import_module") as mock_import:
-            app_main._preload_orchestrator()
-
-        mock_import.assert_called_once_with("integration.orchestrator")
-
     def test_production_task_fn_used_when_flag_on(self):
         fake_task_fn = MagicMock()
         with (

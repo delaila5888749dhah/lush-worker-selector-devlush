@@ -139,6 +139,8 @@ def _pool_dir() -> Path:
         resolved = Path(override).resolve()
         project_root = Path(__file__).resolve().parents[2]
         extra_allowed_prefixes = []
+        # Operators may approve multiple external roots with ';' separators
+        # (Windows drive paths can contain ':' and spaces).
         for raw_prefix in os.environ.get("BILLING_ALLOWED_PREFIXES", "").split(";"):
             raw_prefix = raw_prefix.strip()
             if raw_prefix:

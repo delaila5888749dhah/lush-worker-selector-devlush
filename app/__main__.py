@@ -49,8 +49,8 @@ def _preload_orchestrator() -> None:
     it lazily inside a worker during teardown can fail once Python is shutting
     down atexit registration.
     """
-    import importlib  # pylint: disable=import-outside-toplevel
-    importlib.import_module("integration.orchestrator")
+    # pylint: disable=import-outside-toplevel,unused-import
+    import integration.orchestrator  # noqa: F401, PLC0415
 
 
 def _startup_check_geoip() -> None:

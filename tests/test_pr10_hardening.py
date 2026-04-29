@@ -122,9 +122,21 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
 
     @staticmethod
     def _external_tempdir():
-        """Return a temp dir outside the project root and outside /tmp."""
+        """Return a temp dir outside the project root and outside /tmp.
+
+        Production mode intentionally rejects /tmp, so these tests need a
+        writable non-/tmp base.  CI may override the default with
+        BILLING_PREFIX_TEST_TMPDIR if the checkout parent is not writable.
+        """
         repo_root = Path(__file__).resolve().parents[1]
-        return tempfile.TemporaryDirectory(dir=str(repo_root.parent))
+        base = Path(
+            os.environ.get("BILLING_PREFIX_TEST_TMPDIR", str(repo_root.parent))
+        ).resolve()
+        if not os.access(base, os.W_OK):
+            raise unittest.SkipTest(
+                f"External billing prefix test base is not writable: {base}"
+            )
+        return tempfile.TemporaryDirectory(dir=str(base))
 
     def test_tmp_path_rejected_in_production(self):
         """/tmp/... BILLING_POOL_DIR falls back to default billing_pool in production."""
