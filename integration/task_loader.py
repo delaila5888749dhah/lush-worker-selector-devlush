@@ -26,8 +26,12 @@ _RE_EXP_MONTH = re.compile(r"^(0?[1-9]|1[0-2])$")
 _RE_EXP_YEAR = re.compile(r"^\d{2}$|^\d{4}$")
 # _RE_CVV: 3 or 4 digits (3 for most brands, 4 for AmEx).
 _RE_CVV = re.compile(r"^\d{3,4}$")
-# _RE_EMAIL: minimal email shape — local@domain.tld with no whitespace/@ in parts.
-_RE_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# _RE_EMAIL: format-only email validation — local@domain.tld where each domain
+# label starts/ends with an alphanumeric (no leading/trailing hyphen or dot, no
+# consecutive dots) and the TLD is at least two letters.
+_RE_EMAIL = re.compile(
+    r"^[^@\s]+@([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
 
 
 def _make_card(fields: List[str]) -> CardInfo:

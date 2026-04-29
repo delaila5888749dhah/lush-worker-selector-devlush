@@ -200,6 +200,40 @@ class ParseLineEmailValidationTests(unittest.TestCase):
         self.assertEqual(task.recipient_email, "nguyenvana@yahoo.com")
         self.assertEqual(task.amount, 100)
 
+    def test_parse_rejects_consecutive_dots_in_domain(self):
+        line = "a@b..com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_rejects_domain_starting_with_dot(self):
+        line = "a@.example.com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_rejects_domain_label_starting_with_hyphen(self):
+        line = "a@-example.com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_rejects_domain_label_ending_with_hyphen(self):
+        line = "a@example-.com|100|4111111111111111|07|27|123"
+        with self.assertLogs("integration.task_loader", level="WARNING") as cm:
+            _, task = self._load_one(line)
+        self.assertIsNone(task)
+        self.assertIn("invalid email/amount", "\n".join(cm.output))
+
+    def test_parse_accepts_plus_tag_and_subdomain(self):
+        line = "user.name+tag@mail.example.co.uk|100|4111111111111111|07|27|123"
+        _, task = self._load_one(line)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.recipient_email, "user.name+tag@mail.example.co.uk")
+
 
 if __name__ == "__main__":
     unittest.main()
