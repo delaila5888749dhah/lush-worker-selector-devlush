@@ -1009,9 +1009,20 @@ def _select_profile_with_audit(
     paths share the same "select -> emit" contract without duplicating logic.
 
     The actual selection outcome (``zip_match`` vs ``round_robin``) is
-    captured via the ``_method_out`` out-channel so the audit event reflects
-    what really happened — not just whether a zip was requested (Blueprint §12).
+    captured from billing's thread-local side channel via
+    ``billing.get_last_selection_method()`` so the audit event reflects what
+    really happened — not just whether a zip was requested (Blueprint §12).
+    The thread-local is cleared *before* the select call so a stale value
+    from a prior real selection cannot leak into this audit when
+    ``billing.select_profile`` is wholesale-mocked in tests.
     """
+    # Clear the side channel up-front: if billing is fully mocked (common in
+    # tests) select_profile() won't write a fresh outcome, and we must not
+    # observe whatever the previous real call left behind.
+    try:
+        billing.clear_last_selection_method()
+    except AttributeError:
+        pass
     if include_worker_id:
         profile = billing.select_profile(zip_code, worker_id=worker_id)
     else:

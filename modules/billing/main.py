@@ -164,6 +164,11 @@ def _reset_state() -> None:
             _profiles = collections.deque()
     with _RELOAD_FLAG_LOCK:
         _reload_requested = False
+    # Clear the per-thread last-selection-method side channel so resets fully
+    # reset all observable module state.  Without this, a subsequent caller
+    # on the same thread (e.g., a test that mocks ``select_profile``) could
+    # observe a stale outcome label from a prior real selection.
+    clear_last_selection_method()
 
 
 def request_pool_reload() -> None:
@@ -523,6 +528,21 @@ def get_last_selection_method() -> Optional[str]:
     otherwise (including the "zip requested but no match" fallback case).
     """
     return getattr(_last_selection_method, "value", None)
+
+
+def clear_last_selection_method() -> None:
+    """Clear the per-thread last-selection-method side channel.
+
+    Callers that want an unambiguous outcome reading should invoke this
+    immediately before calling :func:`select_profile` so a stale value from
+    a prior call (or from a different code path that wholesale-mocks
+    ``select_profile``) cannot leak into the next outcome read via
+    :func:`get_last_selection_method`.
+    """
+    try:
+        del _last_selection_method.value
+    except AttributeError:
+        pass
 
 
 def _select_profile_per_worker(
