@@ -77,7 +77,10 @@ class FileTaskLoader:
 
     def _load(self) -> None:
         try:
-            with open(self._file_path, encoding="utf-8") as fh:
+            # ``utf-8-sig`` transparently strips a UTF-8 BOM (``\ufeff``) from
+            # the first line so a BOM-prefixed recipient like
+            # ``\ufeffuser@example.com`` cannot leak into ``recipient_email``.
+            with open(self._file_path, encoding="utf-8-sig") as fh:
                 raw = fh.readlines()
         except OSError as exc:
             _logger.error("FileTaskLoader: cannot open %r: %s", self._file_path, exc)

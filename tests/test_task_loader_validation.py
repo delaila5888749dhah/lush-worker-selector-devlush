@@ -234,6 +234,14 @@ class ParseLineEmailValidationTests(unittest.TestCase):
         self.assertIsNotNone(task)
         self.assertEqual(task.recipient_email, "user.name+tag@mail.example.co.uk")
 
+    def test_parse_strips_utf8_bom_on_first_line(self):
+        # A UTF-8 BOM at the very start of the file must not leak into the
+        # parsed recipient email; the loader normalizes it via utf-8-sig.
+        line = "\ufeffuser@example.com|100|4111111111111111|07|27|123"
+        _, task = self._load_one(line)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.recipient_email, "user@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()
