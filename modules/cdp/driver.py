@@ -2326,7 +2326,8 @@ class GivexDriver:
         if selected is None:
             raise RuntimeError(
                 "_run_tab_janitor: no real content window available "
-                "after close_extra_tabs"
+                "after close_extra_tabs; only internal or probe-failed "
+                "handles remain"
             )
         self._driver.get("about:blank")
         time.sleep(2)

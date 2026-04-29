@@ -41,6 +41,17 @@ class _FakeDriver:
 
 
 class TestCloseExtraTabs(unittest.TestCase):
+    def test_fake_driver_get_records_current_handle(self):
+        """_FakeDriver.get records the handle focused when navigation occurs."""
+        drv = _FakeDriver(["H0", "H1"])
+        drv.get("about:blank")
+        drv.switch_to.window("H1")
+        drv.get("https://example.com/")
+        self.assertEqual(
+            drv.get_calls,
+            [("H0", "about:blank"), ("H1", "https://example.com/")],
+        )
+
     def test_close_extra_tabs_keeps_main(self):
         drv = _FakeDriver(["H0", "H1", "H2", "H3"])
         closed = close_extra_tabs(drv)
