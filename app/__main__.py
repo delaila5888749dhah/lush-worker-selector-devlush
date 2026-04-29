@@ -116,8 +116,13 @@ def _startup_load_billing_pool() -> None:
         raising ``CycleExhaustedError`` on the first cycle.
 
     In stub/dev mode (flag off):
-      - Failures and empty pools are logged at warning level and startup
-        continues; the pool will be loaded lazily on demand.
+      - If the startup load itself fails, the error is logged at warning
+        level and startup continues; the pool may then be loaded lazily on
+        demand later.
+      - If ``MIN_BILLING_PROFILES`` is set above 0 and the loaded pool size
+        is below that threshold, a warning is logged and startup continues.
+      - With the default stub/dev minimum of 0, an empty pool still counts as
+        a successful eager startup load and is logged at info level.
     """
     is_production = runtime.is_production_task_fn_enabled()
     default_min = 1 if is_production else 0
