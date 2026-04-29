@@ -42,6 +42,17 @@ def _wire_telegram_hooks() -> None:
         _log.warning("Failed to register Telegram alert handler: %s", exc)
 
 
+def _preload_orchestrator() -> None:
+    """Import orchestrator on the main thread before worker threads start.
+
+    integration.orchestrator registers an atexit hook at import time; importing
+    it lazily inside a worker during teardown can fail once Python is shutting
+    down atexit registration.
+    """
+    import importlib  # pylint: disable=import-outside-toplevel
+    importlib.import_module("integration.orchestrator")
+
+
 def _startup_check_geoip() -> None:
     """Verify the MaxMind GeoLite2 database is present and initialise the reader.
 
@@ -178,6 +189,7 @@ def main() -> None:
 
     if runtime.is_production_task_fn_enabled():
         _log.info("ENABLE_PRODUCTION_TASK_FN=on: loading production task_fn")
+        _preload_orchestrator()
         from integration.task_loader import FileTaskLoader  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
         from integration.worker_task import make_task_fn  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
         task_fn = make_task_fn(task_source=FileTaskLoader().get_task)

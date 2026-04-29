@@ -1,7 +1,9 @@
 """PR-10 hardening tests — F-11 (FSM_ALLOW_LEGACY) and F-12 (/tmp billing guard)."""
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 # Tests legitimately access module internals (_pool_dir) and use hardcoded
@@ -118,6 +120,12 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
     def tearDown(self):
         self._prod_patch.stop()
 
+    @staticmethod
+    def _external_tempdir():
+        """Return a temp dir outside the project root and outside /tmp."""
+        repo_root = Path(__file__).resolve().parents[1]
+        return tempfile.TemporaryDirectory(dir=str(repo_root.parent))
+
     def test_tmp_path_rejected_in_production(self):
         """/tmp/... BILLING_POOL_DIR falls back to default billing_pool in production."""
         with patch.dict(os.environ, {"BILLING_POOL_DIR": "/tmp/billing"}):  # nosec B108
@@ -142,11 +150,68 @@ class TestBillingTmpGuardProduction(unittest.TestCase):
             result = billing._pool_dir()
         self.assertTrue(str(result).startswith("/data"))
 
+    def test_allowed_external_prefix_accepted_in_production(self):
+        """BILLING_POOL_DIR under BILLING_ALLOWED_PREFIXES is accepted."""
+        with self._external_tempdir() as root:
+            pool_dir = Path(root) / "billing_pool"
+            with patch.dict(
+                os.environ,
+                {
+                    "BILLING_POOL_DIR": str(pool_dir),
+                    "BILLING_ALLOWED_PREFIXES": root,
+                },
+            ):
+                result = billing._pool_dir()
+        self.assertEqual(result, pool_dir.resolve())
+
+    def test_semicolon_separated_allowed_prefixes_accept_second_match(self):
+        """Multiple BILLING_ALLOWED_PREFIXES entries separated by ';' work."""
+        with self._external_tempdir() as first, self._external_tempdir() as second:
+            pool_dir = Path(second) / "billing_pool"
+            with patch.dict(
+                os.environ,
+                {
+                    "BILLING_POOL_DIR": str(pool_dir),
+                    "BILLING_ALLOWED_PREFIXES": f"{first}; {second}",
+                },
+            ):
+                result = billing._pool_dir()
+        self.assertEqual(result, pool_dir.resolve())
+
+    def test_unlisted_external_path_still_rejected_in_production(self):
+        """External BILLING_POOL_DIR without an allowed prefix falls back."""
+        with self._external_tempdir() as root:
+            pool_dir = Path(root) / "billing_pool"
+            with patch.dict(os.environ, {"BILLING_POOL_DIR": str(pool_dir)}):
+                with self.assertLogs(
+                    "modules.billing.main",
+                    level="WARNING",
+                ) as log_ctx:
+                    result = billing._pool_dir()
+        self.assertTrue(str(result).endswith("billing_pool"))
+        self.assertNotEqual(result, pool_dir.resolve())
+        self.assertTrue(any("outside allowed prefixes" in m for m in log_ctx.output))
+
     def test_tmp_flag_true_rejected(self):
         """ENABLE_PRODUCTION_TASK_FN=true also rejects /tmp."""
         with patch.dict(
             os.environ,
             {"ENABLE_PRODUCTION_TASK_FN": "true", "BILLING_POOL_DIR": "/tmp/x"},  # nosec B108
+        ):
+            with self.assertLogs("modules.billing.main", level="WARNING") as log_ctx:
+                result = billing._pool_dir()
+        self.assertTrue(str(result).endswith("billing_pool"))
+        self.assertFalse(str(result).startswith("/tmp"))
+        self.assertTrue(any("production mode" in m for m in log_ctx.output))
+
+    def test_tmp_allowed_prefix_still_rejected_in_production(self):
+        """Production mode rejects /tmp even if listed in BILLING_ALLOWED_PREFIXES."""
+        with patch.dict(
+            os.environ,
+            {
+                "BILLING_POOL_DIR": "/tmp/billing",  # nosec B108
+                "BILLING_ALLOWED_PREFIXES": "/tmp",  # nosec B108
+            },
         ):
             with self.assertLogs("modules.billing.main", level="WARNING") as log_ctx:
                 result = billing._pool_dir()

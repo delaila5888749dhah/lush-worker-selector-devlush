@@ -750,6 +750,17 @@ class TestAppMainStubPath(unittest.TestCase):
 class TestAppMainProductionPath(unittest.TestCase):
     """When ENABLE_PRODUCTION_TASK_FN is on, runtime.start receives make_task_fn result."""
 
+    def test_preload_orchestrator_imports_integration_orchestrator(self):
+        """The preload hook imports integration.orchestrator explicitly."""
+        import app.__main__ as app_main
+        import importlib
+        importlib.reload(app_main)
+
+        with patch("importlib.import_module") as mock_import:
+            app_main._preload_orchestrator()
+
+        mock_import.assert_called_once_with("integration.orchestrator")
+
     def test_production_task_fn_used_when_flag_on(self):
         fake_task_fn = MagicMock()
         with (
@@ -772,8 +783,48 @@ class TestAppMainProductionPath(unittest.TestCase):
             import app.__main__ as app_main
             import importlib
             importlib.reload(app_main)
-            app_main.main()
+            with patch.object(app_main, "_preload_orchestrator") as mock_preload:
+                app_main.main()
         mock_start.assert_called_once_with(fake_task_fn)
+        mock_preload.assert_called_once_with()
+
+    def test_production_preloads_orchestrator_before_runtime_start(self):
+        """Main-thread startup preloads orchestrator before worker threads run."""
+        fake_task_fn = MagicMock()
+        events = []
+
+        def _record_start(_task_fn):
+            events.append("start")
+
+        with (
+            patch("integration.runtime.is_production_task_fn_enabled", return_value=True),
+            patch("integration.runtime.start", side_effect=_record_start) as mock_start,
+            patch(
+                "integration.worker_task.make_task_fn",
+                return_value=fake_task_fn,
+            ),
+            patch.dict("os.environ", {"MIN_BILLING_PROFILES": "1"}, clear=False),
+            patch("os.path.exists", return_value=True),
+            patch("modules.cdp.driver.init_maxmind_reader"),
+            patch("modules.billing.main.load_billing_pool", return_value=1),
+        ):
+            import app.__main__ as app_main
+            import importlib
+            importlib.reload(app_main)
+
+            def _record_preload():
+                events.append("preload")
+
+            with patch.object(
+                app_main,
+                "_preload_orchestrator",
+                side_effect=_record_preload,
+            ) as mock_preload:
+                app_main.main()
+
+        mock_preload.assert_called_once_with()
+        mock_start.assert_called_once_with(fake_task_fn)
+        self.assertEqual(events, ["preload", "start"])
 
 
 # ── runtime.is_production_task_fn_enabled tests ───────────────────────────────

@@ -138,8 +138,13 @@ def _pool_dir() -> Path:
             return Path(__file__).resolve().parents[2] / "billing_pool"
         resolved = Path(override).resolve()
         project_root = Path(__file__).resolve().parents[2]
+        extra_allowed_prefixes = []
+        for raw_prefix in os.environ.get("BILLING_ALLOWED_PREFIXES", "").split(";"):
+            raw_prefix = raw_prefix.strip()
+            if raw_prefix:
+                extra_allowed_prefixes.append(Path(raw_prefix).resolve())
         if _is_production_mode():
-            allowed_prefixes = (project_root, Path("/data"))
+            allowed_prefixes = (project_root, Path("/data"), *extra_allowed_prefixes)
             tmp_path = Path("/tmp").resolve()
             if resolved == tmp_path or str(resolved).startswith(str(tmp_path) + os.sep):
                 _logger.warning(
@@ -148,7 +153,12 @@ def _pool_dir() -> Path:
                 )
                 return Path(__file__).resolve().parents[2] / "billing_pool"
         else:
-            allowed_prefixes = (project_root, Path("/data"), Path("/tmp"))
+            allowed_prefixes = (
+                project_root,
+                Path("/data"),
+                Path("/tmp"),
+                *extra_allowed_prefixes,
+            )
         if not any(
             resolved == prefix or str(resolved).startswith(str(prefix) + os.sep)
             for prefix in allowed_prefixes
