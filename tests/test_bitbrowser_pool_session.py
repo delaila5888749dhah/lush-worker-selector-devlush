@@ -210,11 +210,11 @@ class TestPoolEvict404(unittest.TestCase):
 
 
 class TestPoolMalformedWebdriver(unittest.TestCase):
-    """/browser/open returns 200 but webdriver field is malformed/empty.
+    """/browser/open returns 200 but both webdriver and http fields are absent/invalid.
 
-    Production code (modules/cdp/fingerprint.py:267-276) raises RuntimeError
-    and releases the profile back to the pool — BUSY must be cleared and
-    POOL-NO-DELETE must hold (no /browser/delete is ever issued).
+    Production code raises RuntimeError and releases the profile back to the
+    pool — BUSY must be cleared and POOL-NO-DELETE must hold (no /browser/delete
+    is ever issued).
     """
 
     def _assert_busy_cleared_no_delete(self, client, rec):
@@ -233,6 +233,7 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
         self.assertEqual(len(client._pool), 1)
 
     def test_empty_webdriver_releases_busy_no_delete(self):
+        # No 'http' field either — fallback must also fail → RuntimeError.
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(responses={"/browser/open": {"webdriver": ""}})
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
@@ -240,9 +241,11 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
                 with BitBrowserSession(client):
                     pass  # pragma: no cover - __enter__ must raise
         self.assertIn("webdriver", str(ctx.exception))
+        self.assertIn("http", str(ctx.exception))
         self._assert_busy_cleared_no_delete(client, rec)
 
     def test_missing_webdriver_releases_busy_no_delete(self):
+        # Neither 'webdriver' nor 'http' — fallback must fail → RuntimeError.
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(responses={"/browser/open": {}})
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
@@ -250,9 +253,11 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
                 with BitBrowserSession(client):
                     pass  # pragma: no cover - __enter__ must raise
         self.assertIn("webdriver", str(ctx.exception))
+        self.assertIn("http", str(ctx.exception))
         self._assert_busy_cleared_no_delete(client, rec)
 
     def test_non_string_webdriver_releases_busy_no_delete(self):
+        # Non-string 'webdriver', no 'http' — fallback must fail → RuntimeError.
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(responses={"/browser/open": {"webdriver": 12345}})
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
@@ -260,7 +265,88 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
                 with BitBrowserSession(client):
                     pass  # pragma: no cover - __enter__ must raise
         self.assertIn("webdriver", str(ctx.exception))
+        self.assertIn("http", str(ctx.exception))
         self._assert_busy_cleared_no_delete(client, rec)
+
+    # ── New tests for BitBrowser v144+/v146 'http' fallback ──────────────────
+
+    def test_session_uses_http_fallback_when_webdriver_missing(self):
+        """Pool mode, response has only 'http' (no 'webdriver'): session must
+        enter successfully and webdriver_url must be normalised to http://...
+        (BitBrowser v144+/v146 API format)."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(
+            responses={"/browser/open": {"http": "127.0.0.1:9222"}}
+        )
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with BitBrowserSession(client) as (profile_id, webdriver_url):
+                self.assertEqual(profile_id, "only")
+                self.assertEqual(webdriver_url, "http://127.0.0.1:9222")
+
+    def test_session_prefers_webdriver_over_http_when_both_present(self):
+        """When both 'webdriver' and 'http' are present, the legacy 'webdriver'
+        value must be used (backward compatibility)."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(
+            responses={
+                "/browser/open": {
+                    "webdriver": "http://127.0.0.1:9999",
+                    "http": "127.0.0.1:8888",
+                }
+            }
+        )
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with BitBrowserSession(client) as (profile_id, webdriver_url):
+                self.assertEqual(webdriver_url, "http://127.0.0.1:9999")
+
+    def test_session_raises_when_neither_webdriver_nor_http(self):
+        """Response has neither 'webdriver' nor 'http': RuntimeError must be
+        raised with a message mentioning both field names, BUSY must be cleared,
+        and POOL-NO-DELETE must hold."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(responses={"/browser/open": {"ws": "ws://..."}})
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with self.assertRaises(RuntimeError) as ctx:
+                with BitBrowserSession(client):
+                    pass  # pragma: no cover - __enter__ must raise
+        msg = str(ctx.exception)
+        self.assertIn("webdriver", msg)
+        self.assertIn("http", msg)
+        self._assert_busy_cleared_no_delete(client, rec)
+
+    def test_http_endpoint_with_protocol_prefix_not_double_prefixed(self):
+        """If the 'http' value already starts with 'http://', it must be used
+        as-is — NOT turned into 'http://http://...'."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(
+            responses={"/browser/open": {"http": "http://127.0.0.1:9222"}}
+        )
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with BitBrowserSession(client) as (_, webdriver_url):
+                self.assertEqual(webdriver_url, "http://127.0.0.1:9222")
+                self.assertFalse(
+                    webdriver_url.startswith("http://http://"),
+                    f"URL was double-prefixed: {webdriver_url}",
+                )
+
+    def test_pool_session_releases_busy_when_only_http_endpoint_used(self):
+        """Pool mode succeeds via the 'http' fallback; release_profile is called
+        on __exit__ and POOL-NO-DELETE holds throughout."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(
+            responses={"/browser/open": {"http": "127.0.0.1:64663"}}
+        )
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with BitBrowserSession(client) as (profile_id, webdriver_url):
+                self.assertEqual(webdriver_url, "http://127.0.0.1:64663")
+                # BUSY must be set while inside the session.
+                self.assertIn(profile_id, client._busy)
+        # After __exit__, BUSY must be cleared.
+        self.assertEqual(client._busy, set(),
+                         f"BUSY not cleared after __exit__: {client._busy}")
+        # POOL-NO-DELETE: /browser/delete must never be called.
+        for p in rec.paths():
+            self.assertNotIn("delete", p)
 
 
 class TestWorkerCountExceedsPoolSize(unittest.TestCase):

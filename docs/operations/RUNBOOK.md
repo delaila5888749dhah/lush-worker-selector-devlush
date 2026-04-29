@@ -72,6 +72,11 @@ Bước vận hành:
 5. Nếu mọi profile BUSY > 60s → `RuntimeError` (scale thêm profile hoặc
    giảm `WORKER_COUNT`).
 
+> **BitBrowser version compatibility:** both legacy (pre-v144, response
+> contains `webdriver` field) and current (v144/v146+, response contains
+> `http` field instead) are supported automatically — no configuration change
+> is required when upgrading BitBrowser.
+
 Rollback: đặt `BITBROWSER_POOL_MODE=0` → quay về legacy create/delete flow
 (hành vi không đổi, hoàn toàn backward-compatible).
 

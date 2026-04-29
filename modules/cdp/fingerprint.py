@@ -264,16 +264,29 @@ class BitBrowserSession:
             profile_id = self._client.create_profile()
             launch_data = self._client.launch_profile(profile_id)
         webdriver_url = launch_data.get("webdriver")
+        # Fallback for BitBrowser API v144+ (incl. v146): response uses 'http'
+        # instead of 'webdriver'.  Prefer 'webdriver' when both are present.
+        if not isinstance(webdriver_url, str) or not webdriver_url:
+            http_endpoint = launch_data.get("http")
+            if isinstance(http_endpoint, str) and http_endpoint:
+                webdriver_url = (
+                    http_endpoint
+                    if http_endpoint.startswith(("http://", "https://"))
+                    else f"http://{http_endpoint}"
+                )
         if not isinstance(webdriver_url, str) or not webdriver_url:
             if self._pool_mode:
                 try:
                     self._client.release_profile(profile_id)
                 except (urllib.error.URLError, OSError, RuntimeError) as rel_exc:
                     _log.warning(
-                        "release_profile failed after missing webdriver "
+                        "release_profile failed after missing webdriver/http "
                         "for %s: %s", profile_id, rel_exc)
                 self._released = True
-            raise RuntimeError("BitBrowser launch_profile response missing webdriver")
+            raise RuntimeError(
+                "BitBrowser launch_profile response missing both "
+                "'webdriver' and 'http' endpoint"
+            )
         self._profile_id = profile_id
         self._released = False
         return profile_id, webdriver_url
