@@ -652,13 +652,24 @@ class TestBuildRemoteDriver(unittest.TestCase):
         self.assertIn("debugger_address", msg)
         self.assertIn("driver_path", msg)
 
-    def test_bitbrowser_launch_endpoint_rejects_missing_fields(self):
+    def test_bitbrowser_launch_endpoint_rejects_incomplete_attach_mode(self):
         with self.assertRaises(ValueError) as ctx:
             BitBrowserLaunchEndpoint(debugger_address="127.0.0.1:64663")
         msg = str(ctx.exception)
         self.assertIn("webdriver_url", msg)
         self.assertIn("debugger_address", msg)
         self.assertIn("driver_path", msg)
+
+    def test_bitbrowser_launch_endpoint_rejects_empty_strings(self):
+        invalid_cases = [
+            {"webdriver_url": ""},
+            {"debugger_address": "", "driver_path": r"C:\chromedriver.exe"},
+            {"debugger_address": "127.0.0.1:64663", "driver_path": ""},
+        ]
+        for kwargs in invalid_cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    BitBrowserLaunchEndpoint(**kwargs)
 
     def test_falls_back_to_desired_capabilities_on_typeerror(self):
         """Legacy Selenium that rejects ``options=`` falls back gracefully."""
