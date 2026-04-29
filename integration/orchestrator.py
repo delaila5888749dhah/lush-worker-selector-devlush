@@ -1018,13 +1018,13 @@ def _select_profile_with_audit(
         profile = billing.select_profile(zip_code)
     # Read the *actual* outcome via billing's thread-local side channel.
     # In production select_profile() sets this on every successful return.
-    # When ``billing`` is wholesale-mocked in tests the accessor may return
-    # a non-string MagicMock; coerce that to ``None`` so the audit emitter
-    # falls back to its legacy intent-based label and existing tests stay
-    # compatible.
+    # When ``billing`` is wholesale-mocked in tests the accessor may be
+    # missing or return a non-string MagicMock; coerce either case to
+    # ``None`` so the audit emitter falls back to its legacy intent-based
+    # label and existing tests stay compatible.
     try:
         raw_method = billing.get_last_selection_method()
-    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+    except AttributeError:
         raw_method = None
     selection_method = raw_method if isinstance(raw_method, str) else None
     _emit_billing_audit_event(
