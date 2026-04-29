@@ -72,12 +72,14 @@ modules/delay/temporal.py — apply_temporal_modifier():
                              (clamped to [0.70, 1.30] of base, Blueprint §10)
 
 modules/delay/temporal.py — apply_micro_variation():
-  result = max(0.0, base_delay * uniform(0.90, 1.10))
+  DAY:   result = max(0.0, base_delay * (1 + sign * uniform(0.05, 0.10)))
+  NIGHT: result = max(0.0, base_delay * (1 + sign * uniform(0.05, 0.15)))
   → result is always non-negative
 ```
 
 modules/delay/temporal.py — apply_gradual_drift():
-  AR(1): new = 0.98 * old + 0.02 * 1.0 + N(0, 0.02), clamped to ±30%.
+  AR(1): new = 0.98 * old + 0.02 * 1.0 + N(0, drift_rate), clamped to ±30%.
+  drift_rate = 0.02 (DAY) or 0.02 * 1.3 = 0.026 (NIGHT) — variance higher at NIGHT.
   reset_drift() restores multiplier=1.0, step_count=0.
 
 **Rule:** Temporal modifier output must be non-negative and bounded by the

@@ -359,15 +359,50 @@ class TestMicroVariationMultiSeed(unittest.TestCase):
             "All seeds produce identical micro-variation — likely broken RNG")
 
     def test_variation_within_10_percent_for_multiple_seeds(self):
-        """micro_variation must stay within ±10% for all tested seeds."""
-        for seed in range(20):
-            tm = TemporalModel(PersonaProfile(seed))
-            for _ in range(50):
-                v = tm.apply_micro_variation(1.0)
-                self.assertGreaterEqual(v, 0.9 - 1e-9,
-                    f"seed={seed}: micro-variation below 0.9 (lower bound)")
-                self.assertLessEqual(v, 1.1 + 1e-9,
-                    f"seed={seed}: micro-variation above 1.1 (upper bound)")
+        """micro_variation must stay within ±10% (DAY) for all tested seeds."""
+        with patch.object(TemporalModel, "get_time_state", return_value="DAY"):
+            for seed in range(20):
+                tm = TemporalModel(PersonaProfile(seed))
+                for _ in range(50):
+                    v = tm.apply_micro_variation(1.0)
+                    self.assertGreaterEqual(v, 0.9 - 1e-9,
+                        f"seed={seed}: micro-variation below 0.9 (lower bound)")
+                    self.assertLessEqual(v, 1.1 + 1e-9,
+                        f"seed={seed}: micro-variation above 1.1 (upper bound)")
+
+    def test_variation_within_15_percent_at_night(self):
+        """micro_variation widens to ±15% at NIGHT (Blueprint §8.6 / §10)."""
+        with patch.object(TemporalModel, "get_time_state", return_value="NIGHT"):
+            for seed in range(20):
+                tm = TemporalModel(PersonaProfile(seed))
+                for _ in range(50):
+                    v = tm.apply_micro_variation(1.0)
+                    self.assertGreaterEqual(v, 0.85 - 1e-9,
+                        f"seed={seed}: night micro-variation below 0.85")
+                    self.assertLessEqual(v, 1.15 + 1e-9,
+                        f"seed={seed}: night micro-variation above 1.15")
+
+    def test_night_variance_higher_than_day(self):
+        """NIGHT micro-variation has wider spread than DAY (L3 / L6 spec)."""
+        def _samples(state: str) -> list:
+            with patch.object(TemporalModel, "get_time_state", return_value=state):
+                # Fresh persona+model per state so the RNG sequence is identical
+                # up to the day/night branch — only the upper bound differs.
+                tm = TemporalModel(PersonaProfile(2026))
+                return [tm.apply_micro_variation(1.0) for _ in range(500)]
+
+        day = _samples("DAY")
+        night = _samples("NIGHT")
+
+        def _variance(xs):
+            mean = sum(xs) / len(xs)
+            return sum((x - mean) ** 2 for x in xs) / len(xs)
+
+        self.assertGreater(_variance(night), _variance(day),
+            "NIGHT micro-variation must have higher variance than DAY")
+        # Sanity: DAY samples never exceed ±10%, NIGHT may reach beyond.
+        self.assertLessEqual(max(day), 1.1 + 1e-9)
+        self.assertGreaterEqual(min(day), 0.9 - 1e-9)
 
 
 class TestDayNightExplicitPatch(unittest.TestCase):

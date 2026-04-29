@@ -155,9 +155,21 @@ class TemporalModel:
         return min(base_delay + min(extra, 1.0), MAX_STEP_DELAY)
 
     def apply_micro_variation(self, base_delay: float) -> float:
-        """Add ±10% noise to *base_delay*, clamped to a non-negative result."""
+        """Add per-call ±5–10 % noise (DAY) or ±5–15 % noise (NIGHT).
+
+        Blueprint §8.6 / §10 (L3 / L6): each call samples a fresh
+        magnitude in ``[0.05, 0.10]`` (DAY) or ``[0.05, 0.15]`` (NIGHT)
+        and an independent random sign, so successive calls vary
+        across the full range instead of constantly hitting the
+        ±10 % edge. Result is clamped to a non-negative value to
+        protect downstream accumulators.
+        """
+        is_night = self.get_time_state(_utc_offset_var.get()) == "NIGHT"
+        upper = 0.15 if is_night else 0.10
         with self._rnd_lock:
-            return max(0.0, base_delay * self._rnd.uniform(0.90, 1.10))
+            magnitude = self._rnd.uniform(0.05, upper)
+            sign = 1.0 if self._rnd.random() < 0.5 else -1.0
+        return max(0.0, base_delay * (1.0 + sign * magnitude))
 
     def get_current_modifiers(self) -> dict:
         """Return a dict describing the current modifier configuration."""
@@ -166,7 +178,11 @@ class TemporalModel:
             "night_hesitation_increase_range": NIGHT_HESITATION_INCREASE_RANGE,
             "night_typo_increase_range": NIGHT_TYPO_INCREASE_RANGE,
             "fatigue_threshold": self._persona.fatigue_threshold,
-            "micro_var_range": (0.90, 1.10),
+            "micro_var_range_day": (0.05, 0.10),
+            "micro_var_range_night": (0.05, 0.15),
+            # Backwards-compatible key (legacy callers expect a multiplier
+            # band rather than the per-call magnitude range).
+            "micro_var_range": (0.85, 1.15),
         }
 
     def get_night_typo_increase(self, utc_offset_hours: float | None = None) -> float:
@@ -189,6 +205,9 @@ class TemporalModel:
     _DRIFT_AR_COEF: float = 0.98
     _DRIFT_RATE_DEFAULT: float = 0.02
     _DRIFT_CAP_DEFAULT: float = 0.30
+    # Blueprint §10 / L3: variance is wider at NIGHT — scale the per-step
+    # Gaussian std-dev by this factor when ``get_time_state`` reports NIGHT.
+    _NIGHT_DRIFT_RATE_MULT: float = 1.3
 
     def apply_gradual_drift(
         self,
@@ -205,6 +224,11 @@ class TemporalModel:
         ``[1 - drift_cap, 1 + drift_cap]`` so the envelope never exceeds
         ±30% by default.
 
+        Per Blueprint §10 / L3 the variance envelope is wider at NIGHT;
+        when the current time-of-day is NIGHT the per-step Gaussian
+        std-dev is scaled by ``1.3`` so cycle-to-cycle pacing drifts
+        more aggressively without breaching the ``±drift_cap`` clamp.
+
         Lock ordering is ``_drift_lock`` (outer) → ``_rnd_lock`` (inner)
         so each ``(old, step, new)`` triple is serialized: under
         concurrent callers the AR(1) sequence remains a single
@@ -213,6 +237,8 @@ class TemporalModel:
         deadlock with other call sites (which never hold
         ``_drift_lock``).
         """
+        if self.get_time_state(_utc_offset_var.get()) == "NIGHT":
+            drift_rate = drift_rate * self._NIGHT_DRIFT_RATE_MULT
         with self._drift_lock:
             with self._rnd_lock:
                 step = self._rnd.gauss(0.0, drift_rate)
