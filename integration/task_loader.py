@@ -26,6 +26,8 @@ _RE_EXP_MONTH = re.compile(r"^(0?[1-9]|1[0-2])$")
 _RE_EXP_YEAR = re.compile(r"^\d{2}$|^\d{4}$")
 # _RE_CVV: 3 or 4 digits (3 for most brands, 4 for AmEx).
 _RE_CVV = re.compile(r"^\d{3,4}$")
+# _RE_EMAIL: minimal email shape — local@domain.tld with no whitespace/@ in parts.
+_RE_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _make_card(fields: List[str]) -> CardInfo:
@@ -94,7 +96,7 @@ class FileTaskLoader:
         except ValueError:
             _logger.warning("FileTaskLoader: bad amount on line %d", line_no)
             return None
-        if amount <= 0 or not recipient:
+        if amount <= 0 or not recipient or not _RE_EMAIL.match(recipient):
             _logger.warning(
                 "FileTaskLoader: invalid email/amount on line %d", line_no
             )
