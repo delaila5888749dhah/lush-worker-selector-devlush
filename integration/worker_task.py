@@ -5,8 +5,8 @@ Creates a task_fn suitable for ``integration.runtime.start()``.  The
 returned callable wires the full browser lifecycle for one work cycle:
 
   1. Acquire BitBrowser client (fail fast if unavailable).
-  2. Create/launch a browser profile → obtain the ChromeDriver WebSocket URL.
-  3. Build a Selenium Remote driver against that URL.
+  2. Create/launch a browser profile → obtain Selenium attach metadata.
+  3. Build a Selenium driver against that metadata.
   4. Wrap in ``GivexDriver``.
   5. Register driver + PID + profile with the CDP registry (F-03).
   6. Probe ``add_cdp_listener`` availability (U-06 guard).
@@ -33,7 +33,11 @@ from modules.cdp.driver import (
     _lookup_maxmind_utc_offset,
     maxmind_lookup_zip,
 )
-from modules.cdp.fingerprint import BitBrowserSession, get_bitbrowser_client
+from modules.cdp.fingerprint import (
+    BitBrowserLaunchEndpoint,
+    BitBrowserSession,
+    get_bitbrowser_client,
+)
 from modules.delay.persona import PersonaProfile
 from modules.delay.temporal import set_utc_offset
 
@@ -108,8 +112,8 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 "Set BITBROWSER_API_KEY and ensure the endpoint is reachable."
             )
 
-        with BitBrowserSession(bb_client) as (profile_id, webdriver_url):
-            selenium_driver = _build_remote_driver(webdriver_url)
+        with BitBrowserSession(bb_client) as (profile_id, launch_endpoint):
+            selenium_driver = _build_remote_driver(launch_endpoint)
             givex_driver = None
             try:
                 # Wrap in GivexDriver and register with CDP registry (F-03).
@@ -246,16 +250,43 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
     return task_fn
 
 
-def _build_remote_driver(webdriver_url: str):
+def _build_remote_driver(launch_endpoint):
+    """Build a Selenium driver from BitBrowser launch metadata.
+
+    Legacy BitBrowser responses provide a Selenium Remote ``webdriver`` URL.
+    BitBrowser v144+ responses provide a DevTools ``http`` endpoint plus a
+    local chromedriver path; those must attach through ``Chrome`` with
+    ``ChromeOptions.debugger_address`` rather than ``Remote(.../session)``.
+
+    Raises:
+        RuntimeError: if selenium is not installed.
+    """
+    if isinstance(launch_endpoint, str):
+        return _build_legacy_remote_driver(launch_endpoint)
+    if (
+        isinstance(launch_endpoint, BitBrowserLaunchEndpoint)
+        and launch_endpoint.webdriver_url
+    ):
+        return _build_legacy_remote_driver(launch_endpoint.webdriver_url)
+    if (
+        isinstance(launch_endpoint, BitBrowserLaunchEndpoint)
+        and launch_endpoint.debugger_address
+        and launch_endpoint.driver_path
+    ):
+        return _build_chromedriver_attach_driver(
+            debugger_address=launch_endpoint.debugger_address,
+            driver_path=launch_endpoint.driver_path,
+        )
+    raise RuntimeError("BitBrowser launch endpoint is incomplete")
+
+
+def _build_legacy_remote_driver(webdriver_url: str):
     """Build a Selenium Remote WebDriver against *webdriver_url*.
 
     Forward-compatible with Selenium >= 4.10 by passing ``options=ChromeOptions()``
     instead of the deprecated/removed ``desired_capabilities=`` keyword argument.
     Falls back to ``desired_capabilities=`` only if the installed Selenium build
     rejects ``options=`` (i.e. very old pre-4.x clients).
-
-    Raises:
-        RuntimeError: if selenium is not installed.
     """
     try:
         remote_module = importlib.import_module("selenium.webdriver")
@@ -286,6 +317,26 @@ def _build_remote_driver(webdriver_url: str):
             command_executor=webdriver_url,
             desired_capabilities=capabilities,
         )
+
+
+def _build_chromedriver_attach_driver(debugger_address: str, driver_path: str):
+    """Attach Selenium to an already-open BitBrowser Chrome instance."""
+    try:
+        webdriver_module = importlib.import_module("selenium.webdriver")
+        service_module = importlib.import_module("selenium.webdriver.chrome.service")
+        Chrome = webdriver_module.Chrome
+        ChromeOptions = webdriver_module.ChromeOptions
+        Service = service_module.Service
+    except ImportError as exc:
+        raise RuntimeError(
+            "selenium is not installed; cannot build Chrome attach driver. "
+            "Install selenium-wire==5.1.0 for production use."
+        ) from exc
+
+    options = ChromeOptions()
+    options.debugger_address = debugger_address
+    service = Service(executable_path=driver_path)
+    return Chrome(service=service, options=options)
 
 
 def _get_browser_pid(driver) -> Optional[int]:

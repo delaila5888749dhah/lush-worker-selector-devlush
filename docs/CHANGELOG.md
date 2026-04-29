@@ -11,11 +11,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   present.  The bot raised `RuntimeError: BitBrowser launch_profile response
   missing webdriver` on every cycle, making the worker completely unusable on
   any machine running current upstream BitBrowser releases.
-- **Fix:** `BitBrowserSession.__enter__` now falls back to deriving the
-  Selenium Remote WebDriver URL from the `http` field (e.g.
-  `"127.0.0.1:64663"` → `"http://127.0.0.1:64663"`) when `webdriver` is
-  absent.  The legacy `webdriver` field is still preferred when both are
-  present — fully backward compatible.
+- **Fix:** legacy responses with `webdriver` still use Selenium Remote, while
+  v144+/v146 responses with `http` + `driver` now attach through the supplied
+  local chromedriver using `ChromeOptions.debugger_address` (normalised to
+  `host:port`).  The `http` DevTools endpoint is **not** treated as a Selenium
+  Remote endpoint, avoiding `/session` `Not Found` failures.  The legacy
+  `webdriver` field is still preferred when both are present — fully backward
+  compatible.
 - **No operator action required:** no env-var changes or migration steps are
   needed.  Both old (`webdriver`) and new (`http`) response formats are
   supported automatically.

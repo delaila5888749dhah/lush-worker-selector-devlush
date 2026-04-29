@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from modules.cdp.fingerprint import (
     BitBrowserClient,
+    BitBrowserLaunchEndpoint,
     BitBrowserPoolClient,
     BitBrowserSession,
     get_bitbrowser_client,
@@ -268,20 +269,29 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
         self.assertIn("http", str(ctx.exception))
         self._assert_busy_cleared_no_delete(client, rec)
 
-    # ── New tests for BitBrowser v144+/v146 'http' fallback ──────────────────
+    # ── New tests for BitBrowser v144+/v146 chromedriver attach mode ─────────
 
-    def test_session_uses_http_fallback_when_webdriver_missing(self):
-        """Pool mode, response has only 'http' (no 'webdriver'): session must
-        enter successfully and webdriver_url must be normalised to http://...
-        (BitBrowser v144+/v146 API format)."""
+    def test_session_uses_chromedriver_attach_when_webdriver_missing(self):
+        """Pool mode, response has 'http' + 'driver' (no 'webdriver'): session
+        must enter successfully and return chromedriver attach metadata."""
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(
-            responses={"/browser/open": {"http": "127.0.0.1:9222"}}
+            responses={
+                "/browser/open": {
+                    "http": "127.0.0.1:9222",
+                    "driver": r"C:\chromedriver\144\chromedriver.exe",
+                }
+            }
         )
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
-            with BitBrowserSession(client) as (profile_id, webdriver_url):
+            with BitBrowserSession(client) as (profile_id, launch_endpoint):
                 self.assertEqual(profile_id, "only")
-                self.assertEqual(webdriver_url, "http://127.0.0.1:9222")
+                self.assertIsInstance(launch_endpoint, BitBrowserLaunchEndpoint)
+                self.assertEqual(launch_endpoint.debugger_address, "127.0.0.1:9222")
+                self.assertEqual(
+                    launch_endpoint.driver_path,
+                    r"C:\chromedriver\144\chromedriver.exe",
+                )
 
     def test_session_prefers_webdriver_over_http_when_both_present(self):
         """When both 'webdriver' and 'http' are present, the legacy 'webdriver'
@@ -299,10 +309,10 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
             with BitBrowserSession(client) as (profile_id, webdriver_url):
                 self.assertEqual(webdriver_url, "http://127.0.0.1:9999")
 
-    def test_session_raises_when_neither_webdriver_nor_http(self):
-        """Response has neither 'webdriver' nor 'http': RuntimeError must be
-        raised with a message mentioning both field names, BUSY must be cleared,
-        and POOL-NO-DELETE must hold."""
+    def test_session_raises_when_neither_webdriver_nor_modern_pair(self):
+        """Response has neither 'webdriver' nor modern 'http'/'driver':
+        RuntimeError must be raised with a message mentioning field names, BUSY
+        must be cleared, and POOL-NO-DELETE must hold."""
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(responses={"/browser/open": {"ws": "ws://..."}})
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
@@ -312,33 +322,57 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("webdriver", msg)
         self.assertIn("http", msg)
+        self.assertIn("driver", msg)
+        self._assert_busy_cleared_no_delete(client, rec)
+
+    def test_session_raises_when_http_present_without_driver(self):
+        """DevTools 'http' alone is not a Selenium endpoint; missing 'driver'
+        must fail and release BUSY instead of returning http://host:port."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(
+            responses={"/browser/open": {"http": "127.0.0.1:9222"}}
+        )
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with self.assertRaises(RuntimeError) as ctx:
+                with BitBrowserSession(client):
+                    pass  # pragma: no cover - __enter__ must raise
+        msg = str(ctx.exception)
+        self.assertIn("webdriver", msg)
+        self.assertIn("http", msg)
+        self.assertIn("driver", msg)
         self._assert_busy_cleared_no_delete(client, rec)
 
     def test_http_endpoint_with_protocol_prefix_not_double_prefixed(self):
-        """If the 'http' value already starts with 'http://', it must be used
-        as-is — NOT turned into 'http://http://...'."""
+        """If the 'http' value starts with 'http://', debugger_address must be
+        normalised to bare host:port."""
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(
-            responses={"/browser/open": {"http": "http://127.0.0.1:9222"}}
+            responses={
+                "/browser/open": {
+                    "http": "http://127.0.0.1:9222",
+                    "driver": r"C:\chromedriver\144\chromedriver.exe",
+                }
+            }
         )
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
-            with BitBrowserSession(client) as (_, webdriver_url):
-                self.assertEqual(webdriver_url, "http://127.0.0.1:9222")
-                self.assertFalse(
-                    webdriver_url.startswith("http://http://"),
-                    f"URL was double-prefixed: {webdriver_url}",
-                )
+            with BitBrowserSession(client) as (_, launch_endpoint):
+                self.assertEqual(launch_endpoint.debugger_address, "127.0.0.1:9222")
 
     def test_pool_session_releases_busy_when_only_http_endpoint_used(self):
-        """Pool mode succeeds via the 'http' fallback; release_profile is called
-        on __exit__ and POOL-NO-DELETE holds throughout."""
+        """Pool mode succeeds via modern attach metadata; release_profile is
+        called on __exit__ and POOL-NO-DELETE holds throughout."""
         client = _make_pool_client(ids=["only"])
         rec = _RecordingPost(
-            responses={"/browser/open": {"http": "127.0.0.1:64663"}}
+            responses={
+                "/browser/open": {
+                    "http": "127.0.0.1:64663",
+                    "driver": r"C:\chromedriver\144\chromedriver.exe",
+                }
+            }
         )
         with patch.object(BitBrowserPoolClient, "_post", new=rec):
-            with BitBrowserSession(client) as (profile_id, webdriver_url):
-                self.assertEqual(webdriver_url, "http://127.0.0.1:64663")
+            with BitBrowserSession(client) as (profile_id, launch_endpoint):
+                self.assertEqual(launch_endpoint.debugger_address, "127.0.0.1:64663")
                 # BUSY must be set while inside the session.
                 self.assertIn(profile_id, client._busy)
         # After __exit__, BUSY must be cleared.
