@@ -1,4 +1,4 @@
-"""Startup tests for ``app._startup_load_billing_pool``.
+"""Startup tests for ``app.__main__._startup_load_billing_pool``.
 
 Mirrors the MaxMind GeoIP startup-abort behaviour: in production mode an
 empty billing pool must abort startup with ``sys.exit(1)``; in dev/stub mode
