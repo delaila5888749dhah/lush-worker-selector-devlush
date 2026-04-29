@@ -381,36 +381,94 @@ class TestPerWorkerBillingState(unittest.TestCase):
                 with self.assertRaises(CycleExhaustedError):
                     billing.select_profile("10001", worker_id="empty-worker")
 
-    def test_worker_shuffle_deterministic_across_module_reload(self):
-        """Reloading the module yields the same shuffle order for the same worker_id.
+    def test_worker_shuffle_matches_sha256_golden_order(self):
+        """Shuffle order must match the SHA-256-derived golden order.
 
-        Python's built-in ``hash()`` for ``str`` is randomized per-process via
-        ``PYTHONHASHSEED``; using SHA-256 keeps the seed stable across process
-        and module reloads, enabling reproducible debugging/replay.
+        This pins the seed derivation to SHA-256(worker_id, UTF-8) → first 8
+        bytes → big-endian int, which is independent of ``PYTHONHASHSEED``.
+        If the implementation regresses to ``hash(worker_id)`` (or any other
+        non-canonical seed), this assertion will fail because ``hash`` of a
+        ``str`` is randomized per-process.
         """
-        import importlib  # noqa: PLC0415
+        import hashlib  # noqa: PLC0415
 
-        first = billing.get_worker_state("w1")
-        first_order = [p.first_name for p in first.profiles]
+        worker_id = "w1"
+        digest = hashlib.sha256(worker_id.encode("utf-8")).digest()[:8]
+        expected_seed = int.from_bytes(digest, "big")
+        expected = list(self._profiles)
+        random.Random(expected_seed).shuffle(expected)
+        expected_order = [p.first_name for p in expected]
 
-        # Reload the billing module to simulate a process restart (the module
-        # globals — including _WORKER_STATES — are re-initialized).
-        reloaded = importlib.reload(billing)
-        try:
-            with reloaded._MASTER_POOL_LOCK:  # pylint: disable=protected-access
-                reloaded._MASTER_POOL = list(self._profiles)  # pylint: disable=protected-access
-                reloaded._MASTER_POOL_LOADED = True  # pylint: disable=protected-access
+        actual_order = [p.first_name for p in billing.get_worker_state(worker_id).profiles]
+        self.assertEqual(
+            expected_order, actual_order,
+            "Shuffle order must derive from SHA-256(worker_id), not hash().",
+        )
 
-            second = reloaded.get_worker_state("w1")
-            second_order = [p.first_name for p in second.profiles]
-            self.assertEqual(
-                first_order, second_order,
-                "Same worker_id must produce identical shuffle order across "
-                "module reloads (SHA-256 seed, not PYTHONHASHSEED-dependent).",
-            )
-        finally:
-            # Restore module reference so subsequent tests use a clean state.
-            importlib.reload(billing)
+    def test_worker_shuffle_deterministic_across_subprocess(self):
+        """Same worker_id yields identical shuffle order in a fresh process.
+
+        Spawns a child Python interpreter with a randomized ``PYTHONHASHSEED``
+        (the same env var that previously caused ``hash(worker_id)`` to vary
+        per process) and asserts the shuffle order is byte-identical to the
+        current process. This is the regression guard for the original bug.
+        """
+        import json  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+        import textwrap  # noqa: PLC0415
+
+        in_proc_order = [p.first_name for p in billing.get_worker_state("w1").profiles]
+
+        # Build a child script that recreates the same master pool and prints
+        # the resulting shuffle order as JSON. Pool data is passed via JSON
+        # to avoid relying on filesystem state.
+        pool_payload = json.dumps([
+            {
+                "first_name": p.first_name, "last_name": p.last_name,
+                "address": p.address, "city": p.city, "state": p.state,
+                "zip_code": p.zip_code, "phone": p.phone, "email": p.email,
+            }
+            for p in self._profiles
+        ])
+        child_script = textwrap.dedent(
+            """
+            import json, sys
+            from modules.billing import main as billing
+            from modules.common.types import BillingProfile
+            data = json.loads(sys.argv[1])
+            profiles = [BillingProfile(**d) for d in data]
+            with billing._MASTER_POOL_LOCK:
+                billing._MASTER_POOL = list(profiles)
+                billing._MASTER_POOL_LOADED = True
+            order = [p.first_name for p in billing.get_worker_state("w1").profiles]
+            print(json.dumps(order))
+            """
+        )
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ)
+        # Force a different PYTHONHASHSEED than the parent. Under the old
+        # ``hash(worker_id)`` implementation this would (with overwhelming
+        # probability) produce a different shuffle order, so this test would
+        # have caught the regression. SHA-256 is unaffected.
+        env["PYTHONHASHSEED"] = "12345"
+        env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
+
+        result = subprocess.run(
+            [sys.executable, "-c", child_script, pool_payload],
+            cwd=repo_root, env=env, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"Child process failed: stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
+        child_order = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(
+            in_proc_order, child_order,
+            "Same worker_id must produce identical shuffle order across "
+            "processes regardless of PYTHONHASHSEED.",
+        )
 
     def test_two_workers_get_different_orders(self):
         """Different worker_ids produce different shuffle orders (deterministically)."""
