@@ -358,6 +358,22 @@ class TestPoolMalformedWebdriver(unittest.TestCase):
             with BitBrowserSession(client) as (_, launch_endpoint):
                 self.assertEqual(launch_endpoint.debugger_address, "127.0.0.1:9222")
 
+    def test_http_endpoint_without_protocol_discards_path(self):
+        """If BitBrowser returns host:port plus a path without protocol, only
+        host:port should become Selenium's debugger_address."""
+        client = _make_pool_client(ids=["only"])
+        rec = _RecordingPost(
+            responses={
+                "/browser/open": {
+                    "http": "127.0.0.1:9222/devtools/browser/abc",
+                    "driver": r"C:\chromedriver\144\chromedriver.exe",
+                }
+            }
+        )
+        with patch.object(BitBrowserPoolClient, "_post", new=rec):
+            with BitBrowserSession(client) as (_, launch_endpoint):
+                self.assertEqual(launch_endpoint.debugger_address, "127.0.0.1:9222")
+
     def test_pool_session_releases_busy_when_only_http_endpoint_used(self):
         """Pool mode succeeds via modern attach metadata; release_profile is
         called on __exit__ and POOL-NO-DELETE holds throughout."""

@@ -313,6 +313,8 @@ class BitBrowserSession:
                 and driver_path
             ):
                 debugger_address = _normalise_debugger_address(http_endpoint)
+                # ``http_endpoint`` can be non-empty but parse to an empty
+                # debugger address for malformed values such as ``http://``.
                 launch_endpoint = (
                     BitBrowserLaunchEndpoint(
                         debugger_address=debugger_address,
