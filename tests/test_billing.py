@@ -533,5 +533,45 @@ class GenerateEmailTests(unittest.TestCase):
         self.assertEqual(result1, result2)
 
 
+class ParseProfileLineTests(unittest.TestCase):
+    """Defense-in-depth: ``_parse_profile_line`` must strip leading numeric
+    prefixes (e.g. ``"1. "`` or ``"2) "``) accidentally copy/pasted from
+    numbered lists in docs/Markdown.  Without this guard, ``first_name``
+    would silently ingest the prefix and leak into form fills + the
+    ``profile_id`` hash."""
+
+    def test_parse_profile_strips_numeric_prefix(self):
+        profile = billing._parse_profile_line(
+            "1. Alice|Smith|1 Main|NY|NY|10001"
+        )
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.first_name, "Alice")
+        self.assertEqual(profile.last_name, "Smith")
+
+    def test_parse_profile_strips_paren_numbering(self):
+        profile = billing._parse_profile_line(
+            "2) Bob|Johnson|45 Oak Avenue|Los Angeles|CA|90001"
+        )
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.first_name, "Bob")
+        self.assertEqual(profile.last_name, "Johnson")
+
+    def test_parse_profile_without_prefix_unchanged(self):
+        profile = billing._parse_profile_line(
+            "Carol|Williams|88 Pine Road|Chicago|IL|60601"
+        )
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.first_name, "Carol")
+
+    def test_parse_profile_blank_line_returns_none(self):
+        self.assertIsNone(billing._parse_profile_line(""))
+        self.assertIsNone(billing._parse_profile_line("   "))
+
+    def test_parse_profile_only_numeric_prefix_returns_none(self):
+        # Just ``"4. "`` with no fields must not panic and must return None.
+        self.assertIsNone(billing._parse_profile_line("4. "))
+        self.assertIsNone(billing._parse_profile_line("10) "))
+
+
 if __name__ == "__main__":
     unittest.main()

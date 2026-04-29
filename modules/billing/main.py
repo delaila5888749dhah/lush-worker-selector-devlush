@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import random
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,11 @@ _MASTER_POOL_LOADED: bool = False  # pylint: disable=invalid-name
 
 _WORKER_STATES: Dict[str, "WorkerBillingState"] = {}
 _WORKER_STATES_LOCK = threading.Lock()
+
+# Strip a leading numeric prefix like "1. " or "2) " from profile seed lines.
+# Defends against numbered lists copy/pasted from docs/Markdown leaking the
+# numbering into first_name (and consequently form fills + profile_id hashes).
+_LEADING_NUMBERING = re.compile(r"^\s*\d+[.)]\s+")
 
 
 @dataclass
@@ -242,7 +248,11 @@ def _normalize_zip(zip_code: str | int | None) -> str:
 
 
 def _parse_profile_line(line: str) -> BillingProfile | None:
-    cleaned = line.strip()
+    # Defense-in-depth: strip a leading numeric prefix like "1. " or "2) "
+    # that may sneak in from copy/paste of numbered lists in docs/Markdown.
+    # Without this, "1. Alice|Smith|..." would ingest first_name as "1. Alice"
+    # and leak into form fills and profile_id hashes.
+    cleaned = _LEADING_NUMBERING.sub("", line.strip())
     if not cleaned:
         return None
     parts = [part.strip() for part in cleaned.split("|")]
