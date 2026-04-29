@@ -264,8 +264,8 @@ class BitBrowserSession:
             profile_id = self._client.create_profile()
             launch_data = self._client.launch_profile(profile_id)
         webdriver_url = launch_data.get("webdriver")
-        # Fallback for BitBrowser API v144+ (incl. v146): response uses 'http'
-        # instead of 'webdriver'.  Prefer 'webdriver' when both are present.
+        # Fallback for BitBrowser API v144+: response uses 'http' instead of
+        # 'webdriver'.  Prefer 'webdriver' when both are present.
         if not isinstance(webdriver_url, str) or not webdriver_url:
             http_endpoint = launch_data.get("http")
             if isinstance(http_endpoint, str) and http_endpoint:
