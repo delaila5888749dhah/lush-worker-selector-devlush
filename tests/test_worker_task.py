@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import MagicMock, call, patch
 
 from modules.common.exceptions import SessionFlaggedError
+from modules.cdp.fingerprint import BitBrowserLaunchEndpoint
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -566,6 +567,110 @@ class TestBuildRemoteDriver(unittest.TestCase):
         # Must not pass deprecated kwarg.
         _, kwargs = Remote.call_args
         self.assertNotIn("desired_capabilities", kwargs)
+
+    def test_legacy_launch_endpoint_uses_remote_driver(self):
+        """Legacy BitBrowser webdriver metadata still uses Selenium Remote."""
+        sentinel_driver = object()
+        options_instance = MagicMock(name="ChromeOptionsInstance")
+        ChromeOptions = MagicMock(return_value=options_instance)
+        Remote = MagicMock(return_value=sentinel_driver)
+        Chrome = MagicMock()
+        fake_webdriver = MagicMock(
+            Remote=Remote,
+            Chrome=Chrome,
+            ChromeOptions=ChromeOptions,
+        )
+
+        def _import(name):
+            if name == "selenium.webdriver":
+                return fake_webdriver
+            raise AssertionError(f"unexpected import: {name}")
+
+        with patch(
+            "integration.worker_task.importlib.import_module",
+            side_effect=_import,
+        ):
+            from integration.worker_task import _build_remote_driver
+            result = _build_remote_driver("http://127.0.0.1:9999")
+
+        self.assertIs(result, sentinel_driver)
+        Remote.assert_called_once_with(
+            command_executor="http://127.0.0.1:9999",
+            options=options_instance,
+        )
+        Chrome.assert_not_called()
+
+    def test_modern_launch_endpoint_uses_chromedriver_attach_mode(self):
+        """BitBrowser v144/v146 metadata uses local chromedriver attach mode."""
+        sentinel_driver = object()
+        options_instance = MagicMock(name="ChromeOptionsInstance")
+        service_instance = MagicMock(name="ServiceInstance")
+        ChromeOptions = MagicMock(return_value=options_instance)
+        Chrome = MagicMock(return_value=sentinel_driver)
+        Remote = MagicMock()
+        fake_webdriver = MagicMock(
+            Remote=Remote,
+            Chrome=Chrome,
+            ChromeOptions=ChromeOptions,
+        )
+        Service = MagicMock(return_value=service_instance)
+        fake_service_module = MagicMock(Service=Service)
+
+        def _import(name):
+            if name == "selenium.webdriver":
+                return fake_webdriver
+            if name == "selenium.webdriver.chrome.service":
+                return fake_service_module
+            raise AssertionError(f"unexpected import: {name}")
+
+        endpoint = BitBrowserLaunchEndpoint(
+            debugger_address="127.0.0.1:64663",
+            driver_path=r"C:\chromedriver\144\chromedriver.exe",
+        )
+        with patch(
+            "integration.worker_task.importlib.import_module",
+            side_effect=_import,
+        ):
+            from integration.worker_task import _build_remote_driver
+            result = _build_remote_driver(endpoint)
+
+        self.assertIs(result, sentinel_driver)
+        self.assertEqual(options_instance.debugger_address, "127.0.0.1:64663")
+        Service.assert_called_once_with(
+            executable_path=r"C:\chromedriver\144\chromedriver.exe"
+        )
+        Chrome.assert_called_once_with(service=service_instance, options=options_instance)
+        Remote.assert_not_called()
+
+    def test_incomplete_launch_endpoint_error_lists_required_fields(self):
+        from integration.worker_task import _build_remote_driver
+
+        with self.assertRaises(RuntimeError) as ctx:
+            _build_remote_driver(object())
+        msg = str(ctx.exception)
+        self.assertIn("webdriver_url", msg)
+        self.assertIn("debugger_address", msg)
+        self.assertIn("driver_path", msg)
+
+    def test_bitbrowser_launch_endpoint_rejects_incomplete_attach_mode(self):
+        with self.assertRaises(ValueError) as ctx:
+            BitBrowserLaunchEndpoint(debugger_address="127.0.0.1:64663")
+        msg = str(ctx.exception)
+        self.assertIn("webdriver_url", msg)
+        self.assertIn("debugger_address", msg)
+        self.assertIn("driver_path", msg)
+
+    def test_bitbrowser_launch_endpoint_rejects_empty_strings(self):
+        invalid_cases = [
+            {"driver_path": r"C:\chromedriver.exe"},
+            {"webdriver_url": ""},
+            {"debugger_address": "", "driver_path": r"C:\chromedriver.exe"},
+            {"debugger_address": "127.0.0.1:64663", "driver_path": ""},
+        ]
+        for kwargs in invalid_cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    BitBrowserLaunchEndpoint(**kwargs)
 
     def test_falls_back_to_desired_capabilities_on_typeerror(self):
         """Legacy Selenium that rejects ``options=`` falls back gracefully."""

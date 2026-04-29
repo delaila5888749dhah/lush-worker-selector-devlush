@@ -5,6 +5,23 @@ All notable changes to `lush-givex-worker` are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
+### Fixed (BitBrowser v144+/v146 compatibility — `launch_profile` response format)
+- **Bug:** BitBrowser v144 and v146 changed the `/api/v1/browser/open`
+  (`launch_profile`) response format: the `webdriver` field is no longer
+  present.  The bot raised `RuntimeError: BitBrowser launch_profile response
+  missing webdriver` on every cycle, making the worker completely unusable on
+  any machine running current upstream BitBrowser releases.
+- **Fix:** legacy responses with `webdriver` still use Selenium Remote, while
+  v144+/v146 responses with `http` + `driver` now attach through the supplied
+  local chromedriver using `ChromeOptions.debugger_address` (normalised to
+  `host:port`).  The `http` DevTools endpoint is **not** treated as a Selenium
+  Remote endpoint, avoiding `/session` `Not Found` failures.  The legacy
+  `webdriver` field is still preferred when both are present — fully backward
+  compatible.
+- **No operator action required:** no env-var changes or migration steps are
+  needed.  Both old (`webdriver`) and new (`http`) response formats are
+  supported automatically.
+
 ### Documented (Blueprint §14.5 — Autoscaler error-rate path)
 - `autoscaler._evaluate_scale_down(error_rate)` clarified as a two-mode API:
   the per-worker failure sub-path (default `error_rate=0.0`) is production-

@@ -66,11 +66,19 @@ Bước vận hành:
 3. Khởi động `python -m app`. Mỗi cycle sẽ:
    - `acquire_profile()` theo round-robin (skip profile đang BUSY),
    - POST `/browser/update/partial` random lại fingerprint,
-   - POST `/browser/open` nhận `webdriver` URL → Selenium + CDP attach,
+   - POST `/browser/open` nhận metadata attach Selenium (`webdriver` legacy,
+     hoặc `http` + `driver` trên BitBrowser v144/v146+),
    - Kết thúc: `/browser/close` (KHÔNG delete) + trả profile về pool.
 4. Nếu API trả 404 cho 1 profile → log ERROR, evict runtime khỏi pool, tiếp tục.
 5. Nếu mọi profile BUSY > 60s → `RuntimeError` (scale thêm profile hoặc
    giảm `WORKER_COUNT`).
+
+> **BitBrowser version compatibility:** both legacy (pre-v144, response
+> contains `webdriver` field) and current (v144/v146+, response contains
+> `http` + `driver` fields) are supported automatically — no configuration
+> change is required when upgrading BitBrowser.  Current versions attach via
+> local chromedriver + `ChromeOptions.debugger_address`; the `http` DevTools
+> endpoint is not used as a Selenium Remote URL.
 
 Rollback: đặt `BITBROWSER_POOL_MODE=0` → quay về legacy create/delete flow
 (hành vi không đổi, hoàn toàn backward-compatible).

@@ -9,10 +9,47 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+
+@dataclass(frozen=True)
+class BitBrowserLaunchEndpoint:
+    """Selenium attachment details returned by BitBrowser profile launch."""
+
+    webdriver_url: Optional[str] = None
+    debugger_address: Optional[str] = None
+    driver_path: Optional[str] = None
+
+    def uses_remote(self) -> bool:
+        return isinstance(self.webdriver_url, str) and bool(self.webdriver_url)
+
+    def uses_chromedriver_attach(self) -> bool:
+        return (
+            isinstance(self.debugger_address, str)
+            and bool(self.debugger_address)
+            and isinstance(self.driver_path, str)
+            and bool(self.driver_path)
+        )
+
+    def __post_init__(self) -> None:
+        if not (self.uses_remote() or self.uses_chromedriver_attach()):
+            raise ValueError(
+                "BitBrowserLaunchEndpoint requires either webdriver_url "
+                "or both debugger_address and driver_path"
+            )
+
+
+def _normalise_debugger_address(http_endpoint: str) -> str:
+    """Return ``host:port`` from BitBrowser's DevTools ``http`` endpoint."""
+    endpoint = http_endpoint.strip()
+    if endpoint.startswith(("http://", "https://")):
+        parsed = urllib.parse.urlparse(endpoint)
+        return parsed.netloc
+    return endpoint.split("/", 1)[0]
 
 
 # ── BitBrowser endpoint scheme validation (INV-BITBROWSER-ENDPOINT-01) ───
@@ -223,7 +260,7 @@ class BitBrowserSession:
         """Return the bound profile id (or None before __enter__)."""
         return self._profile_id
 
-    def __enter__(self) -> Tuple[str, str]:
+    def __enter__(self) -> Tuple[str, object]:
         if self._pool_mode:
             # Pool-mode flow (Blueprint §2.1):
             #   acquire_profile → randomize_fingerprint (/browser/update/partial)
@@ -264,19 +301,50 @@ class BitBrowserSession:
             profile_id = self._client.create_profile()
             launch_data = self._client.launch_profile(profile_id)
         webdriver_url = launch_data.get("webdriver")
-        if not isinstance(webdriver_url, str) or not webdriver_url:
+        # BitBrowser API v144+ returns a DevTools ``http`` endpoint and local
+        # chromedriver path instead of a Selenium Remote ``webdriver`` URL.
+        # Prefer ``webdriver`` when both are present for legacy compatibility.
+        launch_endpoint: object
+        if isinstance(webdriver_url, str) and webdriver_url:
+            launch_endpoint = webdriver_url
+        else:
+            http_endpoint = launch_data.get("http")
+            driver_path = launch_data.get("driver")
+            if (
+                isinstance(http_endpoint, str)
+                and http_endpoint
+                and isinstance(driver_path, str)
+                and driver_path
+            ):
+                debugger_address = _normalise_debugger_address(http_endpoint)
+                # ``http_endpoint`` can be non-empty but parse to an empty
+                # debugger address for malformed values such as ``http://``.
+                launch_endpoint = (
+                    BitBrowserLaunchEndpoint(
+                        debugger_address=debugger_address,
+                        driver_path=driver_path,
+                    )
+                    if debugger_address
+                    else None
+                )
+            else:
+                launch_endpoint = None
+        if launch_endpoint is None:
             if self._pool_mode:
                 try:
                     self._client.release_profile(profile_id)
                 except (urllib.error.URLError, OSError, RuntimeError) as rel_exc:
                     _log.warning(
-                        "release_profile failed after missing webdriver "
+                        "release_profile failed after missing webdriver/http/driver "
                         "for %s: %s", profile_id, rel_exc)
                 self._released = True
-            raise RuntimeError("BitBrowser launch_profile response missing webdriver")
+            raise RuntimeError(
+                "BitBrowser launch_profile response missing both "
+                "'webdriver' and modern 'http'/'driver' endpoints"
+            )
         self._profile_id = profile_id
         self._released = False
-        return profile_id, webdriver_url
+        return profile_id, launch_endpoint
 
     def release_profile(self) -> None:
         """Return the BitBrowser profile to a clean state.
