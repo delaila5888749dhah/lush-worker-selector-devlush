@@ -394,7 +394,12 @@ def get_worker_state(worker_id: str) -> "WorkerBillingState":
         # Ensure master pool is available before creating worker state.
         _ensure_master_pool_loaded()
         profiles = list(_MASTER_POOL)
-        rng = random.Random(hash(worker_id))
+        # Use SHA-256 for a process-stable seed: Python's built-in hash() for
+        # str is randomized per-process via PYTHONHASHSEED, which would yield
+        # different shuffle orders across restarts for the same worker_id.
+        seed_bytes = hashlib.sha256(str(worker_id).encode("utf-8")).digest()[:8]
+        seed = int.from_bytes(seed_bytes, "big")
+        rng = random.Random(seed)
         rng.shuffle(profiles)
         state = WorkerBillingState(profiles=profiles, rng=rng)
         _WORKER_STATES[worker_id] = state

@@ -381,6 +381,49 @@ class TestPerWorkerBillingState(unittest.TestCase):
                 with self.assertRaises(CycleExhaustedError):
                     billing.select_profile("10001", worker_id="empty-worker")
 
+    def test_worker_shuffle_deterministic_across_module_reload(self):
+        """Reloading the module yields the same shuffle order for the same worker_id.
+
+        Python's built-in ``hash()`` for ``str`` is randomized per-process via
+        ``PYTHONHASHSEED``; using SHA-256 keeps the seed stable across process
+        and module reloads, enabling reproducible debugging/replay.
+        """
+        import importlib  # noqa: PLC0415
+
+        first = billing.get_worker_state("w1")
+        first_order = [p.first_name for p in first.profiles]
+
+        # Reload the billing module to simulate a process restart (the module
+        # globals — including _WORKER_STATES — are re-initialized).
+        reloaded = importlib.reload(billing)
+        try:
+            with reloaded._MASTER_POOL_LOCK:  # pylint: disable=protected-access
+                reloaded._MASTER_POOL = list(self._profiles)  # pylint: disable=protected-access
+                reloaded._MASTER_POOL_LOADED = True  # pylint: disable=protected-access
+
+            second = reloaded.get_worker_state("w1")
+            second_order = [p.first_name for p in second.profiles]
+            self.assertEqual(
+                first_order, second_order,
+                "Same worker_id must produce identical shuffle order across "
+                "module reloads (SHA-256 seed, not PYTHONHASHSEED-dependent).",
+            )
+        finally:
+            # Restore module reference so subsequent tests use a clean state.
+            importlib.reload(billing)
+
+    def test_two_workers_get_different_orders(self):
+        """Different worker_ids produce different shuffle orders (deterministically)."""
+        state_w1 = billing.get_worker_state("w1")
+        state_w2 = billing.get_worker_state("w2")
+        order_w1 = [p.first_name for p in state_w1.profiles]
+        order_w2 = [p.first_name for p in state_w2.profiles]
+        self.assertCountEqual(order_w1, order_w2)
+        self.assertNotEqual(
+            order_w1, order_w2,
+            "Distinct worker_ids must seed independent shuffles.",
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # P5 — CycleContext: billing locked across card-swap retries
