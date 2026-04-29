@@ -1408,6 +1408,19 @@ class TestMaxMindZipLookup(unittest.TestCase):
 class TestResolveMmdbPath(unittest.TestCase):
     """_resolve_mmdb_path honours GEOIP_DB_PATH, MAXMIND_DB_PATH alias, and default."""
 
+    def test_public_resolve_mmdb_path_matches_internal_resolver(self):
+        """Public resolve_mmdb_path mirrors the internal resolver behavior."""
+        with patch.dict(
+            "os.environ",
+            {"GEOIP_DB_PATH": "/from/geoip.mmdb", "MAXMIND_DB_PATH": "/from/maxmind.mmdb"},
+            clear=True,
+        ):
+            self.assertEqual(drv.resolve_mmdb_path(), "/from/geoip.mmdb")
+            self.assertEqual(
+                drv.resolve_mmdb_path(),
+                drv._resolve_mmdb_path(),  # pylint: disable=protected-access
+            )
+
     def test_resolve_mmdb_prefers_geoip_db_path(self):
         """When both env vars are set, GEOIP_DB_PATH wins."""
         with patch.dict(
