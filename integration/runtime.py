@@ -946,6 +946,20 @@ def stop(timeout=None):
         return False
     _log_event("runtime", "stopped", "runtime_stop")
     return True
+
+
+def wait(timeout: float | None = None) -> bool:
+    """Block until the runtime loop thread exits.
+
+    Returns True if the loop thread is no longer alive (or never existed).
+    Returns False if timeout expires with the loop thread still running.
+    """
+    with _lock:
+        loop_thread = _loop_thread
+    if loop_thread is None:
+        return True
+    loop_thread.join(timeout=timeout)
+    return not loop_thread.is_alive()
 def is_running() -> bool:
     with _lock:
         return _state == "RUNNING"

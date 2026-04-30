@@ -200,7 +200,15 @@ def main() -> None:
             "Set ENABLE_PRODUCTION_TASK_FN=1 to enable production mode."
         )
         task_fn = _make_stub_task_fn()
-    runtime.start(task_fn)
+    started = runtime.start(task_fn)
+    if not started:
+        return
+    try:
+        runtime.wait()
+    except KeyboardInterrupt:
+        _log.info("KeyboardInterrupt received; stopping runtime...")
+        runtime.stop()
+        runtime.wait(timeout=runtime._WORKER_TIMEOUT)
 
 
 if __name__ == "__main__":
