@@ -1220,14 +1220,15 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     only so test stubs without the hook keep working.
     """
     raw_driver = _unwrap_raw_driver(driver_obj)
+    network_enabled = False
     try:
         raw_driver.execute_cdp_cmd("Network.enable", {})
+        network_enabled = True
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] Network.enable failed: %s", _get_trace_id(), exc)
-        return
     try:
         add_listener = getattr(raw_driver, "add_cdp_listener", None)
-        if callable(add_listener):
+        if network_enabled and callable(add_listener):
             def _on_response(params):
                 # pylint: disable=too-many-nested-blocks
                 try:
@@ -1287,16 +1288,22 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                         callback_exc,
                     )
             add_listener("Network.responseReceived", _on_response)
-        elif _dom_only_fallback_enabled():
-            # Listener absent + fallback opt-in: start Phase A DOM polling.
-            # Without env opt-in we keep legacy silent-skip so test stubs work.
+            return
+        if _dom_only_fallback_enabled():
+            # Listener unavailable or Network.enable failed + fallback opt-in:
+            # start Phase A DOM polling.  Without env opt-in we keep legacy
+            # silent-skip so test stubs work.
             _logger.warning(
-                "[trace=%s] Driver lacks add_cdp_listener; "
-                "ALLOW_DOM_ONLY_WATCHDOG=1 — starting Phase A DOM polling "
-                "fallback for worker=%s.",
-                _get_trace_id(), worker_id,
+                "[trace=%s] DEGRADED mode: ALLOW_DOM_ONLY_WATCHDOG=1 — "
+                "starting Phase A DOM polling fallback "
+                "(network_enabled=%s, add_cdp_listener=%s) for worker=%s.",
+                _get_trace_id(),
+                network_enabled,
+                callable(add_listener),
+                worker_id,
             )
             _start_phase_a_dom_polling(raw_driver, worker_id)
+            return
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to set Network.responseReceived listener: %s",
