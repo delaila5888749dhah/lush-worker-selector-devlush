@@ -18,7 +18,7 @@ class AppMainLifecycleTests(unittest.TestCase):
 
         mock_runtime.start.assert_called_once()
         self.assertTrue(
-            mock_runtime.wait.called or mock_runtime.is_running.called,
+            mock_runtime.wait.called,
             "main() must wait for runtime — it must not return immediately "
             "after runtime.start() (Bug 8.1)",
         )

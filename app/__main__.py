@@ -204,8 +204,7 @@ def main() -> None:
     if not started:
         return
     try:
-        while not runtime.wait(timeout=runtime.WORKER_TIMEOUT):
-            pass
+        runtime.wait()
     except KeyboardInterrupt:
         _log.info("KeyboardInterrupt received; stopping runtime...")
         runtime.stop()
