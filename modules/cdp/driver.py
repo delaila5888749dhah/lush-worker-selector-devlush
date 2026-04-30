@@ -2576,7 +2576,8 @@ class GivexDriver:
         Accepts the cookie banner if present, then clicks the Buy eGift link,
         and navigates directly to the eGift form page.
         """
-        _log.info("navigate_to_egift: started"); self._clear_browser_state()
+        _log.info("navigate_to_egift: started")
+        self._clear_browser_state()
         _log.info("navigate_to_egift: get(%s)", _short_url(URL_BASE))
         self._driver.get(URL_BASE)
         # Dismiss cookie banner if present (best-effort)
@@ -2591,9 +2592,11 @@ class GivexDriver:
             _log.info("navigate_to_egift: cookie banner absent")
         if self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10):
             _log.info("navigate_to_egift: Buy-eGift visible")
-        self.bounding_box_click(SEL_BUY_EGIFT_BTN); _log.info("navigate_to_egift: Buy-eGift clicked")
+        self.bounding_box_click(SEL_BUY_EGIFT_BTN)
+        _log.info("navigate_to_egift: Buy-eGift clicked")
         self._wait_for_url_or_capture(URL_EGIFT, "url_egift_not_reached")
-        _log.info("navigate_to_egift: URL_EGIFT reached"); self._clear_browser_state()
+        _log.info("navigate_to_egift: URL_EGIFT reached")
+        self._clear_browser_state()
         _log.info("navigate_to_egift: completed")
 
     # ── eGift form (Step 1) ─────────────────────────────────────────────────
@@ -2632,7 +2635,8 @@ class GivexDriver:
         After clicking Review & Checkout, waits for the browser to reach
         the cart page (``URL_CART``) before returning.
         """
-        _log.info("add_to_cart_and_checkout: started"); self.bounding_box_click(SEL_ADD_TO_CART)
+        _log.info("add_to_cart_and_checkout: started")
+        self.bounding_box_click(SEL_ADD_TO_CART)
         _log.info(
             "add_to_cart_and_checkout: Add-to-Cart clicked, "
             "waiting Review-Checkout selector"
@@ -2641,7 +2645,8 @@ class GivexDriver:
         if not found:
             self._capture_failure_screenshot("review_checkout_not_visible")
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 10)
-        _log.info("add_to_cart_and_checkout: Review-Checkout visible"); self.bounding_box_click(SEL_REVIEW_CHECKOUT)
+        _log.info("add_to_cart_and_checkout: Review-Checkout visible")
+        self.bounding_box_click(SEL_REVIEW_CHECKOUT)
         _log.info("add_to_cart_and_checkout: Review-Checkout clicked")
         _log.info("add_to_cart_and_checkout: waiting URL_CART")
         self._wait_for_url_or_capture(URL_CART, "url_cart_not_reached")
@@ -2671,7 +2676,8 @@ class GivexDriver:
         found = self._wait_for_element(SEL_BEGIN_CHECKOUT, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_BEGIN_CHECKOUT, 10)
-        _log.info("select_guest_checkout: Begin-Checkout visible"); self.bounding_box_click(SEL_BEGIN_CHECKOUT)
+        _log.info("select_guest_checkout: Begin-Checkout visible")
+        self.bounding_box_click(SEL_BEGIN_CHECKOUT)
         _log.info("select_guest_checkout: Begin-Checkout clicked")
         self._wait_for_url_or_capture(URL_CHECKOUT, "url_checkout_not_reached")
         _log.info("select_guest_checkout: URL_CHECKOUT reached")
@@ -2680,16 +2686,19 @@ class GivexDriver:
         found = self._wait_for_element(SEL_GUEST_HEADING, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_GUEST_HEADING, 10)
-        self.bounding_box_click(SEL_GUEST_HEADING); _log.info("select_guest_checkout: Guest heading expanded")
+        self.bounding_box_click(SEL_GUEST_HEADING)
+        _log.info("select_guest_checkout: Guest heading expanded")
 
         found = self._wait_for_element(SEL_GUEST_EMAIL, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_GUEST_EMAIL, 10)
         _log.info("select_guest_checkout: email len=%d", len(guest_email))
         self._realistic_type_field(SEL_GUEST_EMAIL, guest_email, field_kind="text")
-        self.bounding_box_click(SEL_GUEST_CONTINUE); _log.info("select_guest_checkout: Continue clicked")
+        self.bounding_box_click(SEL_GUEST_CONTINUE)
+        _log.info("select_guest_checkout: Continue clicked")
         self._wait_for_url_or_capture(URL_PAYMENT, "url_payment_not_reached")
-        _log.info("select_guest_checkout: URL_PAYMENT reached"); _log.info("select_guest_checkout: completed")
+        _log.info("select_guest_checkout: URL_PAYMENT reached")
+        _log.info("select_guest_checkout: completed")
 
     # ── Payment & Billing (Step 4 — same page) ──────────────────────────────
 
@@ -2996,14 +3005,23 @@ class GivexDriver:
         geo_checked = getattr(self, "_geo_checked_this_cycle", False)
         _log.info("run_pre_card_checkout_prepare: started (geo_checked=%s)", geo_checked)
         if geo_checked is not True:
-            _log.info("run_pre_card_checkout_prepare: running preflight_geo_check"); self.preflight_geo_check()
+            _log.info("run_pre_card_checkout_prepare: running preflight_geo_check")
+            self.preflight_geo_check()
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check completed")
         else:
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check skipped")
-        _log.info("run_pre_card_checkout_prepare: navigate_to_egift started"); self.navigate_to_egift(); _log.info("run_pre_card_checkout_prepare: navigate_to_egift completed")
-        _log.info("run_pre_card_checkout_prepare: fill_egift_form started"); self.fill_egift_form(task, billing_profile); _log.info("run_pre_card_checkout_prepare: fill_egift_form completed")
-        _log.info("run_pre_card_checkout_prepare: add_to_cart_and_checkout started"); self.add_to_cart_and_checkout(); _log.info("run_pre_card_checkout_prepare: add_to_cart_and_checkout completed")
-        _log.info("run_pre_card_checkout_prepare: select_guest_checkout started"); self.select_guest_checkout(billing_profile.email); _log.info("run_pre_card_checkout_prepare: select_guest_checkout completed")
+        _log.info("run_pre_card_checkout_prepare: navigate_to_egift started")
+        self.navigate_to_egift()
+        _log.info("run_pre_card_checkout_prepare: navigate_to_egift completed")
+        _log.info("run_pre_card_checkout_prepare: fill_egift_form started")
+        self.fill_egift_form(task, billing_profile)
+        _log.info("run_pre_card_checkout_prepare: fill_egift_form completed")
+        _log.info("run_pre_card_checkout_prepare: add_to_cart_and_checkout started")
+        self.add_to_cart_and_checkout()
+        _log.info("run_pre_card_checkout_prepare: add_to_cart_and_checkout completed")
+        _log.info("run_pre_card_checkout_prepare: select_guest_checkout started")
+        self.select_guest_checkout(billing_profile.email)
+        _log.info("run_pre_card_checkout_prepare: select_guest_checkout completed")
         _log.info("run_pre_card_checkout_prepare: completed")
 
     def run_payment_card_fill(self, card_info, billing_profile) -> None:
