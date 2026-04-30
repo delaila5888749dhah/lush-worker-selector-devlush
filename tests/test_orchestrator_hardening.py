@@ -554,6 +554,14 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
 
     _POLLING_THREAD_TIMEOUT = 2.0
 
+    def _assert_notify_called(self, notify_called):
+        """Assert that the DOM polling thread called watchdog.notify_total."""
+        self.assertTrue(
+            notify_called.wait(timeout=self._POLLING_THREAD_TIMEOUT),
+            "DOM fallback polling did not call watchdog.notify_total() "
+            f"within {self._POLLING_THREAD_TIMEOUT:g} seconds",
+        )
+
     def _stop_gw_polling_thread(self):
         """Stop and drain the gw-worker DOM polling thread if a test started one."""
         _stop_phase_a_dom_polling("gw-worker")
@@ -563,7 +571,10 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
                 if "gw-worker" not in _dom_polling_stop_events:
                     return
             time.sleep(0.01)
-        self.fail("Phase A DOM polling thread did not stop within 2 seconds")
+        self.fail(
+            "Phase A DOM polling thread did not stop within "
+            f"{self._POLLING_THREAD_TIMEOUT:g} seconds"
+        )
 
     def setUp(self):
         self._stop_gw_polling_thread()
@@ -641,11 +652,7 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
                 mock_wd.notify_total.side_effect = lambda *_: notify_called.set()
                 try:
                     _setup_network_total_listener(wrapper, "gw-worker")
-                    self.assertTrue(
-                        notify_called.wait(timeout=self._POLLING_THREAD_TIMEOUT),
-                        "DOM fallback polling did not call watchdog.notify_total() "
-                        f"within {self._POLLING_THREAD_TIMEOUT:g} seconds",
-                    )
+                    self._assert_notify_called(notify_called)
                 finally:
                     self._stop_gw_polling_thread()
         joined = "\n".join(cm.output)
@@ -667,11 +674,7 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
                 mock_wd.notify_total.side_effect = lambda *_: notify_called.set()
                 try:
                     _setup_network_total_listener(wrapper, "gw-worker")
-                    self.assertTrue(
-                        notify_called.wait(timeout=self._POLLING_THREAD_TIMEOUT),
-                        "DOM fallback polling did not call watchdog.notify_total() "
-                        f"within {self._POLLING_THREAD_TIMEOUT:g} seconds",
-                    )
+                    self._assert_notify_called(notify_called)
                 finally:
                     self._stop_gw_polling_thread()
 
