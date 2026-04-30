@@ -1395,12 +1395,14 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 profile,
                 worker_id=worker_id,
             )
-        except BaseException:
+        except Exception:
             # If pre-card prepare fails, Phase A wait will not run — we must
             # stop the DOM polling thread that ``_setup_network_total_listener``
             # armed above, otherwise it keeps querying the (still-stalled) page
             # until ``PAYMENT_WATCHDOG_TIMEOUT_S`` expires on its own.  Safe
             # to call even when no polling thread exists (degraded vs CDP path).
+            # ``Exception`` (not ``BaseException``) so KeyboardInterrupt /
+            # SystemExit / cancellation propagate untouched for clean teardown.
             _stop_phase_a_dom_polling(worker_id)
             raise
         _logger.info(

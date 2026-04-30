@@ -23,7 +23,7 @@ Tests
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from integration.orchestrator import run_payment_step
 from modules.common.exceptions import SessionFlaggedError
