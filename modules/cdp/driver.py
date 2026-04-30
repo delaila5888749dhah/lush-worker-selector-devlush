@@ -106,8 +106,10 @@ def _short_url(url: str) -> str:
 def _failure_screenshot_enabled() -> bool:
     return os.environ.get("FAILURE_SCREENSHOT_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
+
 def _failure_screenshot_dir() -> str:
     return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
+
 
 def _failure_screenshot_allow_raw() -> bool:
     return os.environ.get("FAILURE_SCREENSHOT_ALLOW_RAW", "0").strip().lower() in ("1", "true", "yes", "on")
@@ -1901,7 +1903,7 @@ class GivexDriver:
                 within *timeout* seconds.
         """
         deadline = time.monotonic() + timeout
-        last_url = None
+        last_url = last_non_empty_url = ""
         transitions = 0
         expected_short = _short_url(url_fragment)
         started = time.monotonic()
@@ -1918,6 +1920,7 @@ class GivexDriver:
                         "_wait_for_url[expecting=%s]: URL transitioned to %s (transition #%d, t+%.1fs)",
                         expected_short, _sanitize_url_for_log(current), transitions, time.monotonic() - started,
                     )
+                    last_non_empty_url = current
                 last_url = current
             if url_fragment in current:
                 _log.info(
@@ -1926,7 +1929,7 @@ class GivexDriver:
                 )
                 return
             time.sleep(0.5)
-        raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_url or '')} transitions={transitions}")
+        raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
 
     def _capture_failure_screenshot(self, label: str) -> None:
         """Best-effort failure PNG capture; never raises."""
@@ -3010,10 +3013,12 @@ class GivexDriver:
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check completed")
         else:
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check skipped")
+
         def run_step(name, fn, *args):
             _log.info("run_pre_card_checkout_prepare: %s started", name)
             fn(*args)
             _log.info("run_pre_card_checkout_prepare: %s completed", name)
+
         run_step("navigate_to_egift", self.navigate_to_egift)
         run_step("fill_egift_form", self.fill_egift_form, task, billing_profile)
         run_step("add_to_cart_and_checkout", self.add_to_cart_and_checkout)

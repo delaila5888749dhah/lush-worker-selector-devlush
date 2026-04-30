@@ -10,6 +10,20 @@ from modules.cdp.driver import (
 from modules.common.exceptions import PageStateError
 
 
+class _UrlSequenceDriver:
+    def __init__(self, urls):
+        self._urls = iter(urls)
+        self._last = ""
+
+    @property
+    def current_url(self):
+        try:
+            self._last = next(self._urls)
+        except StopIteration:
+            pass
+        return self._last
+
+
 class SanitizeUrlForLogTests(unittest.TestCase):
     def test_strips_query_and_fragment(self):
         self.assertEqual(
@@ -44,9 +58,7 @@ class ShortUrlTests(unittest.TestCase):
 
 class WaitForUrlTransitionLoggingTests(unittest.TestCase):
     def _gd(self, urls):
-        drv = MagicMock()
-        it = iter(urls)
-        type(drv).current_url = property(lambda self: next(it))
+        drv = _UrlSequenceDriver(urls)
         return GivexDriver(drv), drv
 
     def test_logs_each_url_transition_at_info(self):
@@ -58,7 +70,9 @@ class WaitForUrlTransitionLoggingTests(unittest.TestCase):
                 "https://x.com/target",
             ]
         )
-        with self.assertLogs("modules.cdp.driver", level="INFO") as cm:
+        with patch("modules.cdp.driver.time.sleep", return_value=None), self.assertLogs(
+            "modules.cdp.driver", level="INFO"
+        ) as cm:
             gd._wait_for_url("/target", timeout=5)
         transitions = [m for m in cm.output if "transitioned to" in m]
         self.assertGreaterEqual(len(transitions), 2)
@@ -73,7 +87,9 @@ class WaitForUrlTransitionLoggingTests(unittest.TestCase):
                 "https://wrong.example.com/somewhere",
             ]
         )
-        with self.assertRaises(PageStateError) as ctx:
+        with patch("modules.cdp.driver.time.sleep", return_value=None), self.assertRaises(
+            PageStateError
+        ) as ctx:
             gd._wait_for_url("expected-fragment", timeout=0.2)
         msg = str(ctx.exception)
         self.assertIn("expected", msg)
@@ -83,12 +99,32 @@ class WaitForUrlTransitionLoggingTests(unittest.TestCase):
 
     def test_empty_current_url_is_not_logged_at_info(self):
         gd, _ = self._gd(["", "", "https://x.com/target"])
-        with self.assertLogs("modules.cdp.driver", level="INFO") as cm:
+        with patch("modules.cdp.driver.time.sleep", return_value=None), self.assertLogs(
+            "modules.cdp.driver", level="INFO"
+        ) as cm:
             gd._wait_for_url("/target", timeout=5)
         info_transitions = [m for m in cm.output if "transitioned to" in m and "INFO" in m]
         for line in info_transitions:
             self.assertNotIn("transitioned to ''", line)
             self.assertNotIn('transitioned to ""', line)
+
+    def test_failure_last_seen_preserved_across_transient_empty_url(self):
+        gd, _ = self._gd(
+            [
+                "https://wrong.example.com/page",
+                "",
+                "",
+                "https://wrong.example.com/page",
+            ]
+        )
+        with patch("modules.cdp.driver.time.sleep", return_value=None), self.assertRaises(
+            PageStateError
+        ) as ctx:
+            gd._wait_for_url("expected-fragment", timeout=0.2)
+        msg = str(ctx.exception)
+        self.assertIn("wrong.example.com", msg)
+        self.assertNotIn("last_seen= ", msg)
+        self.assertNotIn('last_seen=""', msg)
 
 
 class FailureScreenshotTests(unittest.TestCase):
