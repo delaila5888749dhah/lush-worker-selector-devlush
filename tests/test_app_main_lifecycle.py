@@ -9,7 +9,8 @@ class AppMainLifecycleTests(unittest.TestCase):
         """app.main() must wait for runtime so main thread does not exit."""
         from app import __main__ as app_main
 
-        with patch.object(app_main, "runtime") as mock_runtime, \
+        with patch.object(app_main.logging, "basicConfig"), \
+             patch.object(app_main, "runtime") as mock_runtime, \
              patch.object(app_main, "_startup_check_geoip"), \
              patch.object(app_main, "_startup_load_billing_pool"):
             mock_runtime.is_production_task_fn_enabled.return_value = False
@@ -27,7 +28,8 @@ class AppMainLifecycleTests(unittest.TestCase):
         """KeyboardInterrupt during runtime wait must call runtime.stop()."""
         from app import __main__ as app_main
 
-        with patch.object(app_main, "runtime") as mock_runtime, \
+        with patch.object(app_main.logging, "basicConfig"), \
+             patch.object(app_main, "runtime") as mock_runtime, \
              patch.object(app_main, "_startup_check_geoip"), \
              patch.object(app_main, "_startup_load_billing_pool"):
             mock_runtime.is_production_task_fn_enabled.return_value = False
@@ -41,7 +43,8 @@ class AppMainLifecycleTests(unittest.TestCase):
         """If runtime.start() returns False, main() must NOT block forever."""
         from app import __main__ as app_main
 
-        with patch.object(app_main, "runtime") as mock_runtime, \
+        with patch.object(app_main.logging, "basicConfig"), \
+             patch.object(app_main, "runtime") as mock_runtime, \
              patch.object(app_main, "_startup_check_geoip"), \
              patch.object(app_main, "_startup_load_billing_pool"):
             mock_runtime.is_production_task_fn_enabled.return_value = False
