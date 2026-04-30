@@ -552,10 +552,12 @@ class UnwrapRawDriverHelperTests(unittest.TestCase):
 class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
     """Regression: _setup_network_total_listener must work with GivexDriver wrappers."""
 
+    POLLING_THREAD_TIMEOUT = 2.0
+
     def _stop_gw_polling_thread(self):
         """Stop and drain the gw-worker DOM polling thread if a test started one."""
         _stop_phase_a_dom_polling("gw-worker")
-        deadline = time.monotonic() + 2.0
+        deadline = time.monotonic() + self.POLLING_THREAD_TIMEOUT
         while time.monotonic() < deadline:
             with _network_listener_lock:
                 if "gw-worker" not in _dom_polling_stop_events:
@@ -640,7 +642,7 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
                 try:
                     _setup_network_total_listener(wrapper, "gw-worker")
                     self.assertTrue(
-                        notify_called.wait(timeout=2.0),
+                        notify_called.wait(timeout=self.POLLING_THREAD_TIMEOUT),
                         "DOM fallback polling did not call watchdog.notify_total() within 2 seconds",
                     )
                 finally:
@@ -665,7 +667,7 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
                 try:
                     _setup_network_total_listener(wrapper, "gw-worker")
                     self.assertTrue(
-                        notify_called.wait(timeout=2.0),
+                        notify_called.wait(timeout=self.POLLING_THREAD_TIMEOUT),
                         "DOM fallback polling did not call watchdog.notify_total() within 2 seconds",
                     )
                 finally:

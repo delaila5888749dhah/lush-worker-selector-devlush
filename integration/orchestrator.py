@@ -1288,8 +1288,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                         callback_exc,
                     )
             add_listener("Network.responseReceived", _on_response)
-            return
-        if _dom_only_fallback_enabled():
+        elif _dom_only_fallback_enabled():
             # Listener unavailable or Network.enable failed + fallback opt-in:
             # start Phase A DOM polling.  Without env opt-in we keep legacy
             # silent-skip so test stubs work.
@@ -1303,7 +1302,6 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                 worker_id,
             )
             _start_phase_a_dom_polling(raw_driver, worker_id)
-            return
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to set Network.responseReceived listener: %s",
