@@ -83,7 +83,8 @@ _log = logging.getLogger(__name__)
 
 
 def _sanitize_url_for_log(url: str) -> str:
-    if not url: return ""
+    if not url:
+        return ""
     try:
         s = urllib.parse.urlsplit(url)
         return urllib.parse.urlunsplit((s.scheme, s.netloc, s.path, "", ""))
@@ -92,7 +93,8 @@ def _sanitize_url_for_log(url: str) -> str:
 
 
 def _short_url(url: str) -> str:
-    if not url: return ""
+    if not url:
+        return ""
     try:
         s = urllib.parse.urlsplit(url)
         last = s.path.rsplit("/", 1)[-1] or s.path or "/"
@@ -101,13 +103,16 @@ def _short_url(url: str) -> str:
         return "<unparseable-url>"
 
 
-def _env_flag(name: str, default: str = "0") -> bool:
-    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+def _failure_screenshot_enabled() -> bool:
+    return os.environ.get("FAILURE_SCREENSHOT_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _failure_screenshot_enabled() -> bool: return _env_flag("FAILURE_SCREENSHOT_ENABLED")
-def _failure_screenshot_dir() -> str: return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
-def _failure_screenshot_allow_raw() -> bool: return _env_flag("FAILURE_SCREENSHOT_ALLOW_RAW")
+def _failure_screenshot_dir() -> str:
+    return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
+
+
+def _failure_screenshot_allow_raw() -> bool:
+    return os.environ.get("FAILURE_SCREENSHOT_ALLOW_RAW", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ── MaxMind GeoLite2 singleton ────────────────────────────────────────────
@@ -1927,7 +1932,8 @@ class GivexDriver:
 
     def _capture_failure_screenshot(self, label: str) -> None:
         """Best-effort failure PNG capture; never raises."""
-        if not _failure_screenshot_enabled(): return
+        if not _failure_screenshot_enabled():
+            return
         try:
             from modules.notification.screenshot_blur import capture_blurred_only  # noqa: PLC0415
             from pathlib import Path  # noqa: PLC0415
@@ -1948,7 +1954,8 @@ class GivexDriver:
                     png = self._driver.get_screenshot_as_png()
                 except Exception:
                     return
-                if not png: return
+                if not png:
+                    return
             outdir = Path(_failure_screenshot_dir())
             outdir.mkdir(parents=True, exist_ok=True)
             path = outdir / f"{label}_{int(time.time())}_{os.getpid()}.png"
@@ -2596,14 +2603,13 @@ class GivexDriver:
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         greeting = _random_greeting(self._rnd)
-        amount = str(task.amount)
         _log.info("fill_egift_form: field=SEL_GREETING_MSG len=%d", len(greeting))
         self._realistic_type_field(
             SEL_GREETING_MSG, greeting, field_kind="text",
         )
-        _log.info("fill_egift_form: field=SEL_AMOUNT_INPUT len=%d", len(amount))
+        _log.info("fill_egift_form: field=SEL_AMOUNT_INPUT len=%d", len(str(task.amount)))
         self._realistic_type_field(
-            SEL_AMOUNT_INPUT, amount,
+            SEL_AMOUNT_INPUT, str(task.amount),
             field_kind="amount", typo_rate=0.0,
         )
         _log.info("fill_egift_form: field=SEL_RECIPIENT_NAME len=%d", len(full_name))

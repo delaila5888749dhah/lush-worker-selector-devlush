@@ -92,8 +92,7 @@ def capture_blurred_only(driver) -> Optional[bytes]:
     try:
         raw_png = driver.get_screenshot_as_png()
     except Exception as exc:  # noqa: BLE001
-        _logger.warning("capture_blurred_only: screenshot failed: %s", exc); return None
-    if not raw_png: return None
+        return _logger.warning("capture_blurred_only: screenshot failed: %s", exc)
     try:
         from PIL import Image, ImageFilter  # noqa: PLC0415
         out = io.BytesIO()
@@ -102,6 +101,6 @@ def capture_blurred_only(driver) -> Optional[bytes]:
         ).save(out, format="PNG")
         return out.getvalue()
     except ImportError:
-        _logger.warning("capture_blurred_only: Pillow missing — refusing to save raw screenshot."); return None
+        return _logger.warning("capture_blurred_only: Pillow missing — refusing to save raw screenshot.")
     except Exception as exc:  # noqa: BLE001
-        _logger.warning("capture_blurred_only: blur failed: %s", exc); return None
+        return _logger.warning("capture_blurred_only: blur failed: %s", exc)
