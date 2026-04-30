@@ -146,37 +146,19 @@ def _unwrap_raw_driver(driver_obj):
     """Return the underlying Selenium driver if *driver_obj* is a GivexDriver wrapper.
 
     ``GivexDriver`` holds the raw Selenium driver as ``self._driver``.  When
-    the orchestrator receives a ``GivexDriver`` (or any wrapper that stores its
-    inner driver in ``_driver``), calling CDP / Selenium-native methods directly
-    on the wrapper raises ``AttributeError`` because those methods are not
-    forwarded.  This helper unwraps safely.
+    the orchestrator receives a ``GivexDriver``, calling CDP / Selenium-native
+    methods directly on the wrapper raises ``AttributeError`` because those
+    methods are not forwarded.  This helper unwraps safely.
 
-    Contract (issue AC-3): only unwrap when the inner ``_driver`` attribute is:
-      - not ``None``
-      - a different object from *driver_obj* itself (avoid circular refs)
-      - exposes ``execute_cdp_cmd`` (i.e. looks like a real Selenium driver)
-
-    This means ``MagicMock``-based unit tests continue to work unchanged:
-    ``getattr(mock, "_driver", None)`` auto-creates a child mock, but the
-    child mock *is* a different object, so the ``hasattr`` guard must pass
-    too — and it does because ``MagicMock`` auto-creates any attribute. To
-    avoid inadvertently unwrapping a ``MagicMock`` parent into its ``_driver``
-    child, rely on the fact that only real ``GivexDriver`` wraps an object
-    where ``inner is not driver_obj``.  ``MagicMock._driver`` is a new mock
-    (different object) but ``hasattr(inner, "execute_cdp_cmd")`` is also True
-    for mocks.  However, for an *unwrapped* ``MagicMock``, ``driver_obj``
-    already exposes ``execute_cdp_cmd`` directly, so callers never need to
-    unwrap — and passing a ``MagicMock`` directly is fine.
-
-    In practice this is only ever called with either a real ``GivexDriver``
-    (production) or a plain ``MagicMock`` (unit tests).  For a plain mock
-    ``inner is not driver_obj`` will be True, but the inner mock also has
-    ``execute_cdp_cmd``, so this function *would* unwrap one level.  To keep
-    the ``MagicMock`` path unchanged (tests rely on the mock itself being
-    called, not its ``_driver`` child), we add a final guard: only unwrap when
-    *driver_obj* itself does **not** already expose ``execute_cdp_cmd``
-    (i.e. it is a real wrapper whose outer object lacks the method).
+    Contract: only unwrap when the inner ``_driver`` attribute is not ``None``,
+    is a different object from *driver_obj* itself, exposes ``execute_cdp_cmd``
+    (looks like a real Selenium driver), and *driver_obj* itself does **not**
+    already expose ``execute_cdp_cmd`` (i.e. it is a real wrapper, not a
+    ``MagicMock`` or already-raw driver).  This keeps ``MagicMock``-based unit
+    tests working unchanged.
     """
+    # Only unwrap when the wrapper lacks execute_cdp_cmd (real GivexDriver
+    # pattern) but the inner _driver has it (real Selenium driver).
     inner = getattr(driver_obj, "_driver", None)
     if (
         inner is not None

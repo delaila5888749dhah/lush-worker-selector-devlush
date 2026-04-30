@@ -505,6 +505,17 @@ class _FakeGivexDriverWrapper:
 class UnwrapRawDriverHelperTests(unittest.TestCase):
     """_unwrap_raw_driver: unit tests for the helper function itself."""
 
+    def test_wrapper_raises_attribute_error_on_cdp_methods(self):
+        """Accessing execute_cdp_cmd on the wrapper itself must raise AttributeError.
+
+        Documents the critical invariant that motivates the unwrap: the wrapper
+        intentionally does not forward CDP methods to the inner driver.
+        """
+        inner = MagicMock(spec=["execute_cdp_cmd", "execute_script"])
+        wrapper = _FakeGivexDriverWrapper(inner)
+        with self.assertRaises(AttributeError):
+            _ = wrapper.execute_cdp_cmd  # noqa: B018
+
     def test_unwraps_givex_style_wrapper(self):
         """Returns inner _driver when wrapper lacks execute_cdp_cmd."""
         inner = MagicMock(spec=["execute_cdp_cmd", "execute_script"])
@@ -597,6 +608,7 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
 
     def test_dom_fallback_polling_started_when_listener_missing(self):
         """When inner driver lacks add_cdp_listener, DOM polling starts with ALLOW_DOM_ONLY_WATCHDOG=1."""
+        notify_called = threading.Event()
         inner = MagicMock()
         inner.execute_cdp_cmd.return_value = {}
         inner.execute_script.return_value = "55.00"
@@ -608,14 +620,10 @@ class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
         with patch.dict(os.environ, {"ALLOW_DOM_ONLY_WATCHDOG": "1"}):
             with patch("integration.orchestrator.watchdog") as mock_wd, \
                  self.assertLogs("integration.orchestrator", level="WARNING") as cm:
+                mock_wd.notify_total.side_effect = lambda *_: notify_called.set()
                 _setup_network_total_listener(wrapper, "gw-worker")
-                # Give the polling thread a moment to fire
-                import time
-                deadline = time.monotonic() + 2.0
-                while time.monotonic() < deadline:
-                    if mock_wd.notify_total.called:
-                        break
-                    time.sleep(0.05)
+                # Wait for the polling thread to fire notify_total (max 2s)
+                notify_called.wait(timeout=2.0)
         joined = "\n".join(cm.output)
         self.assertIn("ALLOW_DOM_ONLY_WATCHDOG", joined)
         self.assertNotIn("Network.enable failed", joined)
