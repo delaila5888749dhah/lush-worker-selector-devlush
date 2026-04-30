@@ -208,7 +208,7 @@ def main() -> None:
     except KeyboardInterrupt:
         _log.info("KeyboardInterrupt received; stopping runtime...")
         runtime.stop()
-        runtime.wait(timeout=runtime._WORKER_TIMEOUT)
+        runtime.wait(timeout=runtime.WORKER_TIMEOUT)
 
 
 if __name__ == "__main__":

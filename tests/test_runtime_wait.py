@@ -13,6 +13,9 @@ class RuntimeWaitTests(unittest.TestCase):
 
     def test_wait_blocks_until_loop_thread_exits(self):
         done = threading.Event()
+        release_delay = 0.2
+        expected_min_wait = release_delay * 0.75
+        expected_max_wait = release_delay * 7.5
 
         def _fake_loop():
             done.wait(timeout=2.0)
@@ -21,7 +24,7 @@ class RuntimeWaitTests(unittest.TestCase):
         thread.start()
         try:
             with patch.object(runtime, "_loop_thread", thread):
-                threading.Timer(0.2, done.set).start()
+                threading.Timer(release_delay, done.set).start()
                 start = time.monotonic()
                 ok = runtime.wait(timeout=2.0)
                 elapsed = time.monotonic() - start
@@ -30,8 +33,8 @@ class RuntimeWaitTests(unittest.TestCase):
             thread.join(timeout=2.0)
 
         self.assertTrue(ok)
-        self.assertGreaterEqual(elapsed, 0.15)
-        self.assertLess(elapsed, 1.5)
+        self.assertGreaterEqual(elapsed, expected_min_wait)
+        self.assertLess(elapsed, expected_max_wait)
 
     def test_wait_returns_false_on_timeout(self):
         blocker = threading.Event()
