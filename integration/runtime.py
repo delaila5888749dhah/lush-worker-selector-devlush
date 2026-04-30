@@ -54,6 +54,7 @@ _NO_TRACE = "no-trace"
 _DEFAULT_LOOP_INTERVAL = 10
 _MIN_LOOP_INTERVAL = 0.1
 _WORKER_TIMEOUT = 30
+WORKER_TIMEOUT = _WORKER_TIMEOUT
 _MAX_CONSECUTIVE_ROLLBACKS = 3
 _CIRCUIT_BREAKER_PAUSE = 300
 _consecutive_rollbacks = 0
@@ -946,6 +947,23 @@ def stop(timeout=None):
         return False
     _log_event("runtime", "stopped", "runtime_stop")
     return True
+
+
+def wait(timeout: float | None = None) -> bool:
+    """Block until the runtime loop thread exits.
+
+    timeout: seconds to wait; None waits indefinitely.
+
+    Returns True if the loop thread is no longer alive (or never existed).
+    Returns False if timeout expires with the loop thread still running.
+    Returns immediately with True when the loop thread is None.
+    """
+    with _lock:
+        loop_thread = _loop_thread
+    if loop_thread is None:
+        return True
+    loop_thread.join(timeout=timeout)
+    return not loop_thread.is_alive()
 def is_running() -> bool:
     with _lock:
         return _state == "RUNNING"
