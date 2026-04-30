@@ -1,6 +1,6 @@
 # Interface Contract (Aggregated)
 
-spec-version: 8.2
+spec-version: 8.3
 
 > **Contract Segmentation (v2.0):** Interface contracts have been split into
 > two separate groups. This file aggregates both groups to maintain backward
@@ -8,6 +8,15 @@ spec-version: 8.2
 >
 > - **Core (FSM):** [spec/core/interface.md](core/interface.md)
 > - **Integration (Watchdog, Billing, CDP):** [spec/integration/interface.md](integration/interface.md)
+>
+> **v8.3 Additive Changes (Phase A reorder / INV-PAYMENT-01 fix):**
+> - Added `run_pre_card_checkout_prepare(task, billing_profile, worker_id)` to `Module: cdp` —
+>   performs geo check (idempotent), navigation, eGift form, cart, and guest-checkout selection.
+>   Does NOT type card/billing-payment fields. Safe to run before Phase A pricing wait.
+> - Added `run_payment_card_fill(card_info, billing_profile, worker_id)` to `Module: cdp` —
+>   types card and billing payment fields. MUST only be called AFTER Phase A total confirmed
+>   (INV-PAYMENT-01 / Blueprint §5).
+> - `run_preflight_and_fill` retained as backward-compatible alias calling the two above in sequence.
 >
 > **v7.2 Additive Changes (Blueprint §2.1):**
 > - Declared `BitBrowserPoolClient` in modules/cdp/fingerprint.py for pool-mode
@@ -184,6 +193,38 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
+
+Function: run_pre_card_checkout_prepare
+Input:
+  - task
+  - billing_profile
+  - worker_id
+Output: None
+Notes:
+  - Performs geo check (idempotent — skipped if already validated for this driver instance),
+    navigation, recipient form fill, add-to-cart and guest-checkout selection.
+  - Does NOT type any card / billing-payment fields.
+  - Safe to run before the Phase A pricing watchdog wait (INV-PAYMENT-01).
+
+Function: run_payment_card_fill
+Input:
+  - card_info
+  - billing_profile
+  - worker_id
+Output: None
+Notes:
+  - Types card and billing payment fields. MUST only be called AFTER Phase A pricing
+    total is confirmed (INV-PAYMENT-01 / Blueprint §5).
+
+Function: run_preflight_and_fill
+Input:
+  - task
+  - billing_profile
+  - worker_id
+Output: None
+Notes:
+  - Backward-compatible alias: calls run_pre_card_checkout_prepare then run_payment_card_fill
+    in sequence. Retained for external callers and older tests.
 
 ### Class: BitBrowserPoolClient (Blueprint §2.1)
 

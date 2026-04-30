@@ -177,7 +177,8 @@ class RunPaymentStepTests(unittest.TestCase):
 
 
     def test_run_preflight_and_fill_called_with_task_and_profile(self):
-        """run_payment_step() must use cdp.run_preflight_and_fill for the pre-submit sequence."""
+        """run_payment_step() must call the two split-phase cdp functions
+        run_pre_card_checkout_prepare and run_payment_card_fill (not the alias)."""
         task = _make_task()
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -190,8 +191,11 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_watchdog.wait_for_total.return_value = 25.0
             mock_fsm.get_current_state_for_worker.return_value = None
             run_payment_step(task)
-        mock_cdp.run_preflight_and_fill.assert_called_once_with(
+        mock_cdp.run_pre_card_checkout_prepare.assert_called_once_with(
             task, profile, worker_id="default"
+        )
+        mock_cdp.run_payment_card_fill.assert_called_once_with(
+            task.primary_card, profile, worker_id="default"
         )
         mock_cdp.submit_purchase.assert_called_once_with(worker_id="default")
 

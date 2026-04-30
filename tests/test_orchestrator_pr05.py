@@ -85,7 +85,12 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         cleanup_worker("seq-worker")
 
     def test_run_preflight_and_fill_called_before_submit(self):
-        """cdp.run_preflight_and_fill must be called before cdp.submit_purchase."""
+        """cdp.run_payment_card_fill (card-fill step) must be called before cdp.submit_purchase.
+
+        After the Phase A reorder fix, run_pre_card_checkout_prepare precedes
+        the Phase A watchdog wait, and run_payment_card_fill (card-fill) comes
+        after.  This test verifies the card-fill step precedes submit.
+        """
         task = _make_task()
         call_order = []
 
@@ -97,30 +102,37 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = lambda *a, **kw: call_order.append("prefill")
+            mock_cdp.run_pre_card_checkout_prepare.side_effect = lambda *a, **kw: call_order.append("prepare")
+            mock_cdp.run_payment_card_fill.side_effect = lambda *a, **kw: call_order.append("card_fill")
             mock_cdp.submit_purchase.side_effect = lambda *a, **kw: call_order.append("submit")
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = State("success")
 
             run_payment_step(task, worker_id="seq-worker")
 
-        self.assertIn("prefill", call_order)
+        self.assertIn("prepare", call_order)
+        self.assertIn("card_fill", call_order)
         self.assertIn("submit", call_order)
         self.assertLess(
-            call_order.index("prefill"),
+            call_order.index("prepare"),
+            call_order.index("card_fill"),
+            "run_pre_card_checkout_prepare must be called before run_payment_card_fill",
+        )
+        self.assertLess(
+            call_order.index("card_fill"),
             call_order.index("submit"),
-            "run_preflight_and_fill must be called before submit_purchase",
+            "run_payment_card_fill must be called before submit_purchase",
         )
 
     def test_mark_submitted_called_between_prefill_and_submit(self):
-        """mark_submitted must be called AFTER run_preflight_and_fill and BEFORE submit_purchase."""
+        """mark_submitted must be called AFTER run_payment_card_fill and BEFORE submit_purchase."""
         task = _make_task()
         call_order = []
 
         store_mock = MagicMock()
 
-        def record_prefill(*a, **kw):
-            call_order.append("prefill")
+        def record_card_fill(*a, **kw):
+            call_order.append("card_fill")
 
         def record_submit(*a, **kw):
             call_order.append("submit")
@@ -136,7 +148,7 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = record_prefill
+            mock_cdp.run_payment_card_fill.side_effect = record_card_fill
             mock_cdp.submit_purchase.side_effect = record_submit
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = State("success")
@@ -144,8 +156,8 @@ class FullSequenceCallOrderTests(unittest.TestCase):
             run_payment_step(task, worker_id="seq-worker")
 
         self.assertEqual(
-            call_order, ["prefill", "mark_submitted", "submit"],
-            f"Expected prefill → mark_submitted → submit, got: {call_order}",
+            call_order, ["card_fill", "mark_submitted", "submit"],
+            f"Expected card_fill → mark_submitted → submit, got: {call_order}",
         )
 
     def test_fill_payment_and_billing_not_called_directly(self):
@@ -167,7 +179,8 @@ class FullSequenceCallOrderTests(unittest.TestCase):
         mock_cdp.fill_payment_and_billing.assert_not_called()
 
     def test_run_preflight_and_fill_receives_task_and_profile(self):
-        """cdp.run_preflight_and_fill must receive the task and profile arguments."""
+        """run_pre_card_checkout_prepare must receive task + profile; run_payment_card_fill must
+        receive card_info + profile."""
         task = _make_task()
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -183,10 +196,16 @@ class FullSequenceCallOrderTests(unittest.TestCase):
 
             run_payment_step(task, worker_id="seq-worker")
 
-        args, kwargs = mock_cdp.run_preflight_and_fill.call_args
-        self.assertIs(args[0], task)
-        self.assertIs(args[1], profile)
-        self.assertEqual(kwargs.get("worker_id"), "seq-worker")
+        # run_pre_card_checkout_prepare receives task + profile + worker_id
+        args_prepare, kwargs_prepare = mock_cdp.run_pre_card_checkout_prepare.call_args
+        self.assertIs(args_prepare[0], task)
+        self.assertIs(args_prepare[1], profile)
+        self.assertEqual(kwargs_prepare.get("worker_id"), "seq-worker")
+        # run_payment_card_fill receives card_info + profile + worker_id
+        args_fill, kwargs_fill = mock_cdp.run_payment_card_fill.call_args
+        self.assertIs(args_fill[0], task.primary_card)
+        self.assertIs(args_fill[1], profile)
+        self.assertEqual(kwargs_fill.get("worker_id"), "seq-worker")
 
     def test_submit_purchase_receives_worker_id(self):
         """cdp.submit_purchase must receive the correct worker_id."""
@@ -224,7 +243,7 @@ class ExceptionRoutingTests(unittest.TestCase):
         cleanup_worker("exc-worker")
 
     def test_exception_in_prefill_logs_before_submission(self):
-        """SessionFlaggedError from run_preflight_and_fill must log 'BEFORE payment submission'."""
+        """SessionFlaggedError from run_pre_card_checkout_prepare must log 'BEFORE payment submission'."""
         task = _make_task()
         log_messages = []
 
@@ -242,7 +261,7 @@ class ExceptionRoutingTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = SessionFlaggedError("geo failed")
+            mock_cdp.run_pre_card_checkout_prepare.side_effect = SessionFlaggedError("geo failed")
             mock_logger.error.side_effect = capture_error
 
             with self.assertRaises(SessionFlaggedError):
@@ -274,7 +293,6 @@ class ExceptionRoutingTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None  # succeeds
             mock_cdp.submit_purchase.side_effect = SessionFlaggedError("click failed")
             mock_logger.error.side_effect = capture_error
 
@@ -310,7 +328,6 @@ class ExceptionRoutingTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None
             mock_cdp.submit_purchase.return_value = None
             # Phase A succeeds, Phase C times out.
             mock_watchdog.wait_for_total.side_effect = [
@@ -402,7 +419,6 @@ class IdempotencyCrashTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.return_value = None
             mock_cdp.submit_purchase.side_effect = submit_side_effect
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = State("success")
@@ -436,7 +452,8 @@ class IdempotencyCrashTests(unittest.TestCase):
 
             run_cycle(task, worker_id="crash-worker")
 
-        mock_cdp.run_preflight_and_fill.assert_not_called()
+        mock_cdp.run_pre_card_checkout_prepare.assert_not_called()
+        mock_cdp.run_payment_card_fill.assert_not_called()
         mock_cdp.submit_purchase.assert_not_called()
         mock_billing.select_profile.assert_not_called()
 
@@ -472,35 +489,25 @@ class L3IntegrationStubTests(unittest.TestCase):
         return stub
 
     def test_full_sequence_methods_invoked_on_driver(self):
-        """All purchase-sequence methods must be invoked on the registered driver."""
+        """All purchase-sequence methods must be invoked via the new split-phase driver methods.
+
+        cdp_main.run_preflight_and_fill is a backward-compat alias that calls
+        driver.run_pre_card_checkout_prepare + driver.run_payment_card_fill.
+        Verify both new split methods are called on the registered driver.
+        """
         import modules.cdp.main as cdp_main
-        from modules.fsm.main import transition_for_worker
 
         stub = self._make_stub_driver()
         cdp_main.register_driver("l3-worker", stub)
 
-        # We drive the sequence through cdp module functions (not the driver directly)
-        # to verify the cdp.main delegation layer works end-to-end.
         profile = MagicMock()
         profile.email = "billing@example.com"
-        profile.first_name = "Alice"
-        profile.last_name = "Smith"
-        profile.address = "123 Main St"
-        profile.country = "US"
-        profile.state = "CA"
-        profile.city = "Los Angeles"
-        profile.zip_code = "90001"
-        profile.phone = None
-
         task = _make_task()
 
+        # run_preflight_and_fill (backward-compat alias) must call the two new split methods
         cdp_main.run_preflight_and_fill(task, profile, "l3-worker")
-        stub.preflight_geo_check.assert_called_once()
-        stub.navigate_to_egift.assert_called_once()
-        stub.fill_egift_form.assert_called_once_with(task, profile)
-        stub.add_to_cart_and_checkout.assert_called_once()
-        stub.select_guest_checkout.assert_called_once_with(profile.email)
-        stub.fill_payment_and_billing.assert_called_once_with(task.primary_card, profile)
+        stub.run_pre_card_checkout_prepare.assert_called_once_with(task, profile)
+        stub.run_payment_card_fill.assert_called_once_with(task.primary_card, profile)
 
         cdp_main.submit_purchase("l3-worker")
         stub.submit_purchase.assert_called_once()
@@ -544,8 +551,10 @@ class L3IntegrationStubTests(unittest.TestCase):
 
             state, total = run_payment_step(task, worker_id="l3-worker")
 
-        stub.preflight_geo_check.assert_called_once()
-        stub.navigate_to_egift.assert_called_once()
+        # With new split-phase design, orchestrator calls run_pre_card_checkout_prepare
+        # and run_payment_card_fill (not the individual sub-methods) at the driver level.
+        stub.run_pre_card_checkout_prepare.assert_called_once()
+        stub.run_payment_card_fill.assert_called_once()
         stub.submit_purchase.assert_called_once()
         self.assertIsNotNone(state)
         self.assertEqual(total, 50.0)

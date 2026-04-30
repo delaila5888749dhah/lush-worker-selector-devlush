@@ -149,7 +149,7 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
             )
 
     def test_mark_submitted_called_between_prefill_and_submit(self):
-        """Idempotency checkpoint must be written AFTER prefill and BEFORE submit."""
+        """Idempotency checkpoint must be written AFTER card fill and BEFORE submit."""
         stub = _StubGivexDriver(self.worker_id, final_state="success")
         call_order = []
         store_mock = MagicMock()
@@ -177,15 +177,15 @@ class TestL3FullSequenceCallOrder(_IntegrationBase, unittest.TestCase):
         ), patch(
             "integration.orchestrator._get_idempotency_store", return_value=store_mock
         ), patch(
-            "integration.orchestrator.cdp.run_preflight_and_fill",
-            side_effect=lambda *_a, **_kw: (call_order.append("prefill"), None)[-1],
+            "integration.orchestrator.cdp.run_payment_card_fill",
+            side_effect=lambda *_a, **_kw: (call_order.append("card_fill"), None)[-1],
         ):
             run_payment_step(task, worker_id=self.worker_id)
 
         self.assertEqual(
             call_order,
-            ["prefill", "mark_submitted", "submit"],
-            f"Expected prefill → mark_submitted → submit, got: {call_order}",
+            ["card_fill", "mark_submitted", "submit"],
+            f"Expected card_fill → mark_submitted → submit, got: {call_order}",
         )
 
     def test_submit_receives_correct_worker_id(self):

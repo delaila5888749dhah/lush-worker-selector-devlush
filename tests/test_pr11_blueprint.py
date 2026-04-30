@@ -610,7 +610,7 @@ class TestCycleContextBillingLock(unittest.TestCase):
              patch("integration.orchestrator.monitor"):
             mock_billing.select_profile.return_value = fixed_profile
             mock_cdp._get_driver.return_value = MagicMock()
-            mock_cdp.run_preflight_and_fill.side_effect = capture_preflight_and_fill
+            mock_cdp.run_pre_card_checkout_prepare.side_effect = capture_preflight_and_fill
             mock_cdp.submit_purchase.return_value = None
             mock_watchdog.wait_for_total.return_value = 50.0
             mock_fsm.get_current_state_for_worker.return_value = \

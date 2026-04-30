@@ -147,6 +147,28 @@ class _StubGivexDriver:
     def fill_payment_and_billing(self, card, profile) -> None:
         self._record("fill_payment_and_billing")
 
+    # ── Split-phase composite helpers ──────────────────────────────────────────
+
+    def run_pre_card_checkout_prepare(self, task, billing_profile) -> None:
+        """Composite: geo check + navigate + eGift form + cart + guest checkout."""
+        if billing_profile.email is None:
+            raise ValueError("billing_profile.email must not be None for guest checkout")
+        if getattr(self, "_geo_checked_this_cycle", False) is not True:
+            self.preflight_geo_check()
+        self.navigate_to_egift()
+        self.fill_egift_form(task, billing_profile)
+        self.add_to_cart_and_checkout()
+        self.select_guest_checkout(billing_profile.email)
+
+    def run_payment_card_fill(self, card_info, billing_profile) -> None:
+        """Composite: fill payment and billing fields."""
+        self.fill_payment_and_billing(card_info, billing_profile)
+
+    def run_preflight_and_fill(self, task, billing_profile) -> None:
+        """Backward-compat alias: run_pre_card_checkout_prepare + run_payment_card_fill."""
+        self.run_pre_card_checkout_prepare(task, billing_profile)
+        self.run_payment_card_fill(task.primary_card, billing_profile)
+
     def submit_purchase(self) -> None:
         self._record("submit_purchase")
         # Transition FSM to simulate real page state detection.

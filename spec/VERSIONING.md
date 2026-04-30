@@ -45,8 +45,8 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | File | Version | Cập nhật |
 |------|---------|----------|
 | `spec/core/interface.md` | 8.0 | 2026-04-28 |
-| `spec/integration/interface.md` | 8.1 | 2026-04-28 |
-| `spec/interface.md` (aggregated) | 8.2 | 2026-04-28 |
+| `spec/integration/interface.md` | 8.2 | 2026-04-30 |
+| `spec/interface.md` (aggregated) | 8.3 | 2026-04-30 |
 | `spec/fsm.md` | 1.1 | 2026-04-23 |
 | `spec/watchdog.md` | 1.0 | 2026-04-01 |
 | `spec/VERSIONING.md` | 1.0 | 2026-04-01 |
@@ -54,6 +54,22 @@ hoặc trong commit message với prefix `[spec-vX.Y]`.
 | `spec/cdp-timeout-contract.md` | 1.1 | 2026-04-16 |
 
 ## Changelog
+
+### v8.3 / v8.2 (2026-04-30) — ADDITIVE (Phase A reorder / INV-PAYMENT-01 fix)
+- `spec/interface.md` (→ 8.3), `spec/integration/interface.md` (→ 8.2): Added two new
+  public functions to `Module: cdp`:
+  - `run_pre_card_checkout_prepare(task, billing_profile, worker_id)` — performs geo
+    check (idempotent), navigation, eGift form fill, add-to-cart, and guest-checkout
+    selection. Does NOT type card/billing fields. Safe before Phase A pricing wait.
+  - `run_payment_card_fill(card_info, billing_profile, worker_id)` — types card and
+    billing payment fields. MUST only be called after Phase A total is confirmed
+    (INV-PAYMENT-01 / Blueprint §5).
+  - `run_preflight_and_fill` retained as backward-compatible alias calling both above
+    in sequence; existing callers continue to work without modification.
+- `integration/orchestrator.py::run_payment_step` reordered so navigation precedes the
+  Phase A watchdog wait. Fixes `ALLOW_DOM_ONLY_WATCHDOG=1` deadlock where DOM polling
+  was querying `about:blank` before the browser navigated to the Givex checkout page.
+- MINOR bump per VERSIONING_ENFORCEMENT Rule 3 (additive, backward-compatible).
 
 ### v8.0 / v8.1 / v8.2 (2026-04-28) — BREAKING (FSM transition signature)
 - `spec/core/interface.md` (→ 8.0), `spec/integration/interface.md` (→ 8.1),
