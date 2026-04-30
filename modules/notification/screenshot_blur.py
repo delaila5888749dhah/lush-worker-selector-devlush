@@ -24,6 +24,7 @@ _logger = logging.getLogger(__name__)
 # constant so tests and operators can reason about the safety margin.
 _BLUR_RADIUS = 15
 
+
 def _render(raw_png: bytes, masked: str) -> bytes:
     # pylint: disable=import-outside-toplevel
     from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
@@ -90,12 +91,8 @@ def capture_and_blur(driver, card_number: str) -> Optional[bytes]:
 def capture_blurred_only(driver) -> Optional[bytes]:
     try:
         raw_png = driver.get_screenshot_as_png()
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning("capture_blurred_only: screenshot failed: %s", exc)
-        return None
-    if not raw_png:
-        return None
-    try:
+        if not raw_png:
+            return None
         from PIL import Image, ImageFilter  # noqa: PLC0415
         out = io.BytesIO()
         Image.open(io.BytesIO(raw_png)).convert("RGB").filter(
@@ -106,5 +103,5 @@ def capture_blurred_only(driver) -> Optional[bytes]:
         _logger.warning("capture_blurred_only: Pillow missing — refusing to save raw screenshot.")
         return None
     except Exception as exc:  # noqa: BLE001
-        _logger.warning("capture_blurred_only: blur failed: %s", exc)
+        _logger.warning("capture_blurred_only: failed: %s", exc)
         return None

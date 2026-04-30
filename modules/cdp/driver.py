@@ -2646,7 +2646,6 @@ class GivexDriver:
         )
         found = self._wait_for_element(SEL_REVIEW_CHECKOUT, timeout=10)
         if not found:
-            self._capture_failure_screenshot("review_checkout_not_visible")
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 10)
         _log.info("add_to_cart_and_checkout: Review-Checkout visible")
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
@@ -3005,9 +3004,8 @@ class GivexDriver:
             raise ValueError(
                 "billing_profile.email must not be None for guest checkout"
             )
-        geo_checked = getattr(self, "_geo_checked_this_cycle", False)
-        _log.info("run_pre_card_checkout_prepare: started (geo_checked=%s)", geo_checked)
-        if geo_checked is not True:
+        _log.info("run_pre_card_checkout_prepare: started (geo_checked=%s)", self._geo_checked_this_cycle)
+        if self._geo_checked_this_cycle is not True:
             _log.info("run_pre_card_checkout_prepare: running preflight_geo_check")
             self.preflight_geo_check()
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check completed")
