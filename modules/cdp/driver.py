@@ -81,6 +81,40 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
+
+def _sanitize_url_for_log(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        s = urllib.parse.urlsplit(url)
+        return urllib.parse.urlunsplit((s.scheme, s.netloc, s.path, "", ""))
+    except Exception:
+        return "<unparseable-url>"
+
+
+def _short_url(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        s = urllib.parse.urlsplit(url)
+        last = s.path.rsplit("/", 1)[-1] or s.path or "/"
+        return f"{s.netloc}/.../{last}" if s.netloc else last
+    except Exception:
+        return "<unparseable-url>"
+
+
+def _failure_screenshot_enabled() -> bool:
+    return os.environ.get("FAILURE_SCREENSHOT_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _failure_screenshot_dir() -> str:
+    return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
+
+
+def _failure_screenshot_allow_raw() -> bool:
+    return os.environ.get("FAILURE_SCREENSHOT_ALLOW_RAW", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 # ── MaxMind GeoLite2 singleton ────────────────────────────────────────────
 # Loaded once at startup via init_maxmind_reader(); subsequent lookups reuse
 # the open Reader object, keeping latency effectively <1ms (RAM only, no I/O).
@@ -1869,16 +1903,74 @@ class GivexDriver:
                 within *timeout* seconds.
         """
         deadline = time.monotonic() + timeout
+        last_url = last_non_empty_url = ""
+        transitions = 0
+        expected_short = _short_url(url_fragment)
+        started = time.monotonic()
         while time.monotonic() < deadline:
             current = ""
             try:
                 current = self._driver.current_url
             except Exception:  # URL briefly unavailable during page transition
                 _log.debug("URL check deferred: page transition in progress")
+            if current != last_url:
+                if current:
+                    transitions += 1
+                    _log.info(
+                        "_wait_for_url[expecting=%s]: URL transitioned to %s (transition #%d, t+%.1fs)",
+                        expected_short, _sanitize_url_for_log(current), transitions, time.monotonic() - started,
+                    )
+                    last_non_empty_url = current
+                last_url = current
             if url_fragment in current:
+                _log.info(
+                    "_wait_for_url[%s]: matched after %d transitions, %.1fs elapsed",
+                    expected_short, transitions, time.monotonic() - started,
+                )
                 return
             time.sleep(0.5)
-        raise PageStateError(f"url_wait:{url_fragment}")
+        raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
+
+    def _capture_failure_screenshot(self, label: str) -> None:
+        """Best-effort failure PNG capture; never raises."""
+        if not _failure_screenshot_enabled():
+            return
+        try:
+            from modules.notification.screenshot_blur import capture_blurred_only  # noqa: PLC0415
+            from pathlib import Path  # noqa: PLC0415
+
+            png = capture_blurred_only(self._driver)
+            if png is None:
+                if not _failure_screenshot_allow_raw():
+                    _log.warning(
+                        "Failure screenshot skipped (Pillow missing or blur failed). "
+                        "FAILURE_SCREENSHOT_ALLOW_RAW=1 is local-debug only and NOT production-safe."
+                    )
+                    return
+                _log.warning(
+                    "FAILURE_SCREENSHOT_ALLOW_RAW=1 — saving RAW screenshot "
+                    "(PRIVACY RISK: PII may be readable). Local-debug only."
+                )
+                try:
+                    png = self._driver.get_screenshot_as_png()
+                except Exception:
+                    return
+                if not png:
+                    return
+            outdir = Path(_failure_screenshot_dir())
+            outdir.mkdir(parents=True, exist_ok=True)
+            path = outdir / f"{label}_{int(time.time())}_{os.getpid()}.png"
+            path.write_bytes(png)
+            _log.error("Failure screenshot saved: %s", path)
+        except Exception:
+            _log.warning("Failure screenshot capture failed", exc_info=True)
+
+    def _wait_for_url_or_capture(self, url_fragment: str, label: str, timeout: int = 15) -> None:
+        try:
+            self._wait_for_url(url_fragment, timeout=timeout)
+        except PageStateError:
+            self._capture_failure_screenshot(label)
+            raise
 
     def _cdp_type_field(self, selector: str, value: str) -> None:
         """DEPRECATED: use ``_realistic_type_field(field_kind="text")`` instead.
@@ -2473,18 +2565,28 @@ class GivexDriver:
         Accepts the cookie banner if present, then clicks the Buy eGift link,
         and navigates directly to the eGift form page.
         """
+        _log.info("navigate_to_egift: started")
         self._clear_browser_state()
+        _log.info("navigate_to_egift: get(%s)", _short_url(URL_BASE))
         self._driver.get(URL_BASE)
         # Dismiss cookie banner if present (best-effort)
         if self.find_elements(SEL_COOKIE_ACCEPT):
+            _log.info("navigate_to_egift: cookie banner detected")
             try:
                 self.bounding_box_click(SEL_COOKIE_ACCEPT)
+                _log.info("navigate_to_egift: cookie banner dismissed")
             except Exception as exc:  # cookie banner is best-effort; continue navigation
                 _log.debug("Cookie banner click skipped: %s", exc)
-        self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10)
+        else:
+            _log.info("navigate_to_egift: cookie banner absent")
+        if self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10):
+            _log.info("navigate_to_egift: Buy-eGift visible")
         self.bounding_box_click(SEL_BUY_EGIFT_BTN)
-        self._wait_for_url(URL_EGIFT, timeout=15)
+        _log.info("navigate_to_egift: Buy-eGift clicked")
+        self._wait_for_url_or_capture(URL_EGIFT, "url_egift_not_reached")
+        _log.info("navigate_to_egift: URL_EGIFT reached")
         self._clear_browser_state()
+        _log.info("navigate_to_egift: completed")
 
     # ── eGift form (Step 1) ─────────────────────────────────────────────────
 
@@ -2496,30 +2598,39 @@ class GivexDriver:
             billing_profile: BillingProfile with ``first_name`` and
                 ``last_name`` (used as recipient/sender name).
         """
+        _log.info("fill_egift_form: started")
         if self._sm is not None:
             self._sm.transition("FILLING_FORM")
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
+        greeting = _random_greeting(self._rnd)
+        _log.info("fill_egift_form: field=SEL_GREETING_MSG len=%d", len(greeting))
         self._realistic_type_field(
-            SEL_GREETING_MSG, _random_greeting(self._rnd), field_kind="text",
+            SEL_GREETING_MSG, greeting, field_kind="text",
         )
+        _log.info("fill_egift_form: field=SEL_AMOUNT_INPUT len=%d", len(str(task.amount)))
         self._realistic_type_field(
             SEL_AMOUNT_INPUT, str(task.amount),
             field_kind="amount", typo_rate=0.0,
         )
+        _log.info("fill_egift_form: field=SEL_RECIPIENT_NAME len=%d", len(full_name))
         self._realistic_type_field(
             SEL_RECIPIENT_NAME, full_name, field_kind="name",
         )
+        _log.info("fill_egift_form: field=SEL_RECIPIENT_EMAIL len=%d", len(task.recipient_email))
         self._realistic_type_field(
             SEL_RECIPIENT_EMAIL, task.recipient_email, field_kind="text",
         )
+        _log.info("fill_egift_form: field=SEL_CONFIRM_RECIPIENT_EMAIL len=%d", len(task.recipient_email))
         self._realistic_type_field(
             SEL_CONFIRM_RECIPIENT_EMAIL, task.recipient_email,
             field_kind="text",
         )
+        _log.info("fill_egift_form: field=SEL_SENDER_NAME len=%d", len(full_name))
         self._realistic_type_field(
             SEL_SENDER_NAME, full_name, field_kind="name",
         )
+        _log.info("fill_egift_form: completed")
 
     def add_to_cart_and_checkout(self) -> None:
         """Click Add-to-Cart, wait for Review & Checkout button, then click it.
@@ -2527,12 +2638,21 @@ class GivexDriver:
         After clicking Review & Checkout, waits for the browser to reach
         the cart page (``URL_CART``) before returning.
         """
+        _log.info("add_to_cart_and_checkout: started")
         self.bounding_box_click(SEL_ADD_TO_CART)
+        _log.info(
+            "add_to_cart_and_checkout: Add-to-Cart clicked, "
+            "waiting Review-Checkout selector"
+        )
         found = self._wait_for_element(SEL_REVIEW_CHECKOUT, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 10)
+        _log.info("add_to_cart_and_checkout: Review-Checkout visible")
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
-        self._wait_for_url(URL_CART, timeout=15)
+        _log.info("add_to_cart_and_checkout: Review-Checkout clicked")
+        _log.info("add_to_cart_and_checkout: waiting URL_CART")
+        self._wait_for_url_or_capture(URL_CART, "url_cart_not_reached")
+        _log.info("add_to_cart_and_checkout: completed (URL_CART reached)")
 
     # ── Cart & Guest Checkout (Step 2) ───────────────────────────────────────
 
@@ -2554,24 +2674,33 @@ class GivexDriver:
             SelectorTimeoutError: if a required element never appears.
             PageStateError: if a required page URL is not reached.
         """
+        _log.info("select_guest_checkout: started")
         found = self._wait_for_element(SEL_BEGIN_CHECKOUT, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_BEGIN_CHECKOUT, 10)
+        _log.info("select_guest_checkout: Begin-Checkout visible")
         self.bounding_box_click(SEL_BEGIN_CHECKOUT)
-        self._wait_for_url(URL_CHECKOUT, timeout=15)
+        _log.info("select_guest_checkout: Begin-Checkout clicked")
+        self._wait_for_url_or_capture(URL_CHECKOUT, "url_checkout_not_reached")
+        _log.info("select_guest_checkout: URL_CHECKOUT reached")
 
         # Expand the guest checkout section
         found = self._wait_for_element(SEL_GUEST_HEADING, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_GUEST_HEADING, 10)
         self.bounding_box_click(SEL_GUEST_HEADING)
+        _log.info("select_guest_checkout: Guest heading expanded")
 
         found = self._wait_for_element(SEL_GUEST_EMAIL, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_GUEST_EMAIL, 10)
+        _log.info("select_guest_checkout: email len=%d", len(guest_email))
         self._realistic_type_field(SEL_GUEST_EMAIL, guest_email, field_kind="text")
         self.bounding_box_click(SEL_GUEST_CONTINUE)
-        self._wait_for_url(URL_PAYMENT, timeout=15)
+        _log.info("select_guest_checkout: Continue clicked")
+        self._wait_for_url_or_capture(URL_PAYMENT, "url_payment_not_reached")
+        _log.info("select_guest_checkout: URL_PAYMENT reached")
+        _log.info("select_guest_checkout: completed")
 
     # ── Payment & Billing (Step 4 — same page) ──────────────────────────────
 
@@ -2875,27 +3004,23 @@ class GivexDriver:
             raise ValueError(
                 "billing_profile.email must not be None for guest checkout"
             )
-        _log.info(
-            "run_pre_card_checkout_prepare: started "
-            "(geo_checked=%s)",
-            self._geo_checked_this_cycle,
-        )
+        _log.info("run_pre_card_checkout_prepare: started (geo_checked=%s)", self._geo_checked_this_cycle)
         if self._geo_checked_this_cycle is not True:
-            _log.debug("run_pre_card_checkout_prepare: running preflight_geo_check")
+            _log.info("run_pre_card_checkout_prepare: running preflight_geo_check")
             self.preflight_geo_check()
-            _log.debug("run_pre_card_checkout_prepare: preflight_geo_check completed")
-        _log.debug("run_pre_card_checkout_prepare: navigate_to_egift started")
-        self.navigate_to_egift()
-        _log.debug("run_pre_card_checkout_prepare: navigate_to_egift completed")
-        _log.debug("run_pre_card_checkout_prepare: fill_egift_form started")
-        self.fill_egift_form(task, billing_profile)
-        _log.debug("run_pre_card_checkout_prepare: fill_egift_form completed")
-        _log.debug("run_pre_card_checkout_prepare: add_to_cart_and_checkout started")
-        self.add_to_cart_and_checkout()
-        _log.debug("run_pre_card_checkout_prepare: add_to_cart_and_checkout completed")
-        _log.debug("run_pre_card_checkout_prepare: select_guest_checkout started")
-        self.select_guest_checkout(billing_profile.email)
-        _log.debug("run_pre_card_checkout_prepare: select_guest_checkout completed")
+            _log.info("run_pre_card_checkout_prepare: preflight_geo_check completed")
+        else:
+            _log.info("run_pre_card_checkout_prepare: preflight_geo_check skipped")
+
+        def run_step(name, fn, *args):
+            _log.info("run_pre_card_checkout_prepare: %s started", name)
+            fn(*args)
+            _log.info("run_pre_card_checkout_prepare: %s completed", name)
+
+        run_step("navigate_to_egift", self.navigate_to_egift)
+        run_step("fill_egift_form", self.fill_egift_form, task, billing_profile)
+        run_step("add_to_cart_and_checkout", self.add_to_cart_and_checkout)
+        run_step("select_guest_checkout", self.select_guest_checkout, billing_profile.email)
         _log.info("run_pre_card_checkout_prepare: completed")
 
     def run_payment_card_fill(self, card_info, billing_profile) -> None:

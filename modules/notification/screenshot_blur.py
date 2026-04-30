@@ -86,3 +86,22 @@ def capture_and_blur(driver, card_number: str) -> Optional[bytes]:
         _logger.warning("capture_and_blur: screenshot failed: %s", exc)
         return None
     return blur_and_mask(raw_png, card_number)
+
+
+def capture_blurred_only(driver) -> Optional[bytes]:
+    try:
+        raw_png = driver.get_screenshot_as_png()
+        if not raw_png:
+            return None
+        from PIL import Image, ImageFilter  # noqa: PLC0415
+        out = io.BytesIO()
+        Image.open(io.BytesIO(raw_png)).convert("RGB").filter(
+            ImageFilter.GaussianBlur(radius=_BLUR_RADIUS)
+        ).save(out, format="PNG")
+        return out.getvalue()
+    except ImportError:
+        _logger.warning("capture_blurred_only: Pillow missing — refusing to save raw screenshot.")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("capture_blurred_only: failed: %s", exc)
+        return None
