@@ -142,6 +142,52 @@ def _get_trace_id() -> str:
         return "no-trace"
 
 
+def _unwrap_raw_driver(driver_obj):
+    """Return the underlying Selenium driver if *driver_obj* is a GivexDriver wrapper.
+
+    ``GivexDriver`` holds the raw Selenium driver as ``self._driver``.  When
+    the orchestrator receives a ``GivexDriver`` (or any wrapper that stores its
+    inner driver in ``_driver``), calling CDP / Selenium-native methods directly
+    on the wrapper raises ``AttributeError`` because those methods are not
+    forwarded.  This helper unwraps safely.
+
+    Contract (issue AC-3): only unwrap when the inner ``_driver`` attribute is:
+      - not ``None``
+      - a different object from *driver_obj* itself (avoid circular refs)
+      - exposes ``execute_cdp_cmd`` (i.e. looks like a real Selenium driver)
+
+    This means ``MagicMock``-based unit tests continue to work unchanged:
+    ``getattr(mock, "_driver", None)`` auto-creates a child mock, but the
+    child mock *is* a different object, so the ``hasattr`` guard must pass
+    too — and it does because ``MagicMock`` auto-creates any attribute. To
+    avoid inadvertently unwrapping a ``MagicMock`` parent into its ``_driver``
+    child, rely on the fact that only real ``GivexDriver`` wraps an object
+    where ``inner is not driver_obj``.  ``MagicMock._driver`` is a new mock
+    (different object) but ``hasattr(inner, "execute_cdp_cmd")`` is also True
+    for mocks.  However, for an *unwrapped* ``MagicMock``, ``driver_obj``
+    already exposes ``execute_cdp_cmd`` directly, so callers never need to
+    unwrap — and passing a ``MagicMock`` directly is fine.
+
+    In practice this is only ever called with either a real ``GivexDriver``
+    (production) or a plain ``MagicMock`` (unit tests).  For a plain mock
+    ``inner is not driver_obj`` will be True, but the inner mock also has
+    ``execute_cdp_cmd``, so this function *would* unwrap one level.  To keep
+    the ``MagicMock`` path unchanged (tests rely on the mock itself being
+    called, not its ``_driver`` child), we add a final guard: only unwrap when
+    *driver_obj* itself does **not** already expose ``execute_cdp_cmd``
+    (i.e. it is a real wrapper whose outer object lacks the method).
+    """
+    inner = getattr(driver_obj, "_driver", None)
+    if (
+        inner is not None
+        and inner is not driver_obj
+        and hasattr(inner, "execute_cdp_cmd")
+        and not hasattr(driver_obj, "execute_cdp_cmd")
+    ):
+        return inner
+    return driver_obj
+
+
 def _get_consecutive_failures(worker_id: str) -> int:
     """Return autoscaler consecutive failure count, or -1 if unavailable."""
     try:
@@ -1091,8 +1137,9 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
     the current cycle, subsequent calls are silently skipped under
     ``_network_listener_lock`` to prevent value overwrite races.
     """
+    raw_driver = _unwrap_raw_driver(driver_obj)
     try:
-        result = driver_obj.execute_script(
+        result = raw_driver.execute_script(
             "var el = document.querySelector('#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]');"
             "return el ? el.innerText : null;"
         )
@@ -1190,13 +1237,14 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     reach the silent-skip branch in production; the silent skip is retained
     only so test stubs without the hook keep working.
     """
+    raw_driver = _unwrap_raw_driver(driver_obj)
     try:
-        driver_obj.execute_cdp_cmd("Network.enable", {})
+        raw_driver.execute_cdp_cmd("Network.enable", {})
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] Network.enable failed: %s", _get_trace_id(), exc)
         return
     try:
-        add_listener = getattr(driver_obj, "add_cdp_listener", None)
+        add_listener = getattr(raw_driver, "add_cdp_listener", None)
         if callable(add_listener):
             def _on_response(params):
                 # pylint: disable=too-many-nested-blocks
@@ -1213,7 +1261,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
 
                     if request_id:
                         try:
-                            body_resp = driver_obj.execute_cdp_cmd(
+                            body_resp = raw_driver.execute_cdp_cmd(
                                 "Network.getResponseBody",
                                 {"requestId": request_id},
                             )
@@ -1249,7 +1297,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                             _get_trace_id(),
                             worker_id,
                         )
-                        _notify_total_from_dom(driver_obj, worker_id)
+                        _notify_total_from_dom(raw_driver, worker_id)
                 except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
                         "[trace=%s] Network.responseReceived callback failed: %s",
@@ -1266,7 +1314,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                 "fallback for worker=%s.",
                 _get_trace_id(), worker_id,
             )
-            _start_phase_a_dom_polling(driver_obj, worker_id)
+            _start_phase_a_dom_polling(raw_driver, worker_id)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to set Network.responseReceived listener: %s",
