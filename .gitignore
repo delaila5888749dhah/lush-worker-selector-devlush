@@ -9,6 +9,7 @@ __pycache__/
 billing_pool/*.txt
 !billing_pool/profiles_seed.txt
 data/GeoLite2-City.mmdb
+failure_screenshots/
 
 # Tooling caches
 .ruff_cache/

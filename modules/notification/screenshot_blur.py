@@ -86,3 +86,43 @@ def capture_and_blur(driver, card_number: str) -> Optional[bytes]:
         _logger.warning("capture_and_blur: screenshot failed: %s", exc)
         return None
     return blur_and_mask(raw_png, card_number)
+
+
+def capture_blurred_only(driver) -> Optional[bytes]:
+    """Capture a fully-blurred screenshot for failure diagnostics.
+
+    Privacy contract:
+      - Returns ``None`` if Pillow is unavailable (NEVER returns raw PNG).
+      - Returns ``None`` on any capture/processing failure.
+      - The whole image is Gaussian-blurred so PII (emails, names, addresses,
+        cart tokens) on the page becomes unreadable while page structure
+        (page kind, blocked / interstitial / cart layout) remains discernible.
+
+    Distinct from :func:`capture_and_blur` which overlays a masked-card label
+    intended for success notifications. Use this helper for pre-card
+    PageStateError diagnostics where no card data exists yet.
+    """
+    try:
+        raw_png = driver.get_screenshot_as_png()
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("capture_blurred_only: screenshot failed: %s", exc)
+        return None
+    if not raw_png:
+        return None
+    try:
+        from PIL import Image, ImageFilter  # noqa: PLC0415
+
+        img = Image.open(io.BytesIO(raw_png)).convert("RGB")
+        blurred = img.filter(ImageFilter.GaussianBlur(radius=_BLUR_RADIUS))
+        out = io.BytesIO()
+        blurred.save(out, format="PNG")
+        return out.getvalue()
+    except ImportError:
+        _logger.warning(
+            "capture_blurred_only: Pillow missing — refusing to save raw "
+            "screenshot for privacy. Install Pillow to enable failure screenshots."
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("capture_blurred_only: blur failed: %s", exc)
+        return None
