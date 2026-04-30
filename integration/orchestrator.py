@@ -1318,13 +1318,19 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
 
     Steps:
       1. Select a billing profile from the pool (or use *_profile* if provided).
-      2. Enable the network watchdog for this worker.
-      3. Run the full pre-submit sequence via CDP (preflight_geo → navigate →
-         fill eGift form → add to cart → guest checkout → fill payment/billing).
-      4. Persist the idempotency checkpoint (U-07: mark_submitted BEFORE submit).
-      5. Submit the purchase via CDP (the irreversible action).
-      6. Wait for the checkout total to be confirmed by the watchdog.
-      7. Return (state, total).
+      2. Enable the network watchdog + DOM listener for this worker.
+      3. Run pre-card checkout preparation via CDP (preflight_geo → navigate →
+         fill eGift form → add to cart → guest checkout).  DOM polling is
+         already armed at this point so Phase A can observe the real page.
+      4. Wait for the pricing total (Phase A — INV-PAYMENT-01 gate).
+         If the watchdog times out here, abort BEFORE any card field is typed.
+      5. Wire Phase A total into the driver for DOM cross-check.
+      6. Re-arm watchdog for Phase C.
+      7. Fill card / billing payment fields via CDP (only after pricing confirmed).
+      8. Persist the idempotency checkpoint (U-07: mark_submitted BEFORE submit).
+      9. Submit the purchase via CDP (the irreversible action).
+     10. Wait for the checkout total to be confirmed by the watchdog (Phase C).
+     11. Return (state, total).
 
     Args:
         task: WorkerTask containing card and order information.
@@ -1373,9 +1379,33 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     # duration of the blocking watchdog wait.
     _behavior_sm = _get_current_sm()
     try:
-        # ── Phase A: Pre-fill — wait for pricing total BEFORE touching card fields.
+        # ── Pre-card preparation: navigate + eGift form + cart + guest checkout.
+        # This runs BEFORE the Phase A pricing wait so that the DOM polling
+        # thread (ALLOW_DOM_ONLY_WATCHDOG=1 / degraded mode) has a real Givex
+        # checkout page to query instead of about:blank.  No card/billing data
+        # is typed here — INV-PAYMENT-01 is preserved.
+        _logger.info(
+            "[trace=%s] pre_card_prepare_started for worker=%s",
+            _get_trace_id(), worker_id,
+        )
+        _cdp_call_with_timeout(
+            cdp.run_pre_card_checkout_prepare,
+            task,
+            profile,
+            worker_id=worker_id,
+        )
+        _logger.info(
+            "[trace=%s] pre_card_prepare_completed for worker=%s",
+            _get_trace_id(), worker_id,
+        )
+
+        # ── Phase A: Wait for pricing total BEFORE touching card fields.
         # Anti-fraud INV-PAYMENT-01 (Blueprint §5):  if the pricing endpoint
         # stalls, abort BEFORE typing any card data so no submission occurs.
+        _logger.info(
+            "[trace=%s] phase_a_wait_started for worker=%s",
+            _get_trace_id(), worker_id,
+        )
         try:
             if _behavior_sm is not None:
                 _behavior_sm.enter_critical_zone("api_wait")
@@ -1398,8 +1428,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             )
             raise
         _logger.info(
-            "[trace=%s] Preflight total received for worker=%s: %s",
-            _get_trace_id(), worker_id, preflight_total,
+            "[trace=%s] phase_a_total_received total=%s for worker=%s",
+            _get_trace_id(), preflight_total, worker_id,
         )
         # E3 audit: wire the Phase A total into the driver so submit_purchase
         # can cross-check the on-page Order Total via DOM right before the
@@ -1418,15 +1448,22 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         # Re-arm watchdog for the post-submit confirmation total (Phase C).
         watchdog.enable_network_monitor(worker_id)
 
-        # ── Phase B: Fill + submit (only after pricing is known).
-        # F-02: Drive the full pre-submit purchase sequence
-        # (preflight_geo → navigate → fill eGift form → add to cart → guest checkout
-        #  → fill payment/billing).  This replaces the former fill-only call.
+        # ── Phase B: Card fill + submit (only after pricing is confirmed).
+        # INV-PAYMENT-01: card and billing-payment fields MUST only be typed
+        # after the Phase A total is confirmed above.
+        _logger.info(
+            "[trace=%s] card_fill_started for worker=%s",
+            _get_trace_id(), worker_id,
+        )
         _cdp_call_with_timeout(
-            cdp.run_preflight_and_fill,
-            task,
+            cdp.run_payment_card_fill,
+            task.primary_card,
             profile,
             worker_id=worker_id,
+        )
+        _logger.info(
+            "[trace=%s] card_fill_completed for worker=%s",
+            _get_trace_id(), worker_id,
         )
         # U-07: Persist the idempotency checkpoint BEFORE the irreversible submit
         # action.  If the process crashes between mark_submitted and submit_purchase,
@@ -1436,10 +1473,18 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         if _task_id is not None:
             _get_idempotency_store().mark_submitted(_task_id)
             _submitted_before_wait = True
-        # F-02: Submit the purchase (the irreversible action — must come AFTER mark_submitted).
+        # Submit the purchase (the irreversible action — must come AFTER mark_submitted).
+        _logger.info(
+            "[trace=%s] submit_started for worker=%s",
+            _get_trace_id(), worker_id,
+        )
         _cdp_call_with_timeout(
             cdp.submit_purchase,
             worker_id=worker_id,
+        )
+        _logger.info(
+            "[trace=%s] submit_completed for worker=%s",
+            _get_trace_id(), worker_id,
         )
         # P0-1: Detect page state immediately after submit and wire FSM transition.
         # This is the primary path for all FSM state changes in production.

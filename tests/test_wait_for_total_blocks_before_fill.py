@@ -41,10 +41,18 @@ def _make_task():
 
 
 class WaitForTotalBlocksBeforeFill(unittest.TestCase):
-    """Phase A precedes Phase B."""
+    """Phase A precedes Phase B card fill."""
 
     def test_wait_for_total_blocks_before_fill(self):
-        """preflight wait_for_total must come before run_preflight_and_fill."""
+        """Phase A wait_for_total must come AFTER run_pre_card_checkout_prepare
+        but BEFORE run_payment_card_fill (INV-PAYMENT-01).
+
+        With the Phase A reorder fix:
+          1. run_pre_card_checkout_prepare  ← navigate/cart/guest (no card data)
+          2. watchdog.wait_for_total        ← Phase A (blocks on real page)
+          3. run_payment_card_fill          ← types card data (gated by Phase A)
+          4. submit_purchase
+        """
         call_order = []
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -55,7 +63,9 @@ class WaitForTotalBlocksBeforeFill(unittest.TestCase):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
 
-            def _fill(*a, **kw):
+            def _prepare(*a, **kw):
+                call_order.append("prepare")
+            def _card_fill(*a, **kw):
                 call_order.append("fill")
             def _submit(*a, **kw):
                 call_order.append("submit")
@@ -63,24 +73,48 @@ class WaitForTotalBlocksBeforeFill(unittest.TestCase):
                 call_order.append("wait")
                 return 49.99
 
-            mock_cdp.run_preflight_and_fill.side_effect = _fill
+            mock_cdp.run_pre_card_checkout_prepare.side_effect = _prepare
+            mock_cdp.run_payment_card_fill.side_effect = _card_fill
             mock_cdp.submit_purchase.side_effect = _submit
             mock_watchdog.wait_for_total.side_effect = _wait
             mock_fsm.get_current_state_for_worker.return_value = State("success")
 
             run_payment_step(_make_task())
 
-        # First wait must precede first fill.
-        self.assertEqual(call_order[0], "wait", f"order: {call_order}")
+        # prepare → wait (Phase A) → fill (card fill) → submit
+        self.assertIn("prepare", call_order)
+        self.assertIn("wait", call_order)
         self.assertIn("fill", call_order)
         self.assertIn("submit", call_order)
-        self.assertLess(call_order.index("wait"), call_order.index("fill"))
-        self.assertLess(call_order.index("fill"), call_order.index("submit"))
+        # prepare precedes wait
+        self.assertLess(
+            call_order.index("prepare"),
+            call_order.index("wait"),
+            f"run_pre_card_checkout_prepare must precede wait_for_total: {call_order}",
+        )
+        # wait (Phase A) precedes card fill
+        self.assertLess(
+            call_order.index("wait"),
+            call_order.index("fill"),
+            f"wait_for_total must precede run_payment_card_fill: {call_order}",
+        )
+        # card fill precedes submit
+        self.assertLess(
+            call_order.index("fill"),
+            call_order.index("submit"),
+            f"run_payment_card_fill must precede submit_purchase: {call_order}",
+        )
 
 
 class PreflightTotalTimeoutAbortsBeforeCardFill(unittest.TestCase):
 
     def test_preflight_total_timeout_aborts_before_card_fill(self):
+        """Phase A timeout must abort BEFORE run_payment_card_fill and submit_purchase.
+
+        run_pre_card_checkout_prepare may (and must) have been called once —
+        navigation/cart steps happen before the Phase A wait so that DOM
+        polling has a real page to query (INV-PAYMENT-01 reorder fix).
+        """
         with (
             patch("integration.orchestrator.billing") as mock_billing,
             patch("integration.orchestrator.cdp") as mock_cdp,
@@ -94,7 +128,10 @@ class PreflightTotalTimeoutAbortsBeforeCardFill(unittest.TestCase):
             with self.assertRaises(SessionFlaggedError):
                 run_payment_step(_make_task(), worker_id="w-pre")
 
-        mock_cdp.run_preflight_and_fill.assert_not_called()
+        # run_pre_card_checkout_prepare was called (navigation precedes Phase A wait)
+        mock_cdp.run_pre_card_checkout_prepare.assert_called_once()
+        # card fill and submit must NOT be called on Phase A timeout
+        mock_cdp.run_payment_card_fill.assert_not_called()
         mock_cdp.submit_purchase.assert_not_called()
 
 

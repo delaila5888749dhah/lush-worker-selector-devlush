@@ -1,7 +1,17 @@
 # Interface Contract — Integration (Watchdog, Billing, CDP, Observability)
 
-spec-version: 8.1
+spec-version: 8.2
 
+> **v8.2 Additive Changes (Phase A reorder / INV-PAYMENT-01 fix):**
+> - Added `run_pre_card_checkout_prepare(task, billing_profile, worker_id)` — performs
+>   geo check (idempotent), navigation, eGift form, cart, and guest-checkout selection.
+>   Does NOT type card/billing-payment fields. Safe to run before Phase A pricing wait.
+> - Added `run_payment_card_fill(card_info, billing_profile, worker_id)` — types card
+>   and billing payment fields. MUST only be called AFTER Phase A total is confirmed
+>   (INV-PAYMENT-01).
+> - `run_preflight_and_fill` retained as backward-compatible alias that calls the two
+>   above functions in sequence.
+>
 > **v7.1 Additive Changes:**
 > - Added monitor UI-lock metric APIs: `record_ui_lock_retry()`, `record_ui_lock_recovered()`, `record_ui_lock_exhausted()`
 >
@@ -111,6 +121,39 @@ Function: clear_card_fields
 Input:
   - worker_id
 Output: None
+
+Function: run_pre_card_checkout_prepare
+Input:
+  - task
+  - billing_profile
+  - worker_id
+Output: None
+Notes:
+  - Performs geo check (idempotent — skipped if already validated for this driver instance),
+    navigation, recipient form fill, add-to-cart and guest-checkout selection.
+  - Does NOT type any card / billing-payment fields.
+  - Safe to run before the Phase A pricing watchdog wait (INV-PAYMENT-01).
+
+Function: run_payment_card_fill
+Input:
+  - card_info
+  - billing_profile
+  - worker_id
+Output: None
+Notes:
+  - Types card and billing payment fields. MUST only be called AFTER Phase A pricing
+    total is confirmed (INV-PAYMENT-01 / Blueprint §5).
+
+Function: run_preflight_and_fill
+Input:
+  - task
+  - billing_profile
+  - worker_id
+Output: None
+Notes:
+  - Backward-compatible alias: calls run_pre_card_checkout_prepare then run_payment_card_fill
+    in sequence. Retained for external callers and older tests. New orchestrator code
+    should prefer the two split functions so Phase A can be awaited between them.
 
 ## Module: monitor
 

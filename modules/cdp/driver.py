@@ -2850,6 +2850,84 @@ class GivexDriver:
         # After 3s with no spinner/state change → treat as stuck ui_lock
         return "ui_lock"
 
+    # ── Split-phase orchestrator helpers ─────────────────────────────────────
+
+    def run_pre_card_checkout_prepare(self, task, billing_profile) -> None:
+        """Run all pre-card steps: geo check, navigate, eGift form, cart, guest checkout.
+
+        Performs steps 1–5 of the purchase sequence — everything up to and
+        including guest-checkout selection — but intentionally omits
+        ``fill_payment_and_billing`` so that the Phase A pricing watchdog can
+        confirm the order total BEFORE any card/billing data is typed
+        (INV-PAYMENT-01 / Blueprint §5).
+
+        Geo-check is idempotent: if ``_geo_checked_this_cycle`` is already
+        ``True`` on this driver instance the check is skipped.
+
+        Args:
+            task: WorkerTask with purchase details.
+            billing_profile: BillingProfile with address and email.
+
+        Raises:
+            ValueError: if ``billing_profile.email`` is ``None``.
+        """
+        if billing_profile.email is None:
+            raise ValueError(
+                "billing_profile.email must not be None for guest checkout"
+            )
+        _log.info(
+            "run_pre_card_checkout_prepare: started "
+            "(geo_checked=%s)",
+            self._geo_checked_this_cycle,
+        )
+        if self._geo_checked_this_cycle is not True:
+            _log.debug("run_pre_card_checkout_prepare: running preflight_geo_check")
+            self.preflight_geo_check()
+            _log.debug("run_pre_card_checkout_prepare: preflight_geo_check completed")
+        _log.debug("run_pre_card_checkout_prepare: navigate_to_egift started")
+        self.navigate_to_egift()
+        _log.debug("run_pre_card_checkout_prepare: navigate_to_egift completed")
+        _log.debug("run_pre_card_checkout_prepare: fill_egift_form started")
+        self.fill_egift_form(task, billing_profile)
+        _log.debug("run_pre_card_checkout_prepare: fill_egift_form completed")
+        _log.debug("run_pre_card_checkout_prepare: add_to_cart_and_checkout started")
+        self.add_to_cart_and_checkout()
+        _log.debug("run_pre_card_checkout_prepare: add_to_cart_and_checkout completed")
+        _log.debug("run_pre_card_checkout_prepare: select_guest_checkout started")
+        self.select_guest_checkout(billing_profile.email)
+        _log.debug("run_pre_card_checkout_prepare: select_guest_checkout completed")
+        _log.info("run_pre_card_checkout_prepare: completed")
+
+    def run_payment_card_fill(self, card_info, billing_profile) -> None:
+        """Fill card and billing payment fields (INV-PAYMENT-01 gate step).
+
+        Delegates to ``fill_payment_and_billing``.  MUST only be called AFTER
+        the Phase A pricing watchdog has confirmed the order total so that no
+        card data is ever typed on an unconfirmed-total page.
+
+        Args:
+            card_info: CardInfo with card number, expiry, CVV.
+            billing_profile: BillingProfile with billing address.
+        """
+        _log.info("run_payment_card_fill: started")
+        self.fill_payment_and_billing(card_info, billing_profile)
+        _log.info("run_payment_card_fill: completed")
+
+    def run_preflight_and_fill(self, task, billing_profile) -> None:
+        """Backward-compatible alias: run_pre_card_checkout_prepare + run_payment_card_fill.
+
+        Executes steps 1–6 of the full purchase sequence in order.  Retained
+        for external callers and older tests that call this method directly;
+        new code should prefer the two split methods so that the Phase A
+        pricing watchdog can be waited between them.
+
+        Args:
+            task: WorkerTask with purchase details.
+            billing_profile: BillingProfile with address and email.
+        """
+        self.run_pre_card_checkout_prepare(task, billing_profile)
+        self.run_payment_card_fill(task.primary_card, billing_profile)
+
     # ── Full-cycle orchestrator ───────────────────────────────────────────────
 
     def run_full_cycle(self, task, billing_profile) -> str:

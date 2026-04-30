@@ -40,11 +40,11 @@ class TestT09CdpTimeoutBeforeSubmit(E2EBase):
              patch("integration.orchestrator._setup_network_total_listener"), \
              patch(_STORE_PATCH, return_value=store):
             cdp_mod._get_driver.return_value = MagicMock()
-            # Simulate a CDP timeout during the fill phase.  The orchestrator's
-            # _cdp_call_with_timeout converts the underlying TimeoutError into
-            # a SessionFlaggedError before propagating out of run_payment_step.
-            cdp_mod.run_preflight_and_fill.side_effect = TimeoutError(
-                "CDP call timed out during fill",
+            # Simulate a CDP timeout during the card-fill phase (after Phase A succeeds).
+            # The orchestrator's _cdp_call_with_timeout converts the underlying
+            # TimeoutError into a SessionFlaggedError before propagating.
+            cdp_mod.run_payment_card_fill.side_effect = TimeoutError(
+                "CDP call timed out during card fill",
             )
             wd.wait_for_total.return_value = None
 

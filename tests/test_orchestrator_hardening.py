@@ -1187,8 +1187,8 @@ class PostSubmissionTimeoutObservabilityTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp._get_driver.return_value = MagicMock()
-            # Raise timeout from preflight/fill (before mark_submitted is reached)
-            mock_cdp.run_preflight_and_fill.side_effect = SessionFlaggedError("fill timeout")
+            # Raise timeout from pre-card prepare step (before Phase A / mark_submitted)
+            mock_cdp.run_pre_card_checkout_prepare.side_effect = SessionFlaggedError("fill timeout")
 
             store_mock = MagicMock()
             store_mock.is_duplicate.return_value = False

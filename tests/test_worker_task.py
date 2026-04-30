@@ -1371,8 +1371,8 @@ class TestMakeTaskFnGeoCheckPropagatesPoolNoDelete(unittest.TestCase):
 
 
 class TestRunPreflightAndFillGeoDedupe(unittest.TestCase):
-    """When ``_geo_checked_this_cycle`` is True, run_preflight_and_fill skips
-    the redundant ``preflight_geo_check`` call.
+    """When ``_geo_checked_this_cycle`` is True, run_pre_card_checkout_prepare skips
+    the redundant ``preflight_geo_check`` call (geo-dedupe now lives in the driver).
     """
 
     def test_skips_geo_check_when_flag_true(self):
@@ -1386,8 +1386,13 @@ class TestRunPreflightAndFillGeoDedupe(unittest.TestCase):
             profile.email = "x@example.com"
             task = MagicMock()
             cdp_main.run_preflight_and_fill(task, profile, "dedupe-worker")
-            driver.preflight_geo_check.assert_not_called()
-            driver.navigate_to_egift.assert_called_once()
+            # run_preflight_and_fill is now a backward-compat alias that calls the two
+            # new split functions on the driver: run_pre_card_checkout_prepare and
+            # run_payment_card_fill.  For a MagicMock driver, both are auto-created.
+            driver.run_pre_card_checkout_prepare.assert_called_once_with(task, profile)
+            driver.run_payment_card_fill.assert_called_once_with(
+                task.primary_card, profile
+            )
         finally:
             cdp_main.unregister_driver("dedupe-worker")
 
@@ -1399,6 +1404,7 @@ class TestRunPreflightAndFillGeoDedupe(unittest.TestCase):
         class _Stub:
             def __init__(self):
                 self.calls = []
+                self._geo_checked_this_cycle = False
 
             def preflight_geo_check(self):
                 self.calls.append("geo")
@@ -1417,6 +1423,17 @@ class TestRunPreflightAndFillGeoDedupe(unittest.TestCase):
 
             def fill_payment_and_billing(self, _c, _p):
                 self.calls.append("pay")
+
+            def run_pre_card_checkout_prepare(self, task, billing_profile):
+                if getattr(self, "_geo_checked_this_cycle", False) is not True:
+                    self.preflight_geo_check()
+                self.navigate_to_egift()
+                self.fill_egift_form(task, billing_profile)
+                self.add_to_cart_and_checkout()
+                self.select_guest_checkout(billing_profile.email)
+
+            def run_payment_card_fill(self, card_info, billing_profile):
+                self.fill_payment_and_billing(card_info, billing_profile)
 
         stub = _Stub()
         cdp_main.register_driver("dedupe-worker-2", stub)

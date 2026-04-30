@@ -272,20 +272,20 @@ def set_expected_total(worker_id: str, value) -> None:
     _get_driver(worker_id).set_expected_total(value)
 
 
-def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
-    """Run all pre-submit purchase steps via the registered driver.
+def run_pre_card_checkout_prepare(task, billing_profile, worker_id: str) -> None:
+    """Run all pre-card checkout steps via the registered driver.
 
-    Executes steps 1–6 of the full purchase sequence (everything up to and
-    including form fill), but intentionally omits the submit step so that the
-    orchestrator can persist the idempotency checkpoint between fill and
-    submit (U-07):
+    Executes steps 1–5 of the full purchase sequence (everything up to and
+    including guest-checkout selection), but intentionally omits
+    ``fill_payment_and_billing`` so that the Phase A pricing watchdog can
+    confirm the order total BEFORE any card/billing data is typed
+    (INV-PAYMENT-01 / Blueprint §5):
 
-    1. Geo pre-flight check (``preflight_geo_check``).
+    1. Geo pre-flight check (``preflight_geo_check``) — idempotent.
     2. Navigate to eGift page (``navigate_to_egift``).
     3. Fill the eGift form (``fill_egift_form``).
     4. Add to cart and click Review & Checkout (``add_to_cart_and_checkout``).
     5. Select guest checkout (``select_guest_checkout``).
-    6. Fill payment and billing fields (``fill_payment_and_billing``).
 
     Args:
         task: WorkerTask with purchase details.
@@ -296,25 +296,48 @@ def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
         RuntimeError: if no driver has been registered for the given worker_id.
         ValueError: if ``billing_profile.email`` is ``None``.
     """
-    if billing_profile.email is None:
-        raise ValueError(
-            "billing_profile.email must not be None for guest checkout"
-        )
-    driver = _get_driver(worker_id)
-    # Geo-check is a per-cycle invariant.  When the worker entrypoint
-    # (``integration.worker_task``) has already executed it immediately after
-    # ``BitBrowserSession.__enter__`` it sets ``_geo_checked_this_cycle`` to
-    # ``True`` on the driver — skip here to avoid a redundant second call.
-    # ``getattr(..., False) is True`` is intentional: ``MagicMock`` stub
-    # drivers in tests return a truthy ``Mock`` for any unset attribute, so
-    # the strict identity check ensures only a real ``True`` short-circuits.
-    if getattr(driver, "_geo_checked_this_cycle", False) is not True:
-        driver.preflight_geo_check()
-    driver.navigate_to_egift()
-    driver.fill_egift_form(task, billing_profile)
-    driver.add_to_cart_and_checkout()
-    driver.select_guest_checkout(billing_profile.email)
-    driver.fill_payment_and_billing(task.primary_card, billing_profile)
+    _get_driver(worker_id).run_pre_card_checkout_prepare(task, billing_profile)
+
+
+def run_payment_card_fill(card_info, billing_profile, worker_id: str) -> None:
+    """Fill card and billing payment fields via the registered driver.
+
+    Delegates to ``fill_payment_and_billing``.  MUST only be called AFTER
+    the Phase A pricing watchdog has confirmed the order total (INV-PAYMENT-01).
+
+    Args:
+        card_info: CardInfo with card number, expiry, CVV.
+        billing_profile: BillingProfile with billing address.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+    """
+    _get_driver(worker_id).run_payment_card_fill(card_info, billing_profile)
+
+
+def run_preflight_and_fill(task, billing_profile, worker_id: str) -> None:
+    """Backward-compatible alias: run all pre-submit purchase steps.
+
+    Calls :func:`run_pre_card_checkout_prepare` then
+    :func:`run_payment_card_fill` in sequence, preserving the original
+    behaviour of steps 1–6.  Retained so that external callers and older
+    tests that invoke this function directly continue to work without
+    modification.  New orchestrator code should prefer the two split
+    functions so that the Phase A pricing watchdog can be awaited between
+    them.
+
+    Args:
+        task: WorkerTask with purchase details.
+        billing_profile: BillingProfile with address and email.
+        worker_id: Unique identifier for the worker whose driver to use.
+
+    Raises:
+        RuntimeError: if no driver has been registered for the given worker_id.
+        ValueError: if ``billing_profile.email`` is ``None``.
+    """
+    run_pre_card_checkout_prepare(task, billing_profile, worker_id=worker_id)
+    run_payment_card_fill(task.primary_card, billing_profile, worker_id=worker_id)
 
 
 def run_full_purchase_flow(task, billing_profile, worker_id: str) -> str:
