@@ -1228,6 +1228,9 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
         _logger.warning("[trace=%s] Network.enable failed: %s", _get_trace_id(), exc)
     try:
         add_listener = getattr(raw_driver, "add_cdp_listener", None)
+        # Register the CDP listener only after Network.enable succeeds; when
+        # Network.enable fails we intentionally fall through to the DOM-only
+        # watchdog fallback below if the operator opted in.
         if network_enabled and callable(add_listener):
             def _on_response(params):
                 # pylint: disable=too-many-nested-blocks
