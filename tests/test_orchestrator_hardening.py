@@ -35,6 +35,7 @@ from integration.orchestrator import (
     _build_idempotency_store,
     _cdp_call_with_timeout,
     _completed_task_ids,
+    _dom_polling_stop_events,
     _idempotency_lock,
     _in_flight_task_ids,
     _load_idempotency_store,
@@ -43,7 +44,9 @@ from integration.orchestrator import (
     _notify_total_from_dom,
     _save_idempotency_store,
     _setup_network_total_listener,
+    _stop_phase_a_dom_polling,
     _submitted_task_ids,
+    _unwrap_raw_driver,
     _validated_notify_total,
     get_cdp_metrics,
     handle_outcome,
@@ -399,7 +402,8 @@ class NetworkListenerCallbackTests(unittest.TestCase):
         """If Network.enable fails, no exception propagates; listener not set."""
         driver = MagicMock()
         driver.execute_cdp_cmd.side_effect = RuntimeError("CDP error")
-        _setup_network_total_listener(driver, "nl-worker")  # Must not raise
+        with patch.dict(os.environ, {"ALLOW_DOM_ONLY_WATCHDOG": "0"}):
+            _setup_network_total_listener(driver, "nl-worker")  # Must not raise
         driver.add_cdp_listener.assert_not_called()
 
     def test_listener_registration_called(self):
@@ -485,6 +489,220 @@ class NetworkListenerCallbackTests(unittest.TestCase):
         driver.add_cdp_listener = MagicMock(side_effect=RuntimeError("listener error"))
         # Must not raise
         _setup_network_total_listener(driver, "nl-worker")
+
+
+# ── GivexDriver Wrapper Unwrap Regression Tests ───────────────────────────────
+
+class _FakeGivexDriverWrapper:
+    """Minimal stand-in for a GivexDriver wrapper.
+
+    Intentionally does NOT define execute_cdp_cmd / add_cdp_listener /
+    execute_script so that any accidental call on the wrapper (rather than on
+    the inner raw driver) raises ``AttributeError``.
+    """
+
+    def __init__(self, raw_driver):
+        self._driver = raw_driver
+
+
+class UnwrapRawDriverHelperTests(unittest.TestCase):
+    """_unwrap_raw_driver: unit tests for the helper function itself."""
+
+    def test_wrapper_raises_attribute_error_on_cdp_methods(self):
+        """Accessing execute_cdp_cmd on the wrapper itself must raise AttributeError.
+
+        Documents the critical invariant that motivates the unwrap: the wrapper
+        intentionally does not forward CDP methods to the inner driver.
+        """
+        inner = MagicMock(spec=["execute_cdp_cmd", "execute_script"])
+        wrapper = _FakeGivexDriverWrapper(inner)
+        with self.assertRaises(AttributeError):
+            _ = wrapper.execute_cdp_cmd  # noqa: B018
+
+    def test_unwraps_givex_style_wrapper(self):
+        """Returns inner _driver when wrapper lacks execute_cdp_cmd."""
+        inner = MagicMock(spec=["execute_cdp_cmd", "execute_script"])
+        wrapper = _FakeGivexDriverWrapper(inner)
+        self.assertIs(_unwrap_raw_driver(wrapper), inner)
+
+    def test_passthrough_when_already_raw(self):
+        """Returns driver unchanged when it already exposes execute_cdp_cmd."""
+        raw = MagicMock()
+        # MagicMock auto-creates execute_cdp_cmd; _driver is absent from spec
+        result = _unwrap_raw_driver(raw)
+        self.assertIs(result, raw)
+
+    def test_passthrough_when_inner_is_none(self):
+        """Returns driver unchanged when _driver attribute is None."""
+        class _NullInner:
+            _driver = None
+            def execute_cdp_cmd(self, *a, **kw): pass
+        obj = _NullInner()
+        self.assertIs(_unwrap_raw_driver(obj), obj)
+
+    def test_passthrough_when_inner_is_same_object(self):
+        """Returns driver unchanged when _driver is the object itself."""
+        class _SelfRef:
+            def execute_cdp_cmd(self, *a, **kw): pass
+        obj = _SelfRef()
+        obj._driver = obj
+        self.assertIs(_unwrap_raw_driver(obj), obj)
+
+
+class GivexDriverWrapperNetworkListenerTests(unittest.TestCase):
+    """Regression: _setup_network_total_listener must work with GivexDriver wrappers."""
+
+    _POLLING_THREAD_TIMEOUT = 2.0
+
+    def _assert_notify_called(self, notify_called):
+        """Assert that the DOM polling thread called watchdog.notify_total."""
+        self.assertTrue(
+            notify_called.wait(timeout=self._POLLING_THREAD_TIMEOUT),
+            "DOM fallback polling did not call watchdog.notify_total() "
+            f"within {self._POLLING_THREAD_TIMEOUT:g} seconds",
+        )
+
+    def _stop_gw_polling_thread(self):
+        """Stop and drain the gw-worker DOM polling thread if a test started one."""
+        _stop_phase_a_dom_polling("gw-worker")
+        deadline = time.monotonic() + self._POLLING_THREAD_TIMEOUT
+        while time.monotonic() < deadline:
+            with _network_listener_lock:
+                if "gw-worker" not in _dom_polling_stop_events:
+                    return
+            time.sleep(0.01)
+        self.fail(
+            "Phase A DOM polling thread did not stop within "
+            f"{self._POLLING_THREAD_TIMEOUT:g} seconds"
+        )
+
+    def setUp(self):
+        self._stop_gw_polling_thread()
+        with _network_listener_lock:
+            _notified_workers_this_cycle.discard("gw-worker")
+
+    def tearDown(self):
+        self._stop_gw_polling_thread()
+        with _network_listener_lock:
+            _notified_workers_this_cycle.discard("gw-worker")
+
+    def _make_wrapper(self):
+        """Return a (wrapper, inner_mock) pair where wrapper has no CDP methods."""
+        inner = MagicMock()
+        # Give inner a real execute_cdp_cmd (not auto-created from MagicMock parent)
+        inner.execute_cdp_cmd.return_value = {}
+        inner.add_cdp_listener = MagicMock()
+        inner.execute_script.return_value = None
+        wrapper = _FakeGivexDriverWrapper(inner)
+        return wrapper, inner
+
+    def test_network_enable_called_on_inner_driver(self):
+        """Network.enable must be called on the inner Selenium driver, not wrapper."""
+        wrapper, inner = self._make_wrapper()
+        _setup_network_total_listener(wrapper, "gw-worker")
+        inner.execute_cdp_cmd.assert_any_call("Network.enable", {})
+
+    def test_add_cdp_listener_called_on_inner_driver(self):
+        """add_cdp_listener must be called on the inner driver."""
+        wrapper, inner = self._make_wrapper()
+        _setup_network_total_listener(wrapper, "gw-worker")
+        inner.add_cdp_listener.assert_called_once()
+        event_name = inner.add_cdp_listener.call_args[0][0]
+        self.assertEqual(event_name, "Network.responseReceived")
+
+    def test_no_network_enable_failed_warning(self):
+        """The 'Network.enable failed' warning must NOT appear in logs."""
+        wrapper, _ = self._make_wrapper()
+        with self.assertLogs("integration.orchestrator", level="WARNING") as cm:
+            # We need at least one log entry for assertLogs to pass; trigger
+            # the "CDP body unavailable" path via a matching-URL callback.
+            inner = wrapper._driver
+            captured_cb = [None]
+            inner.add_cdp_listener.side_effect = lambda ev, cb: captured_cb.__setitem__(0, cb)
+            _setup_network_total_listener(wrapper, "gw-worker")
+            if captured_cb[0]:
+                with patch("integration.orchestrator.watchdog"):
+                    captured_cb[0]({"requestId": None, "response": {"url": "/checkout/total/amounts"}})
+        # The critical assertion: "Network.enable failed" must never appear
+        joined = "\n".join(cm.output)
+        self.assertNotIn("Network.enable failed", joined)
+
+    def test_wrapper_without_execute_cdp_cmd_does_not_raise(self):
+        """Passing a GivexDriver wrapper must not raise AttributeError."""
+        wrapper, _ = self._make_wrapper()
+        try:
+            _setup_network_total_listener(wrapper, "gw-worker")
+        except AttributeError as exc:
+            self.fail(f"AttributeError raised for GivexDriver wrapper: {exc}")
+
+    def test_dom_fallback_polling_started_when_listener_missing(self):
+        """When inner driver lacks add_cdp_listener, DOM polling starts with ALLOW_DOM_ONLY_WATCHDOG=1."""
+        notify_called = threading.Event()
+        inner = MagicMock()
+        inner.execute_cdp_cmd.return_value = {}
+        inner.execute_script.return_value = "55.00"
+        # Explicitly remove add_cdp_listener from the inner mock spec
+        del inner.add_cdp_listener
+        wrapper = _FakeGivexDriverWrapper(inner)
+
+        import os
+        with patch.dict(os.environ, {"ALLOW_DOM_ONLY_WATCHDOG": "1"}):
+            with patch("integration.orchestrator.watchdog") as mock_wd, \
+                 self.assertLogs("integration.orchestrator", level="WARNING") as cm:
+                mock_wd.notify_total.side_effect = lambda *_: notify_called.set()
+                try:
+                    _setup_network_total_listener(wrapper, "gw-worker")
+                    self._assert_notify_called(notify_called)
+                finally:
+                    self._stop_gw_polling_thread()
+        joined = "\n".join(cm.output)
+        self.assertIn("ALLOW_DOM_ONLY_WATCHDOG", joined)
+        self.assertNotIn("Network.enable failed", joined)
+
+    def test_network_enable_fail_with_dom_fallback_starts_polling(self):
+        """Network.enable failure still starts DOM polling when fallback is opt-in."""
+        notify_called = threading.Event()
+        inner = MagicMock()
+        inner.execute_cdp_cmd.side_effect = RuntimeError("cdp pipe broken")
+        inner.add_cdp_listener = MagicMock()
+        inner.execute_script.return_value = "88.00"
+        wrapper = _FakeGivexDriverWrapper(inner)
+
+        with patch.dict(os.environ, {"ALLOW_DOM_ONLY_WATCHDOG": "1"}):
+            with patch("integration.orchestrator.watchdog") as mock_wd, \
+                 self.assertLogs("integration.orchestrator", level="WARNING") as cm:
+                mock_wd.notify_total.side_effect = lambda *_: notify_called.set()
+                try:
+                    _setup_network_total_listener(wrapper, "gw-worker")
+                    self._assert_notify_called(notify_called)
+                finally:
+                    self._stop_gw_polling_thread()
+
+        inner.add_cdp_listener.assert_not_called()
+        mock_wd.notify_total.assert_called_with("gw-worker", 88.0)
+        joined = "\n".join(cm.output)
+        self.assertIn("Network.enable failed", joined)
+        self.assertIn("DEGRADED", joined)
+        self.assertIn("Phase A DOM polling", joined)
+
+    def test_network_enable_fail_without_fallback_returns_silently(self):
+        """Network.enable failure preserves silent-skip behavior without fallback opt-in."""
+        inner = MagicMock()
+        inner.execute_cdp_cmd.side_effect = RuntimeError("cdp pipe broken")
+        inner.add_cdp_listener = MagicMock()
+        inner.execute_script.return_value = "88.00"
+        wrapper = _FakeGivexDriverWrapper(inner)
+
+        with patch.dict(os.environ, {"ALLOW_DOM_ONLY_WATCHDOG": "0"}):
+            with self.assertLogs("integration.orchestrator", level="WARNING") as cm:
+                _setup_network_total_listener(wrapper, "gw-worker")
+
+        inner.add_cdp_listener.assert_not_called()
+        with _network_listener_lock:
+            self.assertNotIn("gw-worker", _dom_polling_stop_events)
+        joined = "\n".join(cm.output)
+        self.assertIn("Network.enable failed", joined)
+        self.assertNotIn("DEGRADED", joined)
 
 
 # ── Redis Idempotency Store Semantics ─────────────────────────────────────────

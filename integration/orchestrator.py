@@ -142,6 +142,34 @@ def _get_trace_id() -> str:
         return "no-trace"
 
 
+def _unwrap_raw_driver(driver_obj):
+    """Return the underlying Selenium driver if *driver_obj* is a GivexDriver wrapper.
+
+    ``GivexDriver`` holds the raw Selenium driver as ``self._driver``.  When
+    the orchestrator receives a ``GivexDriver``, calling CDP / Selenium-native
+    methods directly on the wrapper raises ``AttributeError`` because those
+    methods are not forwarded.  This helper unwraps safely.
+
+    Contract: only unwrap when the inner ``_driver`` attribute is not ``None``,
+    is a different object from *driver_obj* itself, exposes ``execute_cdp_cmd``
+    (looks like a real Selenium driver), and *driver_obj* itself does **not**
+    already expose ``execute_cdp_cmd`` (i.e. it is a real wrapper, not a
+    ``MagicMock`` or already-raw driver).  This keeps ``MagicMock``-based unit
+    tests working unchanged.
+    """
+    # Only unwrap when the wrapper lacks execute_cdp_cmd (real GivexDriver
+    # pattern) but the inner _driver has it (real Selenium driver).
+    inner = getattr(driver_obj, "_driver", None)
+    if (
+        inner is not None
+        and inner is not driver_obj
+        and hasattr(inner, "execute_cdp_cmd")
+        and not hasattr(driver_obj, "execute_cdp_cmd")
+    ):
+        return inner
+    return driver_obj
+
+
 def _get_consecutive_failures(worker_id: str) -> int:
     """Return autoscaler consecutive failure count, or -1 if unavailable."""
     try:
@@ -1091,8 +1119,9 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
     the current cycle, subsequent calls are silently skipped under
     ``_network_listener_lock`` to prevent value overwrite races.
     """
+    raw_driver = _unwrap_raw_driver(driver_obj)
     try:
-        result = driver_obj.execute_script(
+        result = raw_driver.execute_script(
             "var el = document.querySelector('#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]');"
             "return el ? el.innerText : null;"
         )
@@ -1190,14 +1219,19 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
     reach the silent-skip branch in production; the silent skip is retained
     only so test stubs without the hook keep working.
     """
+    raw_driver = _unwrap_raw_driver(driver_obj)
+    network_enabled = False
     try:
-        driver_obj.execute_cdp_cmd("Network.enable", {})
+        raw_driver.execute_cdp_cmd("Network.enable", {})
+        network_enabled = True
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning("[trace=%s] Network.enable failed: %s", _get_trace_id(), exc)
-        return
     try:
-        add_listener = getattr(driver_obj, "add_cdp_listener", None)
-        if callable(add_listener):
+        add_listener = getattr(raw_driver, "add_cdp_listener", None)
+        # Register the CDP listener only after Network.enable succeeds; when
+        # Network.enable fails we intentionally fall through to the DOM-only
+        # watchdog fallback below if the operator opted in.
+        if network_enabled and callable(add_listener):
             def _on_response(params):
                 # pylint: disable=too-many-nested-blocks
                 try:
@@ -1213,7 +1247,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
 
                     if request_id:
                         try:
-                            body_resp = driver_obj.execute_cdp_cmd(
+                            body_resp = raw_driver.execute_cdp_cmd(
                                 "Network.getResponseBody",
                                 {"requestId": request_id},
                             )
@@ -1249,7 +1283,7 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                             _get_trace_id(),
                             worker_id,
                         )
-                        _notify_total_from_dom(driver_obj, worker_id)
+                        _notify_total_from_dom(raw_driver, worker_id)
                 except Exception as callback_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
                         "[trace=%s] Network.responseReceived callback failed: %s",
@@ -1258,15 +1292,19 @@ def _setup_network_total_listener(driver_obj, worker_id: str) -> None:
                     )
             add_listener("Network.responseReceived", _on_response)
         elif _dom_only_fallback_enabled():
-            # Listener absent + fallback opt-in: start Phase A DOM polling.
-            # Without env opt-in we keep legacy silent-skip so test stubs work.
+            # Listener unavailable or Network.enable failed + fallback opt-in:
+            # start Phase A DOM polling.  Without env opt-in we keep legacy
+            # silent-skip so test stubs work.
             _logger.warning(
-                "[trace=%s] Driver lacks add_cdp_listener; "
-                "ALLOW_DOM_ONLY_WATCHDOG=1 — starting Phase A DOM polling "
-                "fallback for worker=%s.",
-                _get_trace_id(), worker_id,
+                "[trace=%s] DEGRADED mode: ALLOW_DOM_ONLY_WATCHDOG=1 — "
+                "starting Phase A DOM polling fallback "
+                "(network_enabled=%s, add_cdp_listener=%s) for worker=%s.",
+                _get_trace_id(),
+                network_enabled,
+                callable(add_listener),
+                worker_id,
             )
-            _start_phase_a_dom_polling(driver_obj, worker_id)
+            _start_phase_a_dom_polling(raw_driver, worker_id)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         _logger.warning(
             "[trace=%s] Failed to set Network.responseReceived listener: %s",
