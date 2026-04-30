@@ -998,7 +998,8 @@ class OrphanedThreadCounterTests(unittest.TestCase):
         metrics_before = get_cdp_metrics()
         dead_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         dead_executor.shutdown(wait=True)
-        with patch("integration.orchestrator._cdp_executor", dead_executor):
+        with patch("integration.orchestrator._cdp_executor", dead_executor), \
+             patch("integration.orchestrator._get_cdp_executor", return_value=dead_executor):
             with self.assertRaises(SessionFlaggedError):
                 _cdp_call_with_timeout(lambda: 1, timeout=5)
         metrics_after = get_cdp_metrics()

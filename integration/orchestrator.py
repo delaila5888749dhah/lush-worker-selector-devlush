@@ -754,6 +754,15 @@ def _shutdown_cdp_executor() -> None:
     gives a best-estimate of how many threads may still be running at shutdown.
     """
     with _cdp_executor_lock:
+        # Bug 8: capture caller stack so premature shutdowns are traceable in
+        # production logs. If this fires before process exit, an unexpected
+        # caller is shutting down the executor prematurely.
+        _logger.error(
+            "_shutdown_cdp_executor called — capturing stack for Bug 8 forensics. "
+            "If this fires before process exit, a caller is shutting down the "
+            "executor prematurely.",
+            stack_info=True,
+        )
         with _cdp_metric_lock:
             _snap_active = _active_cdp_requests
         _snap_orphaned = _cdp_orphaned_threads  # protected by _cdp_executor_lock
@@ -776,9 +785,30 @@ def _get_cdp_executor() -> concurrent.futures.ThreadPoolExecutor:
     (timed-out) threads and no new submissions will start immediately. In that
     case the old executor is discarded (without waiting) and a fresh one is
     created so that subsequent calls are not permanently queued.
+
+    Bug 8 recovery: if the executor has been shut down through any path other
+    than the saturation branch (atexit hook misfire, test pollution, future
+    regression), this function transparently recreates a fresh executor and
+    emits a CRITICAL log so operators can investigate the upstream caller.
     """
     global _cdp_executor, _cdp_orphaned_threads  # pylint: disable=global-statement,invalid-name
     with _cdp_executor_lock:
+        # Bug 8: recover from external shutdown. Must be checked BEFORE the
+        # saturation branch so a dead executor is never returned to callers.
+        if getattr(_cdp_executor, "_shutdown", False):
+            _logger.critical(
+                "[trace=%s] CDP executor was found _shutdown=True at runtime; "
+                "recreating. This indicates a premature shutdown bug — "
+                "see Bug 8 / inspect '_shutdown_cdp_executor called' stack logs.",
+                _get_trace_id(),
+            )
+            _cdp_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=CDP_EXECUTOR_MAX_WORKERS,
+                thread_name_prefix="cdp-timeout",
+            )
+            _cdp_orphaned_threads = 0
+            return _cdp_executor
+
         if _cdp_orphaned_threads >= CDP_EXECUTOR_MAX_WORKERS:
             _cdp_executor.shutdown(  # pylint: disable=unexpected-keyword-arg
                 wait=False, cancel_futures=False,
@@ -869,6 +899,27 @@ def _cdp_call_with_timeout(fn: Callable, *args: Any, timeout: float = _CDP_CALL_
         try:
             future = executor.submit(fn, *args, **kwargs)
         except RuntimeError as exc:
+            msg = str(exc)
+            is_interpreter_shutdown = "interpreter shutdown" in msg.lower()
+            _logger.error(
+                "[trace=%s] CDP executor submit failed for '%s': %r "
+                "(executor_shutdown=%s, orphaned_threads=%d, max_workers=%d, "
+                "interpreter_shutdown=%s)",
+                _get_trace_id(),
+                fn_name,
+                exc,
+                getattr(executor, "_shutdown", None),
+                _cdp_orphaned_threads,
+                CDP_EXECUTOR_MAX_WORKERS,
+                is_interpreter_shutdown,
+                exc_info=True,
+            )
+            if is_interpreter_shutdown:
+                # Process is tearing down — recovery is meaningless.
+                raise SessionFlaggedError(
+                    f"CDP call '{fn_name}' rejected because the Python interpreter "
+                    "is shutting down"
+                ) from exc
             raise SessionFlaggedError(
                 f"CDP call '{fn_name}' could not be scheduled because "
                 "the CDP executor is unavailable"

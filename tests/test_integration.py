@@ -898,9 +898,11 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
     def test_submit_after_shutdown_raises_session_flagged_error(self):
         """Submitting after executor shutdown raises SessionFlaggedError."""
         import concurrent.futures
+        from integration import orchestrator
         dead_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         dead_executor.shutdown(wait=True)
-        with patch("integration.orchestrator._cdp_executor", dead_executor):
+        with patch("integration.orchestrator._cdp_executor", dead_executor), \
+             patch("integration.orchestrator._get_cdp_executor", return_value=dead_executor):
             with self.assertRaises(SessionFlaggedError) as ctx:
                 _cdp_call_with_timeout(lambda: 1, timeout=5)
             self.assertIn("unavailable", str(ctx.exception))
@@ -936,6 +938,84 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
         self.assertIsInstance(m["total_timeouts"], int)
         self.assertIsInstance(m["active_cdp_requests"], int)
         self.assertIsInstance(m["orphaned_cdp_threads"], int)
+
+    def test_get_cdp_executor_recreates_when_shutdown(self):
+        """Bug 8: dead executor must be transparently recreated on next call."""
+        import concurrent.futures
+        from integration import orchestrator
+        old_exec = orchestrator._cdp_executor
+        try:
+            old_exec.shutdown(wait=True)
+            self.assertTrue(getattr(orchestrator._cdp_executor, "_shutdown", False))
+
+            # Recovery path must work transparently.
+            result = _cdp_call_with_timeout(lambda: 99, timeout=5)
+            self.assertEqual(result, 99)
+
+            # New executor must be alive.
+            self.assertFalse(
+                getattr(orchestrator._cdp_executor, "_shutdown", False),
+                "Executor must be recreated and not in _shutdown state",
+            )
+            # Orphan counter must be reset.
+            self.assertEqual(orchestrator._cdp_orphaned_threads, 0)
+        finally:
+            # Guarantee a usable executor for subsequent tests.
+            if getattr(orchestrator._cdp_executor, "_shutdown", False):
+                orchestrator._cdp_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=orchestrator.CDP_EXECUTOR_MAX_WORKERS,
+                    thread_name_prefix="cdp-timeout",
+                )
+            orchestrator._cdp_orphaned_threads = 0
+
+    def test_get_cdp_executor_recovery_emits_critical_log(self):
+        """Recovery path must log CRITICAL so operators detect Bug 8 firing."""
+        import concurrent.futures
+        from integration import orchestrator
+        old_exec = orchestrator._cdp_executor
+        try:
+            old_exec.shutdown(wait=True)
+            with self.assertLogs("integration.orchestrator", level="CRITICAL") as cm:
+                _cdp_call_with_timeout(lambda: 1, timeout=5)
+            self.assertTrue(
+                any("found _shutdown=True" in m for m in cm.output),
+                f"Expected Bug 8 CRITICAL recovery log, got: {cm.output}",
+            )
+        finally:
+            if getattr(orchestrator._cdp_executor, "_shutdown", False):
+                orchestrator._cdp_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=orchestrator.CDP_EXECUTOR_MAX_WORKERS,
+                    thread_name_prefix="cdp-timeout",
+                )
+            orchestrator._cdp_orphaned_threads = 0
+
+    def test_submit_runtime_error_logged_with_repr_and_state(self):
+        """RuntimeError on submit must surface the original message + executor state."""
+        import concurrent.futures
+        from integration import orchestrator
+        dead = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        dead.shutdown(wait=True)
+        with patch.object(orchestrator, "_cdp_executor", dead), \
+             patch.object(orchestrator, "_get_cdp_executor", return_value=dead):
+            with self.assertLogs("integration.orchestrator", level="ERROR") as cm:
+                with self.assertRaises(SessionFlaggedError):
+                    _cdp_call_with_timeout(lambda: 1, timeout=5)
+        joined = "\n".join(cm.output)
+        self.assertIn("CDP executor submit failed", joined)
+        self.assertIn("cannot schedule", joined)        # original RuntimeError repr
+        self.assertIn("executor_shutdown=True", joined)
+        self.assertIn("orphaned_threads=", joined)
+
+    def test_shutdown_emits_diagnostic_stack(self):
+        """_shutdown_cdp_executor must log with stack_info for forensic tracing."""
+        from integration import orchestrator
+        with patch.object(orchestrator, "_cdp_executor"), \
+             self.assertLogs("integration.orchestrator", level="ERROR") as cm:
+            orchestrator._shutdown_cdp_executor()
+        self.assertTrue(
+            any("_shutdown_cdp_executor called" in m and "Stack" in m for m in cm.output),
+            f"Expected stack_info diagnostic log, got: {cm.output}",
+        )
 
 
 class CDPPoolSaturationTests(unittest.TestCase):
