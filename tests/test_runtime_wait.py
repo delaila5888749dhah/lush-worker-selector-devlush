@@ -5,6 +5,9 @@ from unittest.mock import patch
 
 from integration import runtime
 
+MIN_WAIT_FACTOR = 0.75
+MAX_WAIT_FACTOR = 7.5
+
 
 class RuntimeWaitTests(unittest.TestCase):
     def test_wait_returns_true_when_loop_thread_is_none(self):
@@ -14,8 +17,8 @@ class RuntimeWaitTests(unittest.TestCase):
     def test_wait_blocks_until_loop_thread_exits(self):
         done = threading.Event()
         release_delay = 0.2
-        expected_min_wait = release_delay * 0.75
-        expected_max_wait = release_delay * 7.5
+        expected_min_wait = release_delay * MIN_WAIT_FACTOR
+        expected_max_wait = release_delay * MAX_WAIT_FACTOR
 
         def _fake_loop():
             done.wait(timeout=2.0)

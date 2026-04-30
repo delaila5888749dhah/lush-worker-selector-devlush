@@ -952,6 +952,8 @@ def stop(timeout=None):
 def wait(timeout: float | None = None) -> bool:
     """Block until the runtime loop thread exits.
 
+    timeout: seconds to wait; None waits indefinitely.
+
     Returns True if the loop thread is no longer alive (or never existed).
     Returns False if timeout expires with the loop thread still running.
     """
