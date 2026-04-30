@@ -106,10 +106,8 @@ def _short_url(url: str) -> str:
 def _failure_screenshot_enabled() -> bool:
     return os.environ.get("FAILURE_SCREENSHOT_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
-
 def _failure_screenshot_dir() -> str:
     return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
-
 
 def _failure_screenshot_allow_raw() -> bool:
     return os.environ.get("FAILURE_SCREENSHOT_ALLOW_RAW", "0").strip().lower() in ("1", "true", "yes", "on")
