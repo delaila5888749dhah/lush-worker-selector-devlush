@@ -36,6 +36,7 @@ def _profile() -> BillingProfile:
 class _FakeTask:
     task_id = "t-1"
     order_queue = ()
+    primary_card = None
 
 
 class BillingAuditSingleEmitTests(unittest.TestCase):
