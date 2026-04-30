@@ -83,9 +83,7 @@ _log = logging.getLogger(__name__)
 
 
 def _sanitize_url_for_log(url: str) -> str:
-    """Drop query string and fragment for privacy-safe URL logging."""
-    if not url:
-        return ""
+    if not url: return ""
     try:
         s = urllib.parse.urlsplit(url)
         return urllib.parse.urlunsplit((s.scheme, s.netloc, s.path, "", ""))
@@ -94,9 +92,7 @@ def _sanitize_url_for_log(url: str) -> str:
 
 
 def _short_url(url: str) -> str:
-    """Trim long URLs for log readability; never includes query strings."""
-    if not url:
-        return ""
+    if not url: return ""
     try:
         s = urllib.parse.urlsplit(url)
         last = s.path.rsplit("/", 1)[-1] or s.path or "/"
@@ -105,24 +101,13 @@ def _short_url(url: str) -> str:
         return "<unparseable-url>"
 
 
-_TRUE_ENV_VALUES = ("1", "true", "yes", "on")
-
-
 def _env_flag(name: str, default: str = "0") -> bool:
-    return os.environ.get(name, default).strip().lower() in _TRUE_ENV_VALUES
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _failure_screenshot_enabled() -> bool:
-    return _env_flag("FAILURE_SCREENSHOT_ENABLED")
-
-
-def _failure_screenshot_dir() -> str:
-    return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
-
-
-def _failure_screenshot_allow_raw() -> bool:
-    """Local-debug-only escape hatch; emits WARNING before saving raw PNG."""
-    return _env_flag("FAILURE_SCREENSHOT_ALLOW_RAW")
+def _failure_screenshot_enabled() -> bool: return _env_flag("FAILURE_SCREENSHOT_ENABLED")
+def _failure_screenshot_dir() -> str: return os.environ.get("FAILURE_SCREENSHOT_DIR", "failure_screenshots")
+def _failure_screenshot_allow_raw() -> bool: return _env_flag("FAILURE_SCREENSHOT_ALLOW_RAW")
 
 
 # ── MaxMind GeoLite2 singleton ────────────────────────────────────────────
@@ -1938,14 +1923,11 @@ class GivexDriver:
                 )
                 return
             time.sleep(0.5)
-        raise PageStateError(
-            f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_url or '')} transitions={transitions}"
-        )
+        raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_url or '')} transitions={transitions}")
 
     def _capture_failure_screenshot(self, label: str) -> None:
         """Best-effort failure PNG capture; never raises."""
-        if not _failure_screenshot_enabled():
-            return
+        if not _failure_screenshot_enabled(): return
         try:
             from modules.notification.screenshot_blur import capture_blurred_only  # noqa: PLC0415
             from pathlib import Path  # noqa: PLC0415
@@ -1966,8 +1948,7 @@ class GivexDriver:
                     png = self._driver.get_screenshot_as_png()
                 except Exception:
                     return
-                if not png:
-                    return
+                if not png: return
             outdir = Path(_failure_screenshot_dir())
             outdir.mkdir(parents=True, exist_ok=True)
             path = outdir / f"{label}_{int(time.time())}_{os.getpid()}.png"
@@ -2616,17 +2597,32 @@ class GivexDriver:
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         greeting = _random_greeting(self._rnd)
         amount = str(task.amount)
-        fields = (
-            (SEL_GREETING_MSG, "SEL_GREETING_MSG", greeting, {"field_kind": "text"}),
-            (SEL_AMOUNT_INPUT, "SEL_AMOUNT_INPUT", amount, {"field_kind": "amount", "typo_rate": 0.0}),
-            (SEL_RECIPIENT_NAME, "SEL_RECIPIENT_NAME", full_name, {"field_kind": "name"}),
-            (SEL_RECIPIENT_EMAIL, "SEL_RECIPIENT_EMAIL", task.recipient_email, {"field_kind": "text"}),
-            (SEL_CONFIRM_RECIPIENT_EMAIL, "SEL_CONFIRM_RECIPIENT_EMAIL", task.recipient_email, {"field_kind": "text"}),
-            (SEL_SENDER_NAME, "SEL_SENDER_NAME", full_name, {"field_kind": "name"}),
+        _log.info("fill_egift_form: field=SEL_GREETING_MSG len=%d", len(greeting))
+        self._realistic_type_field(
+            SEL_GREETING_MSG, greeting, field_kind="text",
         )
-        for selector, field_name, value, kwargs in fields:
-            _log.info("fill_egift_form: field=%s len=%d", field_name, len(value))
-            self._realistic_type_field(selector, value, **kwargs)
+        _log.info("fill_egift_form: field=SEL_AMOUNT_INPUT len=%d", len(amount))
+        self._realistic_type_field(
+            SEL_AMOUNT_INPUT, amount,
+            field_kind="amount", typo_rate=0.0,
+        )
+        _log.info("fill_egift_form: field=SEL_RECIPIENT_NAME len=%d", len(full_name))
+        self._realistic_type_field(
+            SEL_RECIPIENT_NAME, full_name, field_kind="name",
+        )
+        _log.info("fill_egift_form: field=SEL_RECIPIENT_EMAIL len=%d", len(task.recipient_email))
+        self._realistic_type_field(
+            SEL_RECIPIENT_EMAIL, task.recipient_email, field_kind="text",
+        )
+        _log.info("fill_egift_form: field=SEL_CONFIRM_RECIPIENT_EMAIL len=%d", len(task.recipient_email))
+        self._realistic_type_field(
+            SEL_CONFIRM_RECIPIENT_EMAIL, task.recipient_email,
+            field_kind="text",
+        )
+        _log.info("fill_egift_form: field=SEL_SENDER_NAME len=%d", len(full_name))
+        self._realistic_type_field(
+            SEL_SENDER_NAME, full_name, field_kind="name",
+        )
         _log.info("fill_egift_form: completed")
 
     def add_to_cart_and_checkout(self) -> None:
@@ -3010,18 +3006,14 @@ class GivexDriver:
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check completed")
         else:
             _log.info("run_pre_card_checkout_prepare: preflight_geo_check skipped")
-        _log.info("run_pre_card_checkout_prepare: navigate_to_egift started")
-        self.navigate_to_egift()
-        _log.info("run_pre_card_checkout_prepare: navigate_to_egift completed")
-        _log.info("run_pre_card_checkout_prepare: fill_egift_form started")
-        self.fill_egift_form(task, billing_profile)
-        _log.info("run_pre_card_checkout_prepare: fill_egift_form completed")
-        _log.info("run_pre_card_checkout_prepare: add_to_cart_and_checkout started")
-        self.add_to_cart_and_checkout()
-        _log.info("run_pre_card_checkout_prepare: add_to_cart_and_checkout completed")
-        _log.info("run_pre_card_checkout_prepare: select_guest_checkout started")
-        self.select_guest_checkout(billing_profile.email)
-        _log.info("run_pre_card_checkout_prepare: select_guest_checkout completed")
+        def run_step(name, fn, *args):
+            _log.info("run_pre_card_checkout_prepare: %s started", name)
+            fn(*args)
+            _log.info("run_pre_card_checkout_prepare: %s completed", name)
+        run_step("navigate_to_egift", self.navigate_to_egift)
+        run_step("fill_egift_form", self.fill_egift_form, task, billing_profile)
+        run_step("add_to_cart_and_checkout", self.add_to_cart_and_checkout)
+        run_step("select_guest_checkout", self.select_guest_checkout, billing_profile.email)
         _log.info("run_pre_card_checkout_prepare: completed")
 
     def run_payment_card_fill(self, card_info, billing_profile) -> None:
