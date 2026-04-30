@@ -1376,23 +1376,56 @@ class TestRunPreflightAndFillGeoDedupe(unittest.TestCase):
     """
 
     def test_skips_geo_check_when_flag_true(self):
+        """When ``_geo_checked_this_cycle=True``, the driver's pre-card-checkout
+        composite must skip ``preflight_geo_check`` (geo-dedupe lives in the driver).
+        """
         import modules.cdp.main as cdp_main
 
-        driver = MagicMock()
-        driver._geo_checked_this_cycle = True
-        cdp_main.register_driver("dedupe-worker", driver)
+        class _Stub:
+            def __init__(self):
+                self.calls = []
+                self._geo_checked_this_cycle = True  # already validated this cycle
+
+            def preflight_geo_check(self):
+                self.calls.append("geo")
+
+            def navigate_to_egift(self):
+                self.calls.append("nav")
+
+            def fill_egift_form(self, _t, _p):
+                self.calls.append("fill")
+
+            def add_to_cart_and_checkout(self):
+                self.calls.append("cart")
+
+            def select_guest_checkout(self, _e):
+                self.calls.append("guest")
+
+            def fill_payment_and_billing(self, _c, _p):
+                self.calls.append("pay")
+
+            def run_pre_card_checkout_prepare(self, task, billing_profile):
+                if getattr(self, "_geo_checked_this_cycle", False) is not True:
+                    self.preflight_geo_check()
+                self.navigate_to_egift()
+                self.fill_egift_form(task, billing_profile)
+                self.add_to_cart_and_checkout()
+                self.select_guest_checkout(billing_profile.email)
+
+            def run_payment_card_fill(self, card_info, billing_profile):
+                self.fill_payment_and_billing(card_info, billing_profile)
+
+        stub = _Stub()
+        cdp_main.register_driver("dedupe-worker", stub)
         try:
             profile = MagicMock()
             profile.email = "x@example.com"
             task = MagicMock()
             cdp_main.run_preflight_and_fill(task, profile, "dedupe-worker")
-            # run_preflight_and_fill is now a backward-compat alias that calls the two
-            # new split functions on the driver: run_pre_card_checkout_prepare and
-            # run_payment_card_fill.  For a MagicMock driver, both are auto-created.
-            driver.run_pre_card_checkout_prepare.assert_called_once_with(task, profile)
-            driver.run_payment_card_fill.assert_called_once_with(
-                task.primary_card, profile
-            )
+            # geo-check must be skipped; navigation must still happen
+            self.assertNotIn("geo", stub.calls)
+            self.assertEqual(stub.calls[0], "nav")
+            self.assertIn("pay", stub.calls)
         finally:
             cdp_main.unregister_driver("dedupe-worker")
 

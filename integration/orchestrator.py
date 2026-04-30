@@ -1388,12 +1388,21 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             "[trace=%s] pre_card_prepare_started for worker=%s",
             _get_trace_id(), worker_id,
         )
-        _cdp_call_with_timeout(
-            cdp.run_pre_card_checkout_prepare,
-            task,
-            profile,
-            worker_id=worker_id,
-        )
+        try:
+            _cdp_call_with_timeout(
+                cdp.run_pre_card_checkout_prepare,
+                task,
+                profile,
+                worker_id=worker_id,
+            )
+        except BaseException:
+            # If pre-card prepare fails, Phase A wait will not run — we must
+            # stop the DOM polling thread that ``_setup_network_total_listener``
+            # armed above, otherwise it keeps querying the (still-stalled) page
+            # until ``PAYMENT_WATCHDOG_TIMEOUT_S`` expires on its own.  Safe
+            # to call even when no polling thread exists (degraded vs CDP path).
+            _stop_phase_a_dom_polling(worker_id)
+            raise
         _logger.info(
             "[trace=%s] pre_card_prepare_completed for worker=%s",
             _get_trace_id(), worker_id,

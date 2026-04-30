@@ -243,6 +243,31 @@ class PrepareFailureTest(unittest.TestCase):
         store.mark_submitted.assert_not_called()
         mock_cdp.submit_purchase.assert_not_called()
 
+    def test_prepare_failure_stops_dom_polling(self):
+        """Pre-card prepare failure must stop the Phase A DOM polling thread.
+
+        Otherwise the polling thread armed by ``_setup_network_total_listener``
+        keeps querying the (still-stalled) page until its own deadline expires,
+        wasting cycle time and leaking a background thread per failed attempt.
+        """
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog"),
+            patch("integration.orchestrator.fsm"),
+            patch("integration.orchestrator._stop_phase_a_dom_polling") as mock_stop,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_cdp._get_driver.return_value = MagicMock()
+            mock_cdp.run_pre_card_checkout_prepare.side_effect = SessionFlaggedError(
+                "prepare failed"
+            )
+
+            with self.assertRaises(SessionFlaggedError):
+                run_payment_step(_make_task(), worker_id="dom-cleanup-worker")
+
+        mock_stop.assert_called_with("dom-cleanup-worker")
+
 
 # ── 4. Backward-compat alias ──────────────────────────────────────────────────
 
