@@ -783,7 +783,7 @@ def _shutdown_cdp_executor(*, expected: bool = False) -> None:
         _cdp_executor.shutdown(wait=False, cancel_futures=True)
         _logger.info("CDP executor shutdown issued.")
 
-atexit.register(lambda: _shutdown_cdp_executor(expected=True))
+atexit.register(_shutdown_cdp_executor, expected=True)
 
 
 def _get_cdp_executor() -> concurrent.futures.ThreadPoolExecutor:
