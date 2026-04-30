@@ -956,6 +956,7 @@ def wait(timeout: float | None = None) -> bool:
 
     Returns True if the loop thread is no longer alive (or never existed).
     Returns False if timeout expires with the loop thread still running.
+    Returns immediately with True when the loop thread is None.
     """
     with _lock:
         loop_thread = _loop_thread

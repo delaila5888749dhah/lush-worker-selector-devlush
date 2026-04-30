@@ -204,6 +204,7 @@ def main() -> None:
     if not started:
         return
     try:
+        # Block until runtime stops; main thread must stay alive for workers.
         runtime.wait()
     except KeyboardInterrupt:
         _log.info("KeyboardInterrupt received; stopping runtime...")
