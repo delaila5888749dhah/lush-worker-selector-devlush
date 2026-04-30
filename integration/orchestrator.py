@@ -745,8 +745,14 @@ def reconcile_unconfirmed(
     return stats
 
 
-def _shutdown_cdp_executor() -> None:
-    """Shutdown the shared CDP executor. Called on graceful shutdown or process exit.
+def _shutdown_cdp_executor(*, expected: bool = False) -> None:
+    """Shutdown the shared CDP executor.
+
+    Args:
+        expected: When True, called during normal process-exit/atexit shutdown
+            and should not emit Bug 8 forensic stack diagnostics. When False,
+            indicates an unexpected runtime shutdown and emits stack traces for
+            forensic tracing.
 
     Uses ``wait=False`` so this function returns immediately and never blocks
     on hung CDP calls. In-flight threads continue running until their CDP call
@@ -754,15 +760,18 @@ def _shutdown_cdp_executor() -> None:
     gives a best-estimate of how many threads may still be running at shutdown.
     """
     with _cdp_executor_lock:
-        # Bug 8: capture caller stack so premature shutdowns are traceable in
-        # production logs. If this fires before process exit, an unexpected
-        # caller is shutting down the executor prematurely.
-        _logger.error(
-            "_shutdown_cdp_executor called — capturing stack for Bug 8 forensics. "
-            "If this fires before process exit, a caller is shutting down the "
-            "executor prematurely.",
-            stack_info=True,
-        )
+        if expected:
+            _logger.info(
+                "CDP executor shutdown requested during expected process exit.",
+            )
+        else:
+            # Bug 8: capture caller stack so premature shutdowns are traceable
+            # in production logs.
+            _logger.error(
+                "_shutdown_cdp_executor called before expected process exit — "
+                "capturing stack for Bug 8 forensics.",
+                stack_info=True,
+            )
         with _cdp_metric_lock:
             _snap_active = _active_cdp_requests
         _snap_orphaned = _cdp_orphaned_threads  # protected by _cdp_executor_lock
@@ -774,7 +783,7 @@ def _shutdown_cdp_executor() -> None:
         _cdp_executor.shutdown(wait=False, cancel_futures=True)
         _logger.info("CDP executor shutdown issued.")
 
-atexit.register(_shutdown_cdp_executor)
+atexit.register(lambda: _shutdown_cdp_executor(expected=True))
 
 
 def _get_cdp_executor() -> concurrent.futures.ThreadPoolExecutor:

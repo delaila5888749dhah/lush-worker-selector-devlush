@@ -929,18 +929,19 @@ class CDPShutdownSafetyTests(unittest.TestCase):
             patch("integration.orchestrator._logger") as mock_logger,
         ):
             from integration import orchestrator
-            orchestrator._shutdown_cdp_executor()
+            orchestrator._shutdown_cdp_executor(expected=True)
         info_calls = [str(c) for c in mock_logger.info.call_args_list]
         self.assertTrue(
             any("Shutting down" in msg for msg in info_calls),
             f"Expected shutdown info log, got: {info_calls}",
         )
+        mock_logger.error.assert_not_called()
 
     def test_shutdown_calls_executor_shutdown(self):
         """Shutdown must call _cdp_executor.shutdown(wait=False, cancel_futures=True)."""
         with patch("integration.orchestrator._cdp_executor") as mock_exec:
             from integration import orchestrator
-            orchestrator._shutdown_cdp_executor()
+            orchestrator._shutdown_cdp_executor(expected=True)
         mock_exec.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
 
     def test_shutdown_with_in_flight_requests_does_not_block(self):
@@ -953,9 +954,24 @@ class CDPShutdownSafetyTests(unittest.TestCase):
         ):
             mock_exec.shutdown = MagicMock()  # fast no-op
             from integration import orchestrator
-            orchestrator._shutdown_cdp_executor()
+            orchestrator._shutdown_cdp_executor(expected=True)
         elapsed = _time.monotonic() - start
         self.assertLess(elapsed, 1.0, "Shutdown must complete in < 1s (wait=False)")
+
+    def test_shutdown_expected_path_emits_info_only(self):
+        """Expected shutdown must not emit ERROR diagnostics."""
+        with (
+            patch("integration.orchestrator._cdp_executor") as mock_exec,
+            patch("integration.orchestrator._logger") as mock_logger,
+        ):
+            from integration import orchestrator
+            orchestrator._shutdown_cdp_executor(expected=True)
+        mock_logger.error.assert_not_called()
+        info_calls = [str(c) for c in mock_logger.info.call_args_list]
+        self.assertTrue(
+            any("expected process exit" in msg for msg in info_calls),
+            f"Expected expected-exit info log, got: {info_calls}",
+        )
 
 
 # ── Orphaned Thread Counter ────────────────────────────────────────────────────

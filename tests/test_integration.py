@@ -898,7 +898,6 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
     def test_submit_after_shutdown_raises_session_flagged_error(self):
         """Submitting after executor shutdown raises SessionFlaggedError."""
         import concurrent.futures
-        from integration import orchestrator
         dead_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         dead_executor.shutdown(wait=True)
         with patch("integration.orchestrator._cdp_executor", dead_executor), \
@@ -1011,9 +1010,9 @@ class CdpCallWithTimeoutTests(unittest.TestCase):
         from integration import orchestrator
         with patch.object(orchestrator, "_cdp_executor"), \
              self.assertLogs("integration.orchestrator", level="ERROR") as cm:
-            orchestrator._shutdown_cdp_executor()
+            orchestrator._shutdown_cdp_executor(expected=False)
         self.assertTrue(
-            any("_shutdown_cdp_executor called" in m and "Stack" in m for m in cm.output),
+            any("before expected process exit" in m and "Stack" in m for m in cm.output),
             f"Expected stack_info diagnostic log, got: {cm.output}",
         )
 
