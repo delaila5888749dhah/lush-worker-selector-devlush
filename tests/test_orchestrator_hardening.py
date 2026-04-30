@@ -969,7 +969,10 @@ class CDPShutdownSafetyTests(unittest.TestCase):
         mock_logger.error.assert_not_called()
         info_calls = [str(c) for c in mock_logger.info.call_args_list]
         self.assertTrue(
-            any("expected process exit" in msg for msg in info_calls),
+            any(
+                "CDP executor shutdown requested during expected process exit." in msg
+                for msg in info_calls
+            ),
             f"Expected expected-exit info log, got: {info_calls}",
         )
 
