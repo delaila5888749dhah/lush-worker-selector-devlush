@@ -2521,6 +2521,56 @@ class GivexDriver:
             return data if isinstance(data, dict) else {}
         except Exception: return {}  # noqa: E701  # pylint: disable=broad-except
 
+    def _cart_dom_audit(self) -> dict:
+        """PII-safe structural DOM audit run once on cart-state timeout.
+
+        Returns a dict of counts, booleans, lengths, and known-prefix id strings only.
+        Never returns innerText, outerHTML, form values, cookies, or storage values.
+        Wraps the single execute_script call in try/except so audit failure never breaks
+        the timeout error path.
+        """
+        try:
+            return self._driver.execute_script(
+                "const v=(e)=>{"
+                "if(!e)return false;"
+                "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
+                "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';"
+                "};"
+                "const atcEl=document.querySelector('#cws_btn_gcBuyAdd');"
+                "const rcEl=document.querySelector('#cws_btn_gcBuyCheckout');"
+                "const cwsIds=Array.from(document.querySelectorAll('[id^=\"cws_\"]'));"
+                "const safeCwsId=(id)=>/^cws_/i.test(id||'')&&!/(cc(num|cvv|exp|name)|password|ssn)/i.test(id||'');"
+                "const cartContainers=document.querySelectorAll('[id*=\"cart\" i],[class*=\"cart\" i]');"
+                "return {"
+                "current_url_path:location.pathname,"
+                "body_html_len:document.body.innerHTML.length,"
+                "cws_id_count:document.querySelectorAll('[id^=\"cws_\"]').length,"
+                "cws_class_count:document.querySelectorAll('[class*=\"cws_\"]').length,"
+                "add_to_cart_present:!!atcEl,"
+                "add_to_cart_state:{present:!!atcEl,enabled:!!atcEl&&!atcEl.disabled&&atcEl.getAttribute('aria-disabled')!=='true'&&getComputedStyle(atcEl).pointerEvents!=='none'&&v(atcEl),disabled:atcEl?Boolean(atcEl.disabled):null,visible:v(atcEl)},"
+                "review_checkout_present:!!rcEl,"
+                "review_checkout_state:{present:!!rcEl,enabled:!!rcEl&&!rcEl.disabled&&rcEl.getAttribute('aria-disabled')!=='true'&&getComputedStyle(rcEl).pointerEvents!=='none'&&v(rcEl),disabled:rcEl?Boolean(rcEl.disabled):null},"
+                "cart_container_count:cartContainers.length,"
+                "cart_container_visible_count:Array.from(cartContainers).filter(v).length,"
+                "alt_line_item_patterns:{"
+                "cws_underscored:document.querySelectorAll('[class*=\"cws_\"][class*=\"item\" i],[class*=\"cws_\"][class*=\"row\" i],[id*=\"cws_\"][id*=\"item\" i],[id*=\"cws_\"][id*=\"row\" i]').length,"
+                "table_rows_in_cart:document.querySelectorAll('[id*=\"cart\" i] tr,[class*=\"cart\" i] tr').length,"
+                "list_items_in_cart:document.querySelectorAll('[id*=\"cart\" i] li,[class*=\"cart\" i] li').length"
+                "},"
+                "alt_total_patterns:{"
+                "grand:document.querySelectorAll('[class*=\"grandTotal\" i],[id*=\"grandTotal\" i],[class*=\"grand_total\" i],[id*=\"grand_total\" i]').length,"
+                "sub:document.querySelectorAll('[class*=\"subtotal\" i],[id*=\"subtotal\" i],[class*=\"sub_total\" i],[id*=\"sub_total\" i]').length,"
+                "order:document.querySelectorAll('[class*=\"orderTotal\" i],[id*=\"orderTotal\" i],[class*=\"order_total\" i],[id*=\"order_total\" i]').length,"
+                "cws:document.querySelectorAll('[id^=\"cws_\"][id*=\"otal\" i],[class*=\"cws_\"][class*=\"otal\" i]').length"
+                "},"
+                "sample_cws_ids:cwsIds.map(e=>e.id||'').filter(safeCwsId).slice(0,30),"
+                "alert_count:document.querySelectorAll('[role=\"alert\"]').length,"
+                "alert_visible_count:Array.from(document.querySelectorAll('[role=\"alert\"]')).filter(v).length"
+                "};"
+            )
+        except Exception:  # pylint: disable=broad-except
+            return {"audit_failed": True}
+
     def _wait_for_cart_state_after_atc(self, baseline: dict, timeout: float) -> tuple[bool, dict]:
         """Poll for delta-based cart/total materialization after Add-to-Cart."""
         start = time.monotonic()
@@ -2580,6 +2630,15 @@ class GivexDriver:
             self._cart_log_snapshot(last_snapshot),
             self._snapshot_int(last_snapshot, "cart_like_visible_count") - baseline_cart_visible,
         )
+        try:
+            audit = self._cart_dom_audit()
+        except Exception:  # pylint: disable=broad-except
+            audit = {"audit_failed": True}
+        if isinstance(audit, dict):
+            audit["cart_state_snapshot_keys_present"] = (
+                sorted(last_snapshot.keys()) if isinstance(last_snapshot, dict) else []
+            )
+        _log.error("add_to_cart_and_checkout: cart_state timeout dom_audit=%s", audit)
         return False, last_snapshot
 
     def _human_scroll_to(self, selector: str, *, max_steps: int = 12) -> None:
