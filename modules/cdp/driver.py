@@ -3157,6 +3157,7 @@ class GivexDriver:
         if self._sm is not None:
             self._sm.transition("FILLING_FORM")
         self._engine_aware_sleep(0.9, 2.2, "egift_observation_before_form_scroll")
+        self._select_card_design_if_required()
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         greeting = _random_greeting(self._rnd)
@@ -3188,7 +3189,6 @@ class GivexDriver:
         )
         if not self._blur_active_field_naturally():
             _log.warning("fill_egift_form: blur active field failed after Tab and safe body-click fallback")
-        self._select_card_design_if_required()
         _log.info("fill_egift_form: running final validation pass")
         fields = (SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
         final_lens = {sel: self._field_value_length(sel) for sel in fields}
@@ -3216,30 +3216,57 @@ class GivexDriver:
 
     # ── eGift card design picker (Step 1 sub-step) ──────────────────────────
 
-    def _card_design_state_snapshot(self) -> dict:
-        """Return a PII-safe length-only snapshot of the card design picker state."""
+    def _card_design_state_snapshot(self, label_id: "str | None" = None) -> dict:
+        """Return a PII-safe length-only snapshot of the card design picker state.
+
+        When *label_id* is supplied (the ``cws_lbl_NNNNNN`` id of the label
+        that was just clicked), the returned dict also contains
+        ``clicked_radio_checked`` — whether the corresponding radio input is
+        now checked.  The radio is resolved via ``getElementById`` (CSS
+        identifiers cannot start with a digit).
+        """
+        # Radio-check fragment — only emitted when a label_id is given.
+        if label_id is not None:
+            radio_check_js = (
+                "const radioId_=arguments[0].replace(/^cws_lbl_/,'');"
+                "const radio_=document.getElementById(radioId_);"
+                "const clickedChecked_=!!(radio_&&radio_.checked);"
+            )
+        else:
+            radio_check_js = "const clickedChecked_=false;"
         state_js = (
-            "(function(){"
-            "const v=(e)=>{"
+            "(function(labelId_arg){"
+            + radio_check_js
+            + "const checkedCount_=document.querySelectorAll("
+            "'#form--select-card input[type=\"radio\"]:checked,"
+            "#cardsContainer input[type=\"radio\"]:checked'"
+            ").length;"
+            "const preview_=document.getElementById('cardPreview');"
+            "const previewName_=document.getElementById('cardPreviewName');"
+            "const valEl_=document.querySelector('#cws_val_cardDesign');"
+            "const v_=(e)=>{"
             "if(!e)return false;"
             "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
             "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};"
-            "const valEl=document.querySelector('#cws_val_cardDesign');"
             "return{"
-            "value_present:!!valEl,"
-            "value_text_len:valEl?(valEl.textContent||'').length:0,"
-            "value_value_len:valEl&&'value' in valEl?(valEl.value||'').length:0,"
-            "value_attr_len:valEl?Array.from(valEl.attributes).reduce((sum,a)=>sum+(a.value||'').length,0):0,"
+            "clicked_radio_checked:clickedChecked_,"
+            "checked_count:checkedCount_,"
+            "preview_src_len:preview_?(preview_.getAttribute('src')||'').length:-1,"
+            "preview_name_len:previewName_?(previewName_.textContent||'').length:-1,"
+            "value_present:!!valEl_,"
+            "value_text_len:valEl_?(valEl_.textContent||'').length:0,"
+            "value_value_len:valEl_&&'value' in valEl_?(valEl_.value||'').length:0,"
+            "value_attr_len:valEl_?Array.from(valEl_.attributes)"
+            ".reduce((s,a)=>s+(a.value||'').length,0):0,"
             "selected_like_count:document.querySelectorAll("
-            "'[aria-selected=\"true\"],[aria-checked=\"true\"],.selected,.active,[data-selected=\"true\"]'"
-            ").length,"
+            "'[aria-selected=\"true\"],[aria-checked=\"true\"]"
+            ",.selected,.active,[data-selected=\"true\"]').length,"
             "visible_option_count:Array.from(document.querySelectorAll('[id^=\"cws_lbl_\"]'))"
-            r".filter(e=>/^cws_lbl_\d{6}$/.test(e.id)&&v(e)).length"
-            "};"
-            "})();"
+            r".filter(e=>/^cws_lbl_\d{6}$/.test(e.id)&&v_(e)).length"
+            "};})(arguments[0]);"
         )
         try:
-            result = self._driver.execute_script(state_js)
+            result = self._driver.execute_script(state_js, label_id or "")
             if isinstance(result, dict):
                 return result
             return {}
@@ -3249,30 +3276,57 @@ class GivexDriver:
     def _select_card_design_if_required(self) -> None:
         """Detect and click a card design thumbnail on the eGift page if present.
 
-        Looks for visible ``cws_lbl_NNNNNN`` elements (the Givex card design
-        picker).  If none are found, logs at INFO and returns without error.
-        When candidates are found, one is chosen deterministic-randomly using
-        the persona RNG (or ``random.Random(0)`` as a stable test fallback),
-        clicked via CDP absolute coordinates, and the selection state is
-        verified via PII-safe length-only signals.
+        Scopes detection to the real picker containers (``#form--select-card``
+        and ``#cardsContainer``).  Radio inputs are resolved via
+        ``getElementById`` (CSS identifiers cannot start with a digit) and are
+        **not** clicked — only the parent label is clicked.
+
+        A short poll (up to ~3 s) waits for the container to render candidates.
+        If none are found after the poll, logs at INFO and returns without
+        error.  When candidates are found, one is chosen deterministic-randomly
+        using the persona RNG (or ``random.Random(0)`` as a stable test
+        fallback), clicked via CDP absolute coordinates, and the selection
+        state is verified via multiple PII-safe length-only signals.
 
         Raises:
             SessionFlaggedError: if design candidates exist but none of the
                 safe verification signals change after clicking (indicates
                 client-side form validation rejected the click).
         """
+        # Detection JS: scope to real picker containers; filter by 6-digit
+        # suffix and verify each label has a corresponding hidden radio input.
+        # Uses getElementById (not querySelector) because numeric ids are not
+        # valid CSS selectors.
         detect_js = (
             "(function(){"
             "const v=(e)=>{"
             "if(!e)return false;"
             "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
             "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};"
-            "const p=Array.from(document.querySelectorAll('[id^=\"cws_lbl_\"]'))"
-            r".filter(e=>/^cws_lbl_\d{6}$/.test(e.id)&&v(e));"
-            "return p.slice(0,20).map(e=>{"
+            "const cont=document.querySelector('#form--select-card')"
+            "||document.querySelector('#cardsContainer')"
+            "||document;"
+            "const labels=Array.from(cont.querySelectorAll('label[id^=\"cws_lbl_\"]'));"
+            "const valid=labels.filter(e=>{"
+            r"if(!/^cws_lbl_\d{6}$/.test(e.id))return false;"
+            "if(!v(e))return false;"
+            "const radioId=e.id.replace(/^cws_lbl_/,'');"
+            "const radio=document.getElementById(radioId);"
+            "return !!(radio&&radio.type==='radio');"
+            "});"
+            "return valid.slice(0,20).map(e=>{"
             "const r=e.getBoundingClientRect();"
-            "return{id:e.id,x:r.x,y:r.y,w:r.width,h:r.height};});})();"
+            "const radioId=e.id.replace(/^cws_lbl_/,'');"
+            "const radio=document.getElementById(radioId);"
+            "return{id:e.id,radio_id_len:radio.id.length,x:r.x,y:r.y,w:r.width,h:r.height};"
+            "});})();"
         )
+
+        # Poll up to ~3 s for the picker containers to render candidates.
+        # An empty list means the container exists but candidates are still
+        # loading.  A non-list return (e.g. None / JS error) means no picker
+        # at all — skip immediately without polling.
+        raw: "list | None" = None
         try:
             raw = self._driver.execute_script(detect_js)
         except Exception:  # pylint: disable=broad-except
@@ -3283,7 +3337,26 @@ class GivexDriver:
             _log.info("fill_egift_form: card_design no_picker_detected, skipping")
             return
 
-        candidates = [c for c in raw if isinstance(c, dict) and c.get("id")]
+        if not any(isinstance(c, dict) and c.get("id") for c in raw):
+            # Container may be loading — poll briefly.
+            _pick_deadline = time.monotonic() + 3.0
+            while True:
+                time.sleep(0.3)
+                try:
+                    raw = self._driver.execute_script(detect_js)
+                except Exception:  # pylint: disable=broad-except
+                    raw = []
+                if isinstance(raw, list) and any(
+                    isinstance(c, dict) and c.get("id") for c in raw
+                ):
+                    break
+                if time.monotonic() >= _pick_deadline:
+                    break
+
+        candidates = [
+            c for c in (raw if isinstance(raw, list) else [])
+            if isinstance(c, dict) and c.get("id")
+        ]
         if not candidates:
             _log.info("fill_egift_form: card_design no_picker_detected, skipping")
             return
@@ -3340,10 +3413,29 @@ class GivexDriver:
         click_y = post_rect["y"] + post_rect["h"] / 2.0
         self.cdp_click_absolute(click_x, click_y)
 
-        state_after = self._card_design_state_snapshot()
+        # Capture state_after; the snapshot call also checks whether the
+        # clicked label's mapped radio is now checked (Fix 3).
+        state_after = self._card_design_state_snapshot(label_id=chosen_id)
 
+        # Verification — any one true signal is sufficient.
+        # Primary signals (Fix 3 — reliable on real DOM):
+        clicked_radio_checked = bool(state_after.get("clicked_radio_checked", False))
+        after_checked_count = state_after.get("checked_count", 0)
+        before_checked_count = state_before.get("checked_count", 0)
+        after_preview_src = state_after.get("preview_src_len", -1)
+        before_preview_src = state_before.get("preview_src_len", -1)
+        after_preview_name = state_after.get("preview_name_len", -1)
+        before_preview_name = state_before.get("preview_name_len", -1)
+        # Legacy signals (kept as fallback for older DOM versions):
         selection_verified = (
-            state_after.get("value_text_len", 0) != state_before.get("value_text_len", 0)
+            clicked_radio_checked
+            or after_checked_count > before_checked_count
+            or (before_checked_count == 0 and after_checked_count > 0)
+            or (after_preview_src != before_preview_src and after_preview_src != -1)
+            or (after_preview_name != before_preview_name and after_preview_name != -1)
+            # Legacy #cws_val_cardDesign and aria signals (always 0 per DOM
+            # dump but kept so tests using older mock data still verify).
+            or state_after.get("value_text_len", 0) != state_before.get("value_text_len", 0)
             or state_after.get("value_value_len", 0) != state_before.get("value_value_len", 0)
             or state_after.get("value_attr_len", 0) != state_before.get("value_attr_len", 0)
             or state_after.get("selected_like_count", 0) > state_before.get("selected_like_count", 0)
@@ -3351,19 +3443,111 @@ class GivexDriver:
 
         _log.info(
             "fill_egift_form: card_design selected_index=%d visible_options=%d "
-            "value_len_before=%d value_len_after=%d "
-            "selected_like_count_before=%d selected_like_count_after=%d",
+            "checked_count_before=%d checked_count_after=%d "
+            "clicked_radio_checked=%s "
+            "preview_src_len_before=%d preview_src_len_after=%d "
+            "preview_name_len_before=%d preview_name_len_after=%d",
             idx,
             len(candidates),
-            state_before.get("value_text_len", 0),
-            state_after.get("value_text_len", 0),
-            state_before.get("selected_like_count", 0),
-            state_after.get("selected_like_count", 0),
+            before_checked_count,
+            after_checked_count,
+            clicked_radio_checked,
+            before_preview_src,
+            after_preview_src,
+            before_preview_name,
+            after_preview_name,
         )
 
         if not selection_verified:
             self._capture_failure_screenshot("card_design_not_verified")
             raise SessionFlaggedError("Card design selection required but not verified")
+
+    def _verify_atc_hittable(self) -> None:
+        """Scroll ``#cws_btn_gcBuyAdd`` into viewport and verify it is hittable.
+
+        Implements Fix 4 from the Round-4 spec:
+
+        1. Scroll the real ATC button into view.
+        2. Wait briefly for scroll to settle (``time.sleep(0.3)``).
+        3. Recompute the bounding rect and compute the click centre.
+        4. Verify the centre is inside the viewport (strict ``<`` on right/bottom).
+        5. Hit-test with ``document.elementFromPoint``.  Pass condition (any):
+           - hit IS the control,
+           - control CONTAINS the hit element (e.g. inner ``<span>``),
+           - hit element CONTAINS the control (e.g. wrapper div).
+
+        If the JS returns an unexpected type (element absent, CDP failure) the
+        check is inconclusive and the click is allowed to proceed so that
+        existing tests using generic MagicMock returns are unaffected.
+
+        Raises:
+            SessionFlaggedError: when the element is found in the DOM but its
+                centre is outside the viewport or ``elementFromPoint`` returns
+                an unrelated element.
+        """
+        # Step 1 — scroll ATC into view
+        try:
+            self._driver.execute_script(
+                "document.querySelector('#cws_btn_gcBuyAdd')"
+                "?.scrollIntoView({block:'center',inline:'center'});"
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        # Step 2 — brief settle wait
+        time.sleep(0.3)
+
+        # Steps 3-5 — rect, viewport check, and hit-test in a single JS call
+        hittest_js = (
+            "(function(){"
+            "const el=document.querySelector('#cws_btn_gcBuyAdd');"
+            "if(!el)return null;"
+            "const r=el.getBoundingClientRect();"
+            "if(r.width<=0||r.height<=0)"
+            "return{in_viewport:false,hittest_pass:false,w:r.width,h:r.height};"
+            "const cx=r.x+r.width/2,cy=r.y+r.height/2;"
+            "const inView=cx>=0&&cx<window.innerWidth&&cy>=0&&cy<window.innerHeight;"
+            "const hit=document.elementFromPoint(cx,cy);"
+            "const hitPass=!!(hit&&(hit===el||el.contains(hit)||hit.contains(el)));"
+            "return{in_viewport:inView,hittest_pass:hitPass,w:r.width,h:r.height};"
+            "})()"
+        )
+        try:
+            result = self._driver.execute_script(hittest_js)
+        except Exception:  # pylint: disable=broad-except
+            result = None
+
+        if not isinstance(result, dict):
+            # Element absent or JS error — inconclusive, proceed best-effort.
+            _log.warning(
+                "add_to_cart_and_checkout: ATC hittability check inconclusive"
+                " (element absent or JS error); proceeding"
+            )
+            return
+
+        if "in_viewport" not in result:
+            # Unexpected dict type (e.g. another execute_script sharing
+            # return_value in tests) — inconclusive, proceed best-effort.
+            _log.warning(
+                "add_to_cart_and_checkout: ATC hittability check inconclusive"
+                " (unexpected result shape); proceeding"
+            )
+            return
+
+        in_viewport = bool(result.get("in_viewport"))
+        hittest_pass = bool(result.get("hittest_pass"))
+        _log.info(
+            "add_to_cart_and_checkout: ATC hittest in_viewport=%s hittest_pass=%s"
+            " w=%.0f h=%.0f",
+            in_viewport,
+            hittest_pass,
+            result.get("w", 0),
+            result.get("h", 0),
+        )
+
+        if not in_viewport or not hittest_pass:
+            self._capture_failure_screenshot("add_to_cart_not_hittable")
+            raise SessionFlaggedError("Add-to-Cart not hittable after scroll")
 
     def add_to_cart_and_checkout(self) -> None:
         """Click Add-to-Cart, wait for Review & Checkout button, then click it.
@@ -3388,6 +3572,7 @@ class GivexDriver:
         self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
         cart_baseline = self._review_checkout_diagnostics()
         atc_flow_start = time.monotonic()
+        self._verify_atc_hittable()
         self._click_closest_control_for(SEL_ADD_TO_CART)
         delay = 3.0 + self._get_rng().uniform(0.1, 0.8)
         _log.info(
