@@ -2507,23 +2507,19 @@ class GivexDriver:
 
     @staticmethod
     def _snapshot_int(snapshot: dict, key: str) -> int:
-        try:
-            return int(snapshot.get(key, 0) or 0)
-        except (TypeError, ValueError):
-            return 0
+        try: return int(snapshot.get(key, 0) or 0)  # noqa: E701
+        except (TypeError, ValueError): return 0  # noqa: E701
 
     @staticmethod
     def _cart_log_snapshot(snapshot: dict) -> dict:
-        if not isinstance(snapshot, dict):
-            return {}
-        safe_keys = (
-            "cookie_count", "localStorage_length", "sessionStorage_length",
-            "cart_like_count", "cart_like_visible_count",
-            "explicit_cart_line_item_count", "explicit_cart_line_item_visible_count",
-            "error_like_count", "error_like_visible_count",
-            "total_like_present", "total_like_text_len",
-        )
-        return {key: snapshot.get(key) for key in safe_keys if key in snapshot}
+        keys = ("cookie_count", "localStorage_length", "sessionStorage_length", "cart_like_count", "cart_like_visible_count", "explicit_cart_line_item_count", "explicit_cart_line_item_visible_count", "error_like_count", "error_like_visible_count", "total_like_present", "total_like_text_len")
+        return {key: snapshot.get(key) for key in keys if isinstance(snapshot, dict) and key in snapshot}
+
+    def _cart_state_snapshot(self) -> dict:
+        try:
+            data = self._driver.execute_script("const v=(e)=>{if(!e)return false;const s=getComputedStyle(e),r=e.getBoundingClientRect();return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};const t=document.querySelector('[class*=\"total\"],[id*=\"total\"]');const l=document.querySelectorAll('[class*=\"cart-item\"],[class*=\"lineItem\"],[class*=\"product\"][class*=\"row\"]');const c=document.querySelectorAll('[class*=\"cart\"],[id*=\"cart\"]');const e=document.querySelectorAll('[class*=\"error\"],[role=\"alert\"]');const b=document.querySelector(arguments[0]);return {total_like_present:Boolean(t),total_like_text_len:t&&typeof t.innerText==='string'?t.innerText.length:0,explicit_cart_line_item_count:l.length,explicit_cart_line_item_visible_count:Array.from(l).filter(v).length,cart_like_visible_count:Array.from(c).filter(v).length,error_like_visible_count:Array.from(e).filter(v).length,review_checkout:{present:Boolean(b),enabled:!!b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true'&&v(b),disabled:b?Boolean(b.disabled):null}};", SEL_REVIEW_CHECKOUT)
+            return data if isinstance(data, dict) else {}
+        except Exception: return {}  # noqa: E701  # pylint: disable=broad-except
 
     def _wait_for_cart_state_after_atc(self, baseline: dict, timeout: float) -> tuple[bool, dict]:
         """Poll for delta-based cart/total materialization after Add-to-Cart."""
@@ -2539,22 +2535,13 @@ class GivexDriver:
         last_snapshot = baseline
 
         while time.monotonic() < deadline:
-            snapshot = self._review_checkout_diagnostics()
+            snapshot = self._cart_state_snapshot()
             if isinstance(snapshot, dict):
                 last_snapshot = snapshot
             total_like_present = bool(last_snapshot.get("total_like_present"))
-            line_count_delta = (
-                self._snapshot_int(last_snapshot, "explicit_cart_line_item_count")
-                - baseline_line_count
-            )
-            line_visible_delta = (
-                self._snapshot_int(last_snapshot, "explicit_cart_line_item_visible_count")
-                - baseline_line_visible
-            )
-            cart_visible_delta = (
-                self._snapshot_int(last_snapshot, "cart_like_visible_count")
-                - baseline_cart_visible
-            )
+            line_count_delta = self._snapshot_int(last_snapshot, "explicit_cart_line_item_count") - baseline_line_count
+            line_visible_delta = self._snapshot_int(last_snapshot, "explicit_cart_line_item_visible_count") - baseline_line_visible
+            cart_visible_delta = self._snapshot_int(last_snapshot, "cart_like_visible_count") - baseline_cart_visible
 
             signal = None
             if total_like_present and not baseline_total:
@@ -2568,10 +2555,7 @@ class GivexDriver:
 
             if signal:
                 if signal == "review_checkout_enabled_without_total" and baseline_review_disabled:
-                    _log.info(
-                        "add_to_cart_and_checkout: review_checkout disabled True→False t+%.1fs",
-                        time.monotonic() - start,
-                    )
+                    _log.info("add_to_cart_and_checkout: review_checkout disabled True→False t+%.1fs", time.monotonic() - start)
                 _log.info(
                     "add_to_cart_and_checkout: cart_state materialized t+%.1fs signal=%s "
                     "total_like_present=%s total_like_baseline=%s "
@@ -2721,6 +2705,8 @@ class GivexDriver:
             return
 
         if not isinstance(rects, dict) or not isinstance(rects.get("control"), dict):
+            if rects is None:
+                raise SelectorTimeoutError(span_selector, 0)
             if self._strict:
                 raise CDPClickError(f"closest-control rect missing for {span_selector}: {rects}")
             self.bounding_box_click(span_selector)
@@ -2753,6 +2739,7 @@ class GivexDriver:
         y = (top + height / 2.0) if y_low > y_high else rnd.uniform(y_low, y_high)
         # Minimal adaptation to live DOM — span used as locator, click resolved to
         # nearest control because diagnostic shows span 35×19 < control 313×37.
+        self._ghost_move_to(span_selector)
         self.cdp_click_absolute(float(x), float(y))
 
     def bounding_box_click(self, selector: str) -> None:
@@ -3189,13 +3176,13 @@ class GivexDriver:
             time.sleep(0.25)
         self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
         cart_baseline = self._review_checkout_diagnostics()
-        atc_clicked_start = time.monotonic()
+        atc_flow_start = time.monotonic()
         self._click_closest_control_for(SEL_ADD_TO_CART)
         delay = 3.0 + self._get_rng().uniform(0.1, 0.8)
         _log.info(
             "add_to_cart_and_checkout: ATC clicked t+%.1fs baseline=%s; "
             "waiting %.2fs per blueprint",
-            time.monotonic() - atc_clicked_start,
+            time.monotonic() - atc_flow_start,
             self._cart_log_snapshot(cart_baseline),
             delay,
         )
@@ -3204,15 +3191,17 @@ class GivexDriver:
             cart_timeout = float(os.environ.get("GIVEX_CART_STATE_POLL_S", str(_GIVEX_CART_STATE_POLL_DEFAULT_S)))
         except ValueError:
             cart_timeout = _GIVEX_CART_STATE_POLL_DEFAULT_S
+        cart_poll_start = time.monotonic()
         cart_materialized, _cart_snapshot = self._wait_for_cart_state_after_atc(
             cart_baseline,
             timeout=cart_timeout,
         )
+        cart_poll_elapsed = time.monotonic() - cart_poll_start
         if not cart_materialized:
             self._capture_failure_screenshot("cart_state_not_materialized")
             raise SelectorTimeoutError(
                 SEL_REVIEW_CHECKOUT,
-                int(delay + cart_timeout),
+                int(time.monotonic() - atc_flow_start),
                 reason="cart total not materialized",
             )
         _log.info("add_to_cart_and_checkout: settled, waiting Review-Checkout interactable")
@@ -3220,18 +3209,23 @@ class GivexDriver:
             interactable_timeout = float(os.environ.get("GIVEX_REVIEW_CHECKOUT_POLL_S", str(_GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S)))
         except ValueError:
             interactable_timeout = _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S
+        review_poll_start = time.monotonic()
         found, present = self._wait_for_review_checkout_enabled(timeout=interactable_timeout)
+        review_poll_elapsed = time.monotonic() - review_poll_start
         if not found:
             flavor = "present but disabled" if present else "not found"
+            total_elapsed = time.monotonic() - atc_flow_start
             _log.error(
-                "add_to_cart_and_checkout: Review-Checkout %s after %.2fs blueprint wait + %.0fs poll",
+                "add_to_cart_and_checkout: Review-Checkout %s blueprint_wait=%.2fs cart_poll_elapsed=%.2fs review_poll=%.2fs total_elapsed=%.2fs",
                 flavor,
                 delay,
-                interactable_timeout,
+                cart_poll_elapsed,
+                review_poll_elapsed,
+                total_elapsed,
             )
             self._log_review_checkout_diagnostics()
             self._capture_failure_screenshot("review_checkout_not_interactable")
-            timeout = int(delay + interactable_timeout)
+            timeout = int(total_elapsed)
             if present:
                 raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout, reason="present but disabled")
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout, reason="review checkout absent")
