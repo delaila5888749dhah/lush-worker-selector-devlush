@@ -1927,7 +1927,7 @@ class GivexDriver:
                 try:
                     if self._is_interactable(elem):
                         return True
-                except Exception as exc:  # pylint: disable=broad-except
+                except (StaleElementReferenceException, NoSuchElementException, WebDriverException) as exc:
                     _log.debug(
                         "_wait_for_interactable: ignored transient interactability error for %s: %s",
                         _selector_name(selector),
@@ -2130,8 +2130,8 @@ class GivexDriver:
         selector_name = _selector_name(sel)
         expected_len = len(str(val))
         # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
-        # add the selector + symbolic name to _SELECTOR_NAMES above. Fields not in the
-        # registry are typed without focus/verify (legacy behavior preserved).
+        # add its selector + symbolic name to the module-level _SELECTOR_NAMES registry
+        # near the selector constants. Unregistered fields keep legacy no-verify typing.
         verify_value = sel in _SELECTOR_NAMES
         if verify_value:
             self._human_scroll_to(sel)
