@@ -3269,7 +3269,6 @@ class GivexDriver:
             "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
             "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};"
             "const cont=document.querySelector('#form--select-card')||document.querySelector('#cardsContainer');"
-            "// null skips polling; [] means container exists but labels are still rendering."
             "if(!cont)return null;"
             "const labels=Array.from(cont.querySelectorAll('label[id^=\"cws_lbl_\"]'));"
             "const valid=labels.filter(e=>{"
@@ -3288,8 +3287,11 @@ class GivexDriver:
         raw: list | None = None
         try:
             raw = self._driver.execute_script(detect_js)
-        except Exception:  # pylint: disable=broad-except
-            _log.info("fill_egift_form: card_design detect_error, skipping")
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.info(
+                "fill_egift_form: card_design detect_error reason=%s, skipping",
+                _sanitize_error(str(exc)),
+            )
             return
 
         if not isinstance(raw, list):
@@ -3473,6 +3475,66 @@ class GivexDriver:
             self._capture_failure_screenshot("add_to_cart_not_hittable")
             raise SessionFlaggedError("Add-to-Cart not hittable after scroll")
 
+    def _verify_begin_checkout_hittable(self) -> None:
+        """Scroll Begin Checkout into view and verify center hit-test before clicking."""
+        try:
+            self._driver.execute_script(
+                "document.querySelector('#cws_btn_cartCheckout')"
+                "?.scrollIntoView({block:'center',inline:'center'});"
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        time.sleep(0.3)
+
+        hittest_js = (
+            "(function(){"
+            "const el=document.querySelector('#cws_btn_cartCheckout');"
+            "if(!el)return null;"
+            "const r=el.getBoundingClientRect();"
+            "if(r.width<=0||r.height<=0)"
+            "return{in_viewport:false,hittest_pass:false,w:r.width,h:r.height};"
+            "const cx=r.x+r.width/2,cy=r.y+r.height/2;"
+            "const inView=cx>=0&&cx<window.innerWidth&&cy>=0&&cy<window.innerHeight;"
+            "const hit=document.elementFromPoint(cx,cy);"
+            "const hitPass=!!(hit&&(hit===el||el.contains(hit)||hit.contains(el)));"
+            "return{in_viewport:inView,hittest_pass:hitPass,w:r.width,h:r.height};"
+            "})()"
+        )
+        try:
+            result = self._driver.execute_script(hittest_js)
+        except Exception:  # pylint: disable=broad-except
+            result = None
+
+        if not isinstance(result, dict):
+            _log.warning(
+                "select_guest_checkout: Begin Checkout hittability check inconclusive"
+                " (element absent or JS error); proceeding"
+            )
+            return
+
+        if "in_viewport" not in result:
+            _log.warning(
+                "select_guest_checkout: Begin Checkout hittability check inconclusive"
+                " (unexpected result shape); proceeding"
+            )
+            return
+
+        in_viewport = bool(result.get("in_viewport"))
+        hittest_pass = bool(result.get("hittest_pass"))
+        _log.info(
+            "select_guest_checkout: Begin Checkout hittest in_viewport=%s hittest_pass=%s"
+            " w=%.0f h=%.0f",
+            in_viewport,
+            hittest_pass,
+            result.get("w", 0),
+            result.get("h", 0),
+        )
+
+        if not in_viewport or not hittest_pass:
+            self._capture_failure_screenshot("begin_checkout_not_hittable")
+            raise SessionFlaggedError("Begin Checkout not hittable after scroll")
+
     def add_to_cart_and_checkout(self) -> None:
         """Click Add-to-Cart, wait for Review & Checkout button, then click it.
 
@@ -3558,14 +3620,52 @@ class GivexDriver:
 
     # ── Cart & Guest Checkout (Step 2) ───────────────────────────────────────
 
+    def _is_selector_present_visible(self, selector: str) -> bool:
+        try:
+            result = self._driver.execute_script(
+                "const el=document.querySelector(arguments[0]);"
+                "if(!el)return false;"
+                "const s=getComputedStyle(el),r=el.getBoundingClientRect();"
+                "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';",
+                selector,
+            )
+            return result is True
+        except Exception:  # pylint: disable=broad-except
+            return False
+
+    def _wait_for_checkout_or_guest_inline(self, timeout: int = 15) -> str:
+        deadline = time.monotonic() + timeout
+        last_url = ""
+        while time.monotonic() < deadline:
+            current = ""
+            try:
+                current = self._driver.current_url or ""
+            except Exception:  # URL briefly unavailable during page transition
+                _log.debug("Checkout/guest inline wait deferred: URL unavailable")
+            if current:
+                last_url = current
+            if URL_CHECKOUT in current:
+                return "url"
+            if self._is_selector_present_visible(SEL_GUEST_HEADING):
+                return "guest_heading"
+            if self._is_selector_present_visible(SEL_GUEST_EMAIL):
+                return "guest_email"
+            time.sleep(0.5)
+        self._capture_failure_screenshot("url_checkout_not_reached")
+        raise PageStateError(
+            "checkout_or_guest_wait expected="
+            f"{_short_url(URL_CHECKOUT)} last_seen={_sanitize_url_for_log(last_url)}"
+        )
+
     def select_guest_checkout(self, guest_email: str) -> None:
         """Click Begin Checkout, expand guest heading, enter email, and continue.
 
         Steps:
         1. Wait for and click Begin Checkout on the cart page.
-        2. Wait for the checkout page (``URL_CHECKOUT``).
-        3. Click the guest heading (``#guestHeading``) to expand the
-           guest checkout section.
+        2. Wait for the checkout page (``URL_CHECKOUT``) or inline guest
+           checkout controls on the cart page.
+        3. Click the guest heading (``#guestHeading``) if the guest email
+           field is not already visible.
         4. Enter *guest_email* and click Continue.
         5. Wait for the payment page (``URL_PAYMENT``).
 
@@ -3581,17 +3681,26 @@ class GivexDriver:
         if not found:
             raise SelectorTimeoutError(SEL_BEGIN_CHECKOUT, 10)
         _log.info("select_guest_checkout: Begin-Checkout visible")
+        self._verify_begin_checkout_hittable()
         self.bounding_box_click(SEL_BEGIN_CHECKOUT)
         _log.info("select_guest_checkout: Begin-Checkout clicked")
-        self._wait_for_url_or_capture(URL_CHECKOUT, "url_checkout_not_reached")
-        _log.info("select_guest_checkout: URL_CHECKOUT reached")
+        signal = self._wait_for_checkout_or_guest_inline(timeout=15)
+        if signal == "url":
+            _log.info("select_guest_checkout: URL_CHECKOUT reached")
+        else:
+            _log.info(
+                "select_guest_checkout: guest checkout inline visible on cart page signal=%s",
+                signal,
+            )
 
-        # Expand the guest checkout section
-        found = self._wait_for_element(SEL_GUEST_HEADING, timeout=10)
-        if not found:
-            raise SelectorTimeoutError(SEL_GUEST_HEADING, 10)
-        self.bounding_box_click(SEL_GUEST_HEADING)
-        _log.info("select_guest_checkout: Guest heading expanded")
+        if not self._is_selector_present_visible(SEL_GUEST_EMAIL):
+            found = self._wait_for_element(SEL_GUEST_HEADING, timeout=10)
+            if not found:
+                raise SelectorTimeoutError(SEL_GUEST_HEADING, 10)
+            self.bounding_box_click(SEL_GUEST_HEADING)
+            _log.info("select_guest_checkout: Guest heading expanded")
+        else:
+            _log.info("select_guest_checkout: Guest email already visible; skipping heading click")
 
         found = self._wait_for_element(SEL_GUEST_EMAIL, timeout=10)
         if not found:
