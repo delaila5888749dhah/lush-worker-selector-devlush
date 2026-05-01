@@ -75,9 +75,11 @@ try:
     from modules.delay.state import BehaviorStateMachine as _BehaviorStateMachine  # type: ignore
     from modules.delay.state import get_current_sm as _get_current_sm  # type: ignore
     from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
+    from modules.delay.config import MAX_STEP_DELAY as _MAX_STEP_DELAY  # type: ignore
 except ImportError:
     _BiometricProfile = _TemporalModel = None
     _BehaviorStateMachine = _DelayEngine = None
+    _MAX_STEP_DELAY = 7.0
     _get_current_sm = None  # type: ignore[assignment]
 
 _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
@@ -1865,7 +1867,7 @@ class GivexDriver:
     def _engine_aware_sleep(self, low: float, high: float, reason: str) -> float:
         rnd = self._get_rng()
         low, high = (high, low) if high < low else (low, high)
-        requested = max(0.0, min(float(rnd.uniform(low, high)), 7.0))
+        requested = max(0.0, min(float(rnd.uniform(low, high)), float(_MAX_STEP_DELAY)))
         if self._engine is not None:
             if not self._engine.is_delay_permitted():
                 requested = 0.0
@@ -1973,7 +1975,7 @@ class GivexDriver:
             return None
 
     def _form_validation_diagnostics(self) -> dict:
-        js = 'const known=new Map([[arguments[0],"SEL_GREETING_MSG"],[arguments[1],"SEL_AMOUNT_INPUT"],[arguments[2],"SEL_RECIPIENT_NAME"],[arguments[3],"SEL_RECIPIENT_EMAIL"],[arguments[4],"SEL_CONFIRM_RECIPIENT_EMAIL"],[arguments[5],"SEL_SENDER_NAME"]]);const sym=(el)=>{for(const [sel,name] of known.entries()){try{if(el.matches(sel))return name;}catch(e){}}return null;};const desc=(el)=>{const v=el.validity||{},value=typeof el.value==="string"?el.value:"",msg=typeof el.validationMessage==="string"?el.validationMessage:"";return {selector_name:sym(el),tag:(el.tagName||"").toLowerCase(),type:el.getAttribute("type")||"",id_len:(el.id||"").length,name_len:(el.getAttribute("name")||"").length,value_len:value.length,validity:{valid:Boolean(v.valid),valueMissing:Boolean(v.valueMissing),typeMismatch:Boolean(v.typeMismatch),patternMismatch:Boolean(v.patternMismatch),rangeUnderflow:Boolean(v.rangeUnderflow),rangeOverflow:Boolean(v.rangeOverflow),tooShort:Boolean(v.tooShort),tooLong:Boolean(v.tooLong),customError:Boolean(v.customError)},validationMessage_len:msg.length};};return {forms:Array.from(document.forms||[]).map((form)=>({checkValidity:(()=>{try{return Boolean(form.checkValidity())}catch(e){return false}})(),elements:Array.from(form.elements||[]).map(desc)}))};'
+        js = 'const known=new Map([[arguments[0],"SEL_GREETING_MSG"],[arguments[1],"SEL_AMOUNT_INPUT"],[arguments[2],"SEL_RECIPIENT_NAME"],[arguments[3],"SEL_RECIPIENT_EMAIL"],[arguments[4],"SEL_CONFIRM_RECIPIENT_EMAIL"],[arguments[5],"SEL_SENDER_NAME"]]);const sym=(el)=>{for(const [sel,name] of known.entries()){try{if(el.matches(sel))return name;}catch(e){}}return null;};const desc=(el)=>{const v=el.validity||{},value=typeof el.value==="string"?el.value:"",msg=typeof el.validationMessage==="string"?el.validationMessage:"";return {selector_name:sym(el),tag:(el.tagName||"").toLowerCase(),type:el.getAttribute("type")||"",id_len:(el.id||"").length,name_len:(el.getAttribute("name")||"").length,value_len:value.length,validity:{valid:Boolean(v.valid),valueMissing:Boolean(v.valueMissing),typeMismatch:Boolean(v.typeMismatch),patternMismatch:Boolean(v.patternMismatch),rangeUnderflow:Boolean(v.rangeUnderflow),rangeOverflow:Boolean(v.rangeOverflow),tooShort:Boolean(v.tooShort),tooLong:Boolean(v.tooLong),customError:Boolean(v.customError)},validationMessage_len:msg.length};};return {forms:Array.from(document.forms||[]).map((form)=>({checkValidity:(()=>{try{return Boolean(form.checkValidity())}catch(e){return false}})(),elements_length:(form.elements||[]).length,elements:Array.from(form.elements||[]).map(desc)}))};'
         try:
             data = self._driver.execute_script(js, SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
             return data if isinstance(data, dict) else {"forms": []}
@@ -2060,8 +2062,8 @@ class GivexDriver:
                     cart_like_visible_count: Array.from(document.querySelectorAll('[class*="cart"],[id*="cart"]')).filter(visible).length,
                     error_like_count: document.querySelectorAll('[class*="error"],[role="alert"]').length,
                     error_like_visible_count: Array.from(document.querySelectorAll('[class*="error"],[role="alert"]')).filter(visible).length,
-                    total_like_present: Boolean(document.querySelector('[class*="total"]')),
-                    total_like_text_len: ((el) => (el && typeof el.innerText === "string" ? el.innerText.length : 0))(document.querySelector('[class*="total"]'))
+                    total_like_present: Boolean(document.querySelector('[class*="total"],[id*="total"]')),
+                    total_like_text_len: ((el) => (el && typeof el.innerText === "string" ? el.innerText.length : 0))(document.querySelector('[class*="total"],[id*="total"]'))
                 };
                 """,
                 SEL_ADD_TO_CART,
@@ -2081,6 +2083,7 @@ class GivexDriver:
 
     def _log_review_checkout_diagnostics(self) -> None:
         data = self._review_checkout_diagnostics()
+        extra = {k: v for k, v in data.items() if k not in ("cookie_count", "localStorage_length", "sessionStorage_length", "add_to_cart_span", "add_to_cart_parent", "review_checkout")}
         _log.error(
             "add_to_cart_and_checkout: Review-Checkout diagnostics "
             "cookie_count=%s localStorage.length=%s sessionStorage.length=%s "
@@ -2091,7 +2094,7 @@ class GivexDriver:
             data.get("add_to_cart_span"),
             data.get("add_to_cart_parent"),
             data.get("review_checkout"),
-            data,
+            extra,
         )
 
     def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
@@ -2433,7 +2436,7 @@ class GivexDriver:
                     return True
             else:
                 last, stable_since = current, now if current is not None else None
-            time.sleep(0.1)
+            time.sleep(0.1)  # raw poll cadence; not behavioral pacing/DelayEngine budget
         _log.warning("_wait_scroll_stable: timeout after %.2fs", timeout)
         return False
 
@@ -2472,9 +2475,9 @@ class GivexDriver:
             try:
                 state = self._driver.execute_script(
                     "const btn=document.querySelector(arguments[0]);if(!btn)return {present:false,enabled:false};"
-                    "const style=window.getComputedStyle(btn);"
+                    "const style=window.getComputedStyle(btn),rect=btn.getBoundingClientRect();"
                     "return {present:true,enabled:!btn.disabled&&btn.getAttribute('aria-disabled')!=='true'"
-                    "&&style.pointerEvents!=='none'};",
+                    "&&style.pointerEvents!=='none'&&style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0};",
                     SEL_REVIEW_CHECKOUT,
                 )
                 if isinstance(state, dict):
@@ -2482,7 +2485,7 @@ class GivexDriver:
                     if state.get("enabled"):
                         return True, True
             except Exception: pass  # noqa: E701  # pylint: disable=broad-except
-            time.sleep(0.5)
+            time.sleep(0.5)  # raw poll cadence; not behavioral pacing/DelayEngine budget
         return False, present
 
     def _human_scroll_to(self, selector: str, *, max_steps: int = 12) -> None:
@@ -2500,20 +2503,17 @@ class GivexDriver:
             delta = center - viewport_h * rnd.uniform(0.45, 0.65)
             if abs(delta) >= 80:
                 pixels_per_tick = rnd.uniform(70, 115)
-                ticks = max(1, math.ceil(abs(delta) / pixels_per_tick))
+                ticks = max(1, min(max_steps * 4, math.ceil(abs(delta) / pixels_per_tick)))
                 direction = 1 if delta > 0 else -1
                 for _tick_index in range(ticks):
                     dy = direction * rnd.uniform(70, 120)
                     stage = "wheel_dispatch"
-                    if self._cursor is not None and hasattr(self._cursor, "scroll_wheel"):
-                        self._cursor.scroll_wheel(dy, steps=1)
-                    else:
-                        self._driver.execute_cdp_cmd(
-                            "Input.dispatchMouseEvent",
-                            {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
-                        )
+                    self._driver.execute_cdp_cmd(
+                        "Input.dispatchMouseEvent",
+                        {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
+                    )
                     self._engine_aware_sleep(0.04, 0.11, "scroll_micro_tick")
-                stage = "wheel_dispatch"
+                stage = "scroll_final_settle"
             self._engine_aware_sleep(0.9, 1.8, "scroll_final_settle")
         except Exception as exc:  # pylint: disable=broad-except
             _log.warning(
@@ -2972,7 +2972,8 @@ class GivexDriver:
         self._realistic_type_field(
             SEL_SENDER_NAME, full_name, field_kind="name",
         )
-        self._blur_active_field_naturally()
+        if not self._blur_active_field_naturally():
+            _log.warning("fill_egift_form: blur active field failed after Tab and safe body-click fallback")
         _log.info("fill_egift_form: running final validation pass")
         fields = (SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
         final_lens = {sel: self._field_value_length(sel) for sel in fields}
@@ -3010,7 +3011,11 @@ class GivexDriver:
             raise SelectorTimeoutError(SEL_ADD_TO_CART, add_to_cart_timeout)
         atc_deadline = time.monotonic() + add_to_cart_timeout
         atc_ready_js = "const el=document.querySelector(arguments[0]);const c=el?el.closest('button,a,[role=\"button\"],.btn'):null;return !!c&&!c.disabled&&c.getAttribute('aria-disabled')!=='true';"
-        while not bool(self._driver.execute_script(atc_ready_js, SEL_ADD_TO_CART)):
+        while True:
+            try:
+                if bool(self._driver.execute_script(atc_ready_js, SEL_ADD_TO_CART)):
+                    break
+            except Exception: pass  # noqa: E701  # pylint: disable=broad-except
             if time.monotonic() >= atc_deadline:
                 raise SelectorTimeoutError(SEL_ADD_TO_CART, add_to_cart_timeout, reason="add-to-cart present but disabled")
             time.sleep(0.25)

@@ -28,12 +28,13 @@ from modules.cdp.driver import (
     GivexDriver,
     SEL_AMOUNT_INPUT,
     SEL_GREETING_MSG,
+    SEL_REVIEW_CHECKOUT,
 )
 from modules.cdp.fingerprint import BitBrowserSession, get_bitbrowser_client
 from modules.cdp.mouse import GhostCursor, build_path
 from modules.cdp.proxy import ProxyPool
 from modules.common.types import BillingProfile, CardInfo, WorkerTask
-from modules.common.exceptions import SessionFlaggedError
+from modules.common.exceptions import SelectorTimeoutError, SessionFlaggedError
 from modules.delay.persona import PersonaProfile
 from modules.rollout.autoscaler import AutoScaler
 
@@ -68,7 +69,10 @@ def test_egift_form_uses_realistic_typing_not_send_keys(mock_webdriver):
     mock_webdriver.find_elements.return_value = [mock_element]
     givex = GivexDriver(mock_webdriver)
     with patch.object(driver_mod, "_random_greeting", return_value="Hi"), \
-            patch.object(givex, "_realistic_type_field") as mock_type:
+            patch.object(givex, "_realistic_type_field") as mock_type, \
+            patch.object(givex, "_blur_active_field_naturally", return_value=True), \
+            patch.object(givex, "_field_value_length", return_value=10), \
+            patch.object(givex, "_field_value", return_value="recipient@example.com"):
         givex.fill_egift_form(_task(), _billing())
     assert mock_type.call_count == 6  # nosec B101
     mock_element.send_keys.assert_not_called()
@@ -78,7 +82,10 @@ def test_amount_field_typed_with_zero_typo_rate(mock_webdriver):
     """SEL_AMOUNT_INPUT must always be typed with typo_rate=0."""
     givex = GivexDriver(mock_webdriver)
     with patch.object(driver_mod, "_random_greeting", return_value="Hi"), \
-            patch.object(givex, "_realistic_type_field") as mock_type:
+            patch.object(givex, "_realistic_type_field") as mock_type, \
+            patch.object(givex, "_blur_active_field_naturally", return_value=True), \
+            patch.object(givex, "_field_value_length", return_value=10), \
+            patch.object(givex, "_field_value", return_value="recipient@example.com"):
         givex.fill_egift_form(_task(), _billing())
     expected = call(SEL_AMOUNT_INPUT, "50", field_kind="amount", typo_rate=0.0)
     assert expected in mock_type.call_args_list  # nosec B101
@@ -201,6 +208,37 @@ def test_orchestrator_calls_record_failure_on_session_flagged():
                 side_effect=SessionFlaggedError("flagged"),
             )
         )
+        stack.enter_context(patch("integration.orchestrator.cdp.unregister_driver"))
+        stack.enter_context(patch("integration.orchestrator.fsm.cleanup_worker"))
+        with pytest.raises(SessionFlaggedError):
+            orchestrator.run_cycle(_task(), worker_id="worker-1")
+    autoscaler.record_failure.assert_called_once_with("worker-1")
+
+
+def test_orchestrator_records_failure_on_review_checkout_absent_timeout():
+    autoscaler = MagicMock()
+    store = MagicMock()
+    store.is_duplicate.return_value = False
+    with ExitStack() as stack:
+        stack.enter_context(patch("integration.orchestrator._get_autoscaler", return_value=autoscaler))
+        stack.enter_context(patch("integration.orchestrator._get_idempotency_store", return_value=store))
+        stack.enter_context(patch("integration.orchestrator.initialize_cycle", side_effect=SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 21)))
+        stack.enter_context(patch("integration.orchestrator.cdp.unregister_driver"))
+        stack.enter_context(patch("integration.orchestrator.fsm.cleanup_worker"))
+        with pytest.raises(SessionFlaggedError):
+            orchestrator.run_cycle(_task(), worker_id="worker-1")
+    autoscaler.record_failure.assert_called_once_with("worker-1")
+
+
+def test_orchestrator_records_failure_on_review_checkout_disabled_timeout():
+    autoscaler = MagicMock()
+    store = MagicMock()
+    store.is_duplicate.return_value = False
+    err = SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 21, reason="present but disabled")
+    with ExitStack() as stack:
+        stack.enter_context(patch("integration.orchestrator._get_autoscaler", return_value=autoscaler))
+        stack.enter_context(patch("integration.orchestrator._get_idempotency_store", return_value=store))
+        stack.enter_context(patch("integration.orchestrator.initialize_cycle", side_effect=err))
         stack.enter_context(patch("integration.orchestrator.cdp.unregister_driver"))
         stack.enter_context(patch("integration.orchestrator.fsm.cleanup_worker"))
         with pytest.raises(SessionFlaggedError):

@@ -102,6 +102,26 @@ class HumanScrollToTests(unittest.TestCase):
             self.assertGreaterEqual(abs(payload["deltaY"]), 70)
             self.assertLessEqual(abs(payload["deltaY"]), 120)
 
+    def test_micro_ticks_are_capped_by_max_steps_multiplier(self):
+        selenium = _make_scroll_test_driver()
+        gd = GivexDriver(selenium)
+        selenium.execute_script.side_effect = lambda script, *_a: (
+            {"top": 10000, "bottom": 10040, "height": 40}
+            if "getBoundingClientRect" in script else 720 if "window.innerHeight" in script else None
+        )
+        with patch.object(gd, "_get_rng", return_value=LowBoundRng()), patch("modules.cdp.driver.time.sleep"):
+            gd._human_scroll_to(SEL_GREETING_MSG, max_steps=2)
+        self.assertEqual(sum(1 for c in selenium.execute_cdp_cmd.call_args_list if c.args[1].get("type") == "mouseWheel"), 8)
+
+    def test_cursor_path_does_not_use_ghostcursor_sleep(self):
+        selenium = _make_scroll_test_driver()
+        gd = GivexDriver(selenium)
+        gd._cursor = MagicMock()
+        with patch.object(gd, "_get_rng", return_value=LowBoundRng()), patch("modules.cdp.driver.time.sleep"):
+            gd._human_scroll_to(SEL_GREETING_MSG, max_steps=1)
+        gd._cursor.scroll_wheel.assert_not_called()
+        self.assertTrue(selenium.execute_cdp_cmd.called)
+
 
 class EngineAwareSleepTests(unittest.TestCase):
     def test_respects_delay_not_permitted(self):
@@ -141,6 +161,7 @@ class DiagnosticsTests(unittest.TestCase):
         gd._driver.execute_script.return_value = {
             "forms": [{
                 "checkValidity": True,
+                "elements_length": 1,
                 "elements": [{
                     "selector_name": "SEL_RECIPIENT_EMAIL",
                     "tag": "input",
@@ -155,6 +176,7 @@ class DiagnosticsTests(unittest.TestCase):
         }
         data = gd._form_validation_diagnostics()
         self.assertTrue(data["forms"][0]["checkValidity"])
+        self.assertEqual(data["forms"][0]["elements_length"], 1)
         self.assertEqual(data["forms"][0]["elements"][0]["value_len"], 18)
         self.assertNotIn("secret@example.com", repr(data))
 
@@ -376,6 +398,15 @@ class FillEgiftFormFinalValidationTests(unittest.TestCase):
             gd.fill_egift_form(_make_task(), _make_billing())
         self.assertNotIn("@example.com", "\n".join(logs.output))
 
+    def test_blur_failure_logs_warning_but_continues(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        with patch.object(gd, "_smooth_scroll_to"), patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "_realistic_type_field"), patch.object(gd, "_blur_active_field_naturally", return_value=False), \
+             patch.object(gd, "_field_value_length", return_value=20), patch.object(gd, "_field_value", return_value="recipient@example.com"), \
+             patch.object(drv, "_random_greeting", return_value="Hi"), self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
+            gd.fill_egift_form(_make_task(), _make_billing())
+        self.assertIn("blur active field failed", "\n".join(logs.output))
+
 
 class WaitForInteractableTests(unittest.TestCase):
     def _make_interactable_element(self):
@@ -429,6 +460,20 @@ class WaitForInteractableTests(unittest.TestCase):
             gd.add_to_cart_and_checkout()
         scripts = [c.args[0] for c in gd._driver.execute_script.call_args_list]
         self.assertTrue(any("closest('button,a,[role=\"button\"],.btn')" in s for s in scripts))
+
+    def test_review_checkout_ready_requires_visible_nonzero_button(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        gd._driver.execute_script.side_effect = [
+            {"present": True, "enabled": False},
+            {"present": True, "enabled": True},
+        ]
+        with patch("modules.cdp.driver.time.sleep"):
+            self.assertEqual(gd._wait_for_review_checkout_enabled(timeout=1), (True, True))
+        script = gd._driver.execute_script.call_args_list[0].args[0]
+        self.assertIn("style.display!=='none'", script)
+        self.assertIn("style.visibility!=='hidden'", script)
+        self.assertIn("rect.width>0", script)
+        self.assertIn("rect.height>0", script)
 
 class AtcBlueprintWaitTests(unittest.TestCase):
     def test_atc_sleeps_at_least_3s_before_review_checkout(self):
