@@ -2049,7 +2049,7 @@ class GivexDriver:
             )
             return data if isinstance(data, dict) else {"forms": []}
         except Exception:  # pylint: disable=broad-except
-            _log.debug("form_validation_diagnostics: DOM snapshot unavailable", exc_info=True)
+            _log.debug("form_validation_diagnostics: unable to retrieve form validation state from DOM", exc_info=True)
             return {"forms": []}
 
     def _review_checkout_diagnostics(self) -> dict:
@@ -2596,7 +2596,7 @@ class GivexDriver:
                     after = active_snapshot()
                     changed = after is not None and after != before
             except Exception:  # pylint: disable=broad-except
-                _log.debug("_blur_active_field_naturally: safe body click skipped", exc_info=True)
+                _log.debug("_blur_active_field_naturally: unable to perform safe body click", exc_info=True)
         self._engine_aware_sleep(1.0, 2.2, "blur_sender_name_settle")
         _log.debug("_blur_active_field_naturally: changed=%s", changed)
         return changed
@@ -2650,7 +2650,7 @@ class GivexDriver:
                         if self._is_interactable(elem):
                             return True, True
             except Exception:  # pylint: disable=broad-except
-                _log.debug("_wait_for_review_checkout_enabled: poll skipped", exc_info=True)
+                _log.debug("_wait_for_review_checkout_enabled: poll iteration failed; retrying", exc_info=True)
             time.sleep(0.5)
         return False, present
 
@@ -3179,7 +3179,7 @@ class GivexDriver:
         atc_deadline = time.monotonic() + _ADD_TO_CART_TIMEOUT_S
         while not self._is_closest_control_ready(SEL_ADD_TO_CART):
             if time.monotonic() >= atc_deadline:
-                raise SelectorTimeoutError(SEL_ADD_TO_CART, _ADD_TO_CART_TIMEOUT_S, reason="present but disabled")
+                raise SelectorTimeoutError(SEL_ADD_TO_CART, _ADD_TO_CART_TIMEOUT_S, reason="add-to-cart present but disabled")
             time.sleep(0.25)
         self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
         self.bounding_box_click(SEL_ADD_TO_CART)

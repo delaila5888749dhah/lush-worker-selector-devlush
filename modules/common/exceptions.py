@@ -29,8 +29,8 @@ class SelectorTimeoutError(SessionFlaggedError):
         self.selector = selector
         self.timeout = timeout
         self.reason = reason
-        if reason == "present but disabled":
-            message = f"Selector '{selector}' present but disabled after {timeout}s"
+        if reason:
+            message = f"Selector '{selector}' {reason} after {timeout}s"
         else:
             message = f"Selector '{selector}' not found within {timeout}s"
         super().__init__(message)
