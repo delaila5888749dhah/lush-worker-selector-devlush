@@ -349,6 +349,69 @@ class TestAddToCartAndCheckout(unittest.TestCase):
             with self.assertRaises(SelectorTimeoutError):
                 gd.add_to_cart_and_checkout()
 
+    def test_add_to_cart_logs_pii_safe_diagnostics_when_review_missing(self):
+        selenium = _make_driver()
+        selenium.get_cookies.return_value = [{}, {}]
+        selenium.execute_script.return_value = {
+            "localStorage_length": 3,
+            "sessionStorage_length": 4,
+            "add_to_cart_span": {
+                "present": True,
+                "disabled": False,
+                "aria_disabled": None,
+                "pointer_events": "auto",
+                "display": "inline",
+                "visibility": "visible",
+                "rect_w": 11,
+                "rect_h": 12,
+                "text_len": 13,
+                "class_len": 14,
+            },
+            "add_to_cart_parent": {
+                "present": True,
+                "disabled": False,
+                "aria_disabled": "false",
+                "pointer_events": "auto",
+                "display": "block",
+                "visibility": "visible",
+                "rect_w": 21,
+                "rect_h": 22,
+                "text_len": 23,
+                "class_len": 24,
+            },
+            "review_checkout": {
+                "present": False,
+                "disabled": None,
+                "aria_disabled": None,
+                "pointer_events": None,
+                "display": None,
+                "visibility": None,
+                "rect_w": 0,
+                "rect_h": 0,
+                "text_len": 0,
+                "class_len": 0,
+            },
+        }
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("time.sleep"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_wait_for_interactable", return_value=False), \
+             patch.object(gd, "_capture_failure_screenshot"), \
+             self.assertLogs("modules.cdp.driver", level="ERROR") as logs:
+            with self.assertRaises(SelectorTimeoutError):
+                gd.add_to_cart_and_checkout()
+
+        joined = "\n".join(logs.output)
+        self.assertIn("cookie_count=2", joined)
+        self.assertIn("localStorage.length=3", joined)
+        self.assertIn("sessionStorage.length=4", joined)
+        self.assertIn("add_to_cart_span", joined)
+        self.assertIn("add_to_cart_parent", joined)
+        self.assertIn("review_checkout", joined)
+        self.assertIn("pointer_events", joined)
+        self.assertIn("rect_w", joined)
+
 
 class TestSelectGuestCheckout(unittest.TestCase):
     """select_guest_checkout: begin checkout → heading → email → continue."""
@@ -900,13 +963,13 @@ class TestNavigateToEgift(unittest.TestCase):
 
     _CLEAR_SCRIPT = "window.localStorage.clear(); window.sessionStorage.clear();"
 
-    def _assert_clear_script_called_twice(self, selenium):
+    def _assert_clear_script_called_once(self, selenium):
         clear_script_calls = [
             c.args[0]
             for c in selenium.execute_script.call_args_list
             if c.args and c.args[0] == self._CLEAR_SCRIPT
         ]
-        self.assertEqual(clear_script_calls, [self._CLEAR_SCRIPT, self._CLEAR_SCRIPT])
+        self.assertEqual(clear_script_calls, [self._CLEAR_SCRIPT])
 
     def test_navigate_to_egift_waits_for_url(self):
         selenium = _make_driver(current_url=URL_EGIFT)
@@ -928,8 +991,8 @@ class TestNavigateToEgift(unittest.TestCase):
         selenium.get.assert_called_once_with(URL_BASE)
         btn_el.click.assert_called_once()
 
-    def test_navigate_to_egift_clears_browser_state_twice(self):
-        """localStorage/sessionStorage clear and delete_all_cookies called twice."""
+    def test_navigate_to_egift_clears_browser_state_once(self):
+        """localStorage/sessionStorage clear and delete_all_cookies called exactly once."""
         selenium = _make_driver(current_url=URL_EGIFT)
         btn_el = MagicMock()
 
@@ -945,8 +1008,8 @@ class TestNavigateToEgift(unittest.TestCase):
         with patch("time.sleep"):
             gd.navigate_to_egift()
 
-        self.assertEqual(selenium.delete_all_cookies.call_count, 2)
-        self._assert_clear_script_called_twice(selenium)
+        self.assertEqual(selenium.delete_all_cookies.call_count, 1)
+        self._assert_clear_script_called_once(selenium)
 
     def test_navigate_to_egift_does_not_crash_when_script_clear_fails(self):
         """execute_script exception does not abort navigate_to_egift flow."""
@@ -966,8 +1029,8 @@ class TestNavigateToEgift(unittest.TestCase):
         with patch("time.sleep"):
             gd.navigate_to_egift()
 
-        self._assert_clear_script_called_twice(selenium)
-        self.assertEqual(selenium.delete_all_cookies.call_count, 2)
+        self._assert_clear_script_called_once(selenium)
+        self.assertEqual(selenium.delete_all_cookies.call_count, 1)
         selenium.get.assert_called_once_with(URL_BASE)
         btn_el.click.assert_called_once()
 
@@ -989,8 +1052,8 @@ class TestNavigateToEgift(unittest.TestCase):
         with patch("time.sleep"):
             gd.navigate_to_egift()
 
-        self._assert_clear_script_called_twice(selenium)
-        self.assertEqual(selenium.delete_all_cookies.call_count, 2)
+        self._assert_clear_script_called_once(selenium)
+        self.assertEqual(selenium.delete_all_cookies.call_count, 1)
         selenium.get.assert_called_once_with(URL_BASE)
         btn_el.click.assert_called_once()
 

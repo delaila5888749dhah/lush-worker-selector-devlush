@@ -1955,6 +1955,85 @@ class GivexDriver:
         except Exception:  # pylint: disable=broad-except
             return None
 
+    def _review_checkout_diagnostics(self) -> dict:
+        """Return PII-safe structural diagnostics for the cart handoff."""
+        cookie_count = -1
+        try:
+            cookie_count = len(self._driver.get_cookies())
+        except Exception:  # pylint: disable=broad-except
+            _log.debug("review_checkout_diagnostics: cookie count unavailable", exc_info=True)
+        try:
+            data = self._driver.execute_script(
+                """
+                const describe = (el) => {
+                    if (!el) {
+                        return {
+                            present: false, disabled: null, aria_disabled: null,
+                            pointer_events: null, display: null, visibility: null,
+                            rect_w: 0, rect_h: 0, text_len: 0, class_len: 0
+                        };
+                    }
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    const className = typeof el.className === "string" ? el.className : "";
+                    const text = typeof el.innerText === "string" ? el.innerText : "";
+                    return {
+                        present: true,
+                        disabled: Boolean(el.disabled),
+                        aria_disabled: el.getAttribute("aria-disabled"),
+                        pointer_events: style.pointerEvents,
+                        display: style.display,
+                        visibility: style.visibility,
+                        rect_w: Math.round(rect.width),
+                        rect_h: Math.round(rect.height),
+                        text_len: text.length,
+                        class_len: className.length
+                    };
+                };
+                const addToCartSpan = document.querySelector(arguments[0]);
+                const addToCartParent = addToCartSpan
+                    ? addToCartSpan.closest('button,a,[role="button"],.btn')
+                    : null;
+                const reviewCheckout = document.querySelector(arguments[1]);
+                return {
+                    localStorage_length: window.localStorage ? window.localStorage.length : -1,
+                    sessionStorage_length: window.sessionStorage ? window.sessionStorage.length : -1,
+                    add_to_cart_span: describe(addToCartSpan),
+                    add_to_cart_parent: describe(addToCartParent),
+                    review_checkout: describe(reviewCheckout)
+                };
+                """,
+                SEL_ADD_TO_CART,
+                SEL_REVIEW_CHECKOUT,
+            )
+            if isinstance(data, dict):
+                data["cookie_count"] = cookie_count
+                return data
+        except Exception:  # pylint: disable=broad-except
+            _log.debug("review_checkout_diagnostics: DOM snapshot unavailable", exc_info=True)
+        return {
+            "cookie_count": cookie_count,
+            "localStorage_length": -1,
+            "sessionStorage_length": -1,
+            "add_to_cart_span": {},
+            "add_to_cart_parent": {},
+            "review_checkout": {},
+        }
+
+    def _log_review_checkout_diagnostics(self) -> None:
+        data = self._review_checkout_diagnostics()
+        _log.error(
+            "add_to_cart_and_checkout: Review-Checkout diagnostics "
+            "cookie_count=%s localStorage.length=%s sessionStorage.length=%s "
+            "add_to_cart_span=%s add_to_cart_parent=%s review_checkout=%s",
+            data.get("cookie_count"),
+            data.get("localStorage_length"),
+            data.get("sessionStorage_length"),
+            data.get("add_to_cart_span"),
+            data.get("add_to_cart_parent"),
+            data.get("review_checkout"),
+        )
+
     def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
         actual_len = self._field_value_length(sel)
         _log.info("_realistic_type_field: field=%s expected_len=%d actual_len=%d", selector_name, expected_len, actual_len)
@@ -2712,7 +2791,6 @@ class GivexDriver:
         _log.info("navigate_to_egift: Buy-eGift clicked")
         self._wait_for_url_or_capture(URL_EGIFT, "url_egift_not_reached")
         _log.info("navigate_to_egift: URL_EGIFT reached")
-        self._clear_browser_state()
         _log.info("navigate_to_egift: completed")
 
     # ── eGift form (Step 1) ─────────────────────────────────────────────────
@@ -2805,6 +2883,7 @@ class GivexDriver:
                 delay,
                 interactable_timeout,
             )
+            self._log_review_checkout_diagnostics()
             self._capture_failure_screenshot("review_checkout_not_interactable")
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, int(delay) + interactable_timeout)
         _log.info("add_to_cart_and_checkout: Review-Checkout interactable")

@@ -92,8 +92,8 @@ def test_navigate_clears_browser_state_before_each_cycle(mock_webdriver):
             patch.object(givex, "_wait_for_url"), \
             patch.object(givex, "bounding_box_click"):
         givex.navigate_to_egift()
-    assert mock_webdriver.execute_script.call_count == 2  # nosec B101
-    assert mock_webdriver.delete_all_cookies.call_count == 2  # nosec B101
+    assert mock_webdriver.execute_script.call_count == 1  # nosec B101
+    assert mock_webdriver.delete_all_cookies.call_count == 1  # nosec B101
 
 
 def test_proxy_pool_assigns_unique_proxies_per_worker(proxy_pool_3: ProxyPool):
