@@ -2083,7 +2083,7 @@ class GivexDriver:
 
     def _log_review_checkout_diagnostics(self) -> None:
         data = self._review_checkout_diagnostics()
-        logged_keys = {"cookie_count", "localStorage_length", "sessionStorage_length", "add_to_cart_span", "add_to_cart_parent", "review_checkout"}
+        logged_keys = {"cookie_count", "localStorage_length", "sessionStorage_length", "add_to_cart_span", "add_to_cart_parent", "review_checkout"}  # fields expanded in log slots below
         extra = {k: v for k, v in data.items() if k not in logged_keys}
         _log.error(
             "add_to_cart_and_checkout: Review-Checkout diagnostics "
@@ -2504,7 +2504,7 @@ class GivexDriver:
             delta = center - viewport_h * rnd.uniform(0.45, 0.65)
             if abs(delta) >= 80:
                 pixels_per_tick = rnd.uniform(70, 115)
-                ticks = max(1, min(max_steps * 4, math.ceil(abs(delta) / pixels_per_tick)))
+                ticks = max(1, min(max_steps * 4, math.ceil(abs(delta) / pixels_per_tick)))  # cap each step to 4 micro-ticks
                 direction = 1 if delta > 0 else -1
                 for _tick_index in range(ticks):
                     dy = direction * rnd.uniform(70, 120)
