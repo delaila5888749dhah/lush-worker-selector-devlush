@@ -539,10 +539,12 @@ class TestSelectGuestCheckout(unittest.TestCase):
              patch.object(gd, "_is_selector_present_visible", side_effect=lambda sel: sel == SEL_GUEST_EMAIL), \
              patch.object(gd, "_wait_for_url_or_capture"), \
              patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
+             patch.object(gd, "_realistic_type_field", wraps=gd._realistic_type_field) as mock_type, \
              self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd.select_guest_checkout("guest@example.com")
 
         begin_el.click.assert_called_once()
+        mock_type.assert_called_once_with(SEL_GUEST_EMAIL, "guest@example.com", field_kind="text")
         email_el.send_keys.assert_not_called()
         cdp_chars = "".join(
             c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
@@ -599,8 +601,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")
 
-        self.assertEqual(order[0], "verify")
-        self.assertEqual(order[1], f"click:{SEL_BEGIN_CHECKOUT}")
+        self.assertEqual(order, ["verify", f"click:{SEL_BEGIN_CHECKOUT}", f"click:{SEL_GUEST_CONTINUE}"])
 
 
 class TestFillPaymentAndBilling(unittest.TestCase):
