@@ -1965,6 +1965,17 @@ class GivexDriver:
         try:
             data = self._driver.execute_script(
                 """
+                const classLength = (el) => {
+                    const rawClass = el.className;
+                    if (rawClass && typeof rawClass.baseVal === "string") {
+                        return rawClass.baseVal.length;
+                    }
+                    if (typeof rawClass === "string") {
+                        return rawClass.length;
+                    }
+                    const classAttr = el.getAttribute("class");
+                    return typeof classAttr === "string" ? classAttr.length : 0;
+                };
                 const describe = (el) => {
                     if (!el) {
                         return {
@@ -1975,10 +1986,6 @@ class GivexDriver:
                     }
                     const style = window.getComputedStyle(el);
                     const rect = el.getBoundingClientRect();
-                    const rawClass = el.className;
-                    const className = rawClass && typeof rawClass.baseVal === "string"
-                        ? rawClass.baseVal
-                        : (typeof rawClass === "string" ? rawClass : (el.getAttribute("class") || ""));
                     const text = typeof el.innerText === "string" ? el.innerText : "";
                     return {
                         present: true,
@@ -1990,7 +1997,7 @@ class GivexDriver:
                         rect_w: Math.round(rect.width),
                         rect_h: Math.round(rect.height),
                         text_len: text.length,
-                        class_len: className.length
+                        class_len: classLength(el)
                     };
                 };
                 const addToCartSpan = document.querySelector(arguments[0]);

@@ -414,6 +414,12 @@ class TestAddToCartAndCheckout(unittest.TestCase):
         self.assertIn("review_checkout", joined)
         self.assertIn("pointer_events", joined)
         self.assertIn("rect_w", joined)
+        self.assertRegex(
+            joined,
+            r"Review-Checkout diagnostics cookie_count=2 "
+            r"localStorage\.length=3 sessionStorage\.length=4 "
+            r"add_to_cart_span=.*add_to_cart_parent=.*review_checkout=",
+        )
 
 
 class TestSelectGuestCheckout(unittest.TestCase):
