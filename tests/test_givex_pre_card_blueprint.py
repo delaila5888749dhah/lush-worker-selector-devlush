@@ -629,7 +629,11 @@ class AtcBlueprintWaitTests(unittest.TestCase):
 
     def test_wait_for_cart_state_accepts_review_enabled_without_total(self):
         gd = GivexDriver(_make_driver(), strict=False)
-        baseline = {"total_like_present": False, "cart_like_visible_count": 1}
+        baseline = {
+            "total_like_present": False,
+            "cart_like_visible_count": 1,
+            "review_checkout": {"present": True, "enabled": False},
+        }
         post = {
             "total_like_present": False,
             "cart_like_visible_count": 1,
@@ -641,6 +645,23 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         self.assertTrue(materialized)
         self.assertIs(snapshot, post)
         self.assertIn("signal=review_checkout_enabled_without_total", "\n".join(logs.output))
+
+    def test_wait_for_cart_state_rejects_review_enabled_when_baseline_already_enabled(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        baseline = {
+            "total_like_present": False,
+            "cart_like_visible_count": 1,
+            "review_checkout": {"present": True, "enabled": True},
+        }
+        post = dict(baseline)
+        with patch.object(gd, "_cart_state_snapshot", return_value=post), \
+             patch.object(gd, "_review_checkout_diagnostics") as full_diag, \
+             patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.monotonic", side_effect=[0.0, 0.0, 2.0]):
+            materialized, snapshot = gd._wait_for_cart_state_after_atc(baseline, timeout=1)
+        self.assertFalse(materialized)
+        self.assertIs(snapshot, post)
+        full_diag.assert_not_called()
 
     def test_wait_for_cart_state_does_not_accept_cart_icon_delta_alone(self):
         gd = GivexDriver(_make_driver(), strict=False)

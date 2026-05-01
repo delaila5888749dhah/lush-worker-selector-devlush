@@ -2517,7 +2517,7 @@ class GivexDriver:
 
     def _cart_state_snapshot(self) -> dict:
         try:
-            data = self._driver.execute_script("const v=(e)=>{if(!e)return false;const s=getComputedStyle(e),r=e.getBoundingClientRect();return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};const t=document.querySelector('[class*=\"total\"],[id*=\"total\"]');const l=document.querySelectorAll('[class*=\"cart-item\"],[class*=\"lineItem\"],[class*=\"product\"][class*=\"row\"]');const c=document.querySelectorAll('[class*=\"cart\"],[id*=\"cart\"]');const e=document.querySelectorAll('[class*=\"error\"],[role=\"alert\"]');const b=document.querySelector(arguments[0]);return {total_like_present:Boolean(t),total_like_text_len:t&&typeof t.innerText==='string'?t.innerText.length:0,explicit_cart_line_item_count:l.length,explicit_cart_line_item_visible_count:Array.from(l).filter(v).length,cart_like_visible_count:Array.from(c).filter(v).length,error_like_visible_count:Array.from(e).filter(v).length,review_checkout:{present:Boolean(b),enabled:!!b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true'&&v(b),disabled:b?Boolean(b.disabled):null}};", SEL_REVIEW_CHECKOUT)
+            data = self._driver.execute_script("const v=(e)=>{if(!e)return false;const s=getComputedStyle(e),r=e.getBoundingClientRect();return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};const t=document.querySelector('[class*=\"total\"],[id*=\"total\"]');const l=document.querySelectorAll('[class*=\"cart-item\"],[class*=\"lineItem\"],[class*=\"product\"][class*=\"row\"]');const c=document.querySelectorAll('[class*=\"cart\"],[id*=\"cart\"]');const e=document.querySelectorAll('[class*=\"error\"],[role=\"alert\"]');const b=document.querySelector(arguments[0]);return {total_like_present:Boolean(t),total_like_text_len:t&&typeof t.innerText==='string'?t.innerText.length:0,explicit_cart_line_item_count:l.length,explicit_cart_line_item_visible_count:Array.from(l).filter(v).length,cart_like_visible_count:Array.from(c).filter(v).length,error_like_visible_count:Array.from(e).filter(v).length,review_checkout:{present:Boolean(b),enabled:!!b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true'&&getComputedStyle(b).pointerEvents!=='none'&&v(b),disabled:b?Boolean(b.disabled):null}};", SEL_REVIEW_CHECKOUT)
             return data if isinstance(data, dict) else {}
         except Exception: return {}  # noqa: E701  # pylint: disable=broad-except
 
@@ -2550,7 +2550,7 @@ class GivexDriver:
                 signal = "explicit_cart_line_item"
             else:
                 review = last_snapshot.get("review_checkout")
-                if isinstance(review, dict) and bool(review.get("present")) and bool(review.get("enabled")):
+                if baseline_review_disabled and isinstance(review, dict) and bool(review.get("present")) and bool(review.get("enabled")):
                     signal = "review_checkout_enabled_without_total"
 
             if signal:
