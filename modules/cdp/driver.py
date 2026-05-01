@@ -3306,9 +3306,9 @@ class GivexDriver:
                     raw = self._driver.execute_script(detect_js)
                 except Exception:  # pylint: disable=broad-except
                     raw = None
-                if not isinstance(raw, list) or any(
-                    isinstance(c, dict) and c.get("id") for c in raw
-                ):
+                if not isinstance(raw, list):
+                    break
+                if any(isinstance(c, dict) and c.get("id") for c in raw):
                     break
                 if time.monotonic() >= _pick_deadline:
                     break
