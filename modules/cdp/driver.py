@@ -425,22 +425,17 @@ SEL_GUEST_HEADING  = "#guestHeading"
 SEL_GUEST_EMAIL    = "#cws_txt_guestEmail"
 SEL_GUEST_CONTINUE = "#cws_btn_guestChkout"
 
-_SELECTOR_NAMES = {
-    SEL_GREETING_MSG: "SEL_GREETING_MSG",
-    SEL_AMOUNT_INPUT: "SEL_AMOUNT_INPUT",
-    SEL_RECIPIENT_NAME: "SEL_RECIPIENT_NAME",
-    SEL_RECIPIENT_EMAIL: "SEL_RECIPIENT_EMAIL",
-    SEL_CONFIRM_RECIPIENT_EMAIL: "SEL_CONFIRM_RECIPIENT_EMAIL",
-    SEL_SENDER_NAME: "SEL_SENDER_NAME",
-    SEL_GUEST_EMAIL: "SEL_GUEST_EMAIL",
-}
+_SELECTOR_NAMES = dict(
+    (sel, name) for sel, name in (
+        (SEL_GREETING_MSG, "SEL_GREETING_MSG"), (SEL_AMOUNT_INPUT, "SEL_AMOUNT_INPUT"),
+        (SEL_RECIPIENT_NAME, "SEL_RECIPIENT_NAME"), (SEL_RECIPIENT_EMAIL, "SEL_RECIPIENT_EMAIL"),
+        (SEL_CONFIRM_RECIPIENT_EMAIL, "SEL_CONFIRM_RECIPIENT_EMAIL"), (SEL_SENDER_NAME, "SEL_SENDER_NAME"),
+        (SEL_GUEST_EMAIL, "SEL_GUEST_EMAIL"),
+    )
+)
 
 
 def _selector_name(sel: str) -> str:
-    """Map CSS selector to symbolic constant for PII-safe field logging.
-
-    Returns ``UNKNOWN_SELECTOR`` when *sel* is not in the registered field set.
-    """
     return _SELECTOR_NAMES.get(sel, "UNKNOWN_SELECTOR")
 
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
@@ -896,9 +891,10 @@ def _dispatch_cdp_click_sequence(
 ) -> None:
     """Dispatch a 3-event CDP mouse click (``mouseMoved`` → ``Pressed`` → ``Released``).
 
-    Emits ``Input.dispatchMouseEvent`` at ``(abs_x, abs_y)`` with a short
-    hover dwell and press hold so the target receives a realistic
-    hover-then-click sequence.
+    Emits ``Input.dispatchMouseEvent`` at ``(abs_x, abs_y)`` for each event
+    type so the target receives a proper hover-then-click sequence (matching
+    real user input). When ``jitter`` is True, a small sub-pixel offset is
+    added to the hover event to better mimic human cursor settle.
 
     Args:
         driver: Raw Selenium WebDriver exposing ``execute_cdp_cmd``.
@@ -908,44 +904,23 @@ def _dispatch_cdp_click_sequence(
             ``jitter`` is True. If ``None``, a fresh per-call
             ``random.Random()`` instance is used so no module-level RNG
             state is shared across threads.
-        jitter: When True, apply a small settle wobble before the click.
+        jitter: When True, apply settle wobble to the hover event.
     """
     rnd = rng if rng is not None else _random.Random()
     move_x = abs_x + (rnd.uniform(-2.0, 2.0) if jitter else 0.0)
     move_y = abs_y + (rnd.uniform(-2.0, 2.0) if jitter else 0.0)
     driver.execute_cdp_cmd(
-        "Input.dispatchMouseEvent",
-        {
-            "type": "mouseMoved",
-            "x": move_x,
-            "y": move_y,
-            "button": "none",
-        },
+        "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": move_x, "y": move_y, "button": "none"},
     )
     time.sleep(rnd.uniform(0.08, 0.25))
-
-    press_x = abs_x
-    press_y = abs_y
     driver.execute_cdp_cmd(
         "Input.dispatchMouseEvent",
-        {
-            "type": "mousePressed",
-            "x": press_x,
-            "y": press_y,
-            "button": "left",
-            "clickCount": 1,
-        },
+        {"type": "mousePressed", "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1},
     )
     time.sleep(rnd.uniform(0.05, 0.16))
     driver.execute_cdp_cmd(
         "Input.dispatchMouseEvent",
-        {
-            "type": "mouseReleased",
-            "x": press_x,
-            "y": press_y,
-            "button": "left",
-            "clickCount": 1,
-        },
+        {"type": "mouseReleased", "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1},
     )
 
 
@@ -1926,7 +1901,6 @@ class GivexDriver:
         return False
 
     def _is_interactable(self, elem) -> bool:
-        """True iff element is visible, sized, and accepts pointer events."""
         try:
             if not elem.is_displayed():
                 return False
@@ -1937,78 +1911,52 @@ class GivexDriver:
                 return False
         except Exception:  # pylint: disable=broad-except
             pass
+        js = ("const e=arguments[0],s=getComputedStyle(e),r=e.getBoundingClientRect();"
+              "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'"
+              "&&s.pointerEvents!=='none'&&e.getAttribute('aria-disabled')!=='true'&&!e.disabled;")
         try:
-            return bool(self._driver.execute_script(
-                """
-                const e = arguments[0];
-                const s = window.getComputedStyle(e);
-                const r = e.getBoundingClientRect();
-                return r.width > 0 && r.height > 0
-                    && s.display !== 'none'
-                    && s.visibility !== 'hidden'
-                    && s.pointerEvents !== 'none'
-                    && e.getAttribute('aria-disabled') !== 'true'
-                    && !e.disabled;
-                """,
-                elem,
-            ))
+            return bool(self._driver.execute_script(js, elem))
         except Exception:  # pylint: disable=broad-except
             return False
 
     def _wait_for_interactable(self, selector: str, timeout: int = 10) -> bool:
-        """Poll until *selector* is present and interactable."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             elements = self.find_elements(selector)
-            if elements:
-                try:
-                    if self._is_interactable(elements[0]):
-                        return True
-                except Exception:  # pylint: disable=broad-except
-                    pass
+            if elements and self._is_interactable(elements[0]):
+                return True
             time.sleep(0.5)
         return False
 
     def _diagnose_non_interactable(self, selector: str) -> dict:
-        """Read sanitized structural state for diagnostic logs. Never raises."""
+        js = ("const e=document.querySelector(arguments[0]);if(!e)return {present:false};"
+              "const s=getComputedStyle(e),r=e.getBoundingClientRect(),txt=(e.textContent||'').trim();"
+              "return {present:true,displayed:!!(r.width>0&&r.height>0),disabled:!!e.disabled,"
+              "aria_disabled:e.getAttribute('aria-disabled'),rect_w:r.width,rect_h:r.height,"
+              "display:s.display,visibility:s.visibility,pointer_events:s.pointerEvents,"
+              "class_name_snippet:(e.className||'').slice(0,80),text_len:txt.length};")
         try:
-            return self._driver.execute_script(
-                """
-                const e = document.querySelector(arguments[0]);
-                if (!e) return {present: false};
-                const s = window.getComputedStyle(e);
-                const r = e.getBoundingClientRect();
-                const txt = (e.textContent || '').trim();
-                return {
-                    present: true,
-                    displayed: !!(r.width > 0 && r.height > 0),
-                    disabled: !!e.disabled,
-                    aria_disabled: e.getAttribute('aria-disabled'),
-                    rect_w: r.width,
-                    rect_h: r.height,
-                    display: s.display,
-                    visibility: s.visibility,
-                    pointer_events: s.pointerEvents,
-                    class_name_snippet: (e.className || '').slice(0, 80),
-                    text_len: txt.length,
-                };
-                """,
-                selector,
-            ) or {"present": False}
+            return self._driver.execute_script(js, selector) or {"present": False}
         except Exception:  # pylint: disable=broad-except
             return {"present": False, "diagnose_error": True}
 
     def _field_value_length(self, selector: str) -> int:
+        js = "const el=document.querySelector(arguments[0]);return el&&typeof el.value==='string'?el.value.length:-1;"
         try:
-            return int(self._driver.execute_script(
-                """
-                const el = document.querySelector(arguments[0]);
-                return el && typeof el.value === 'string' ? el.value.length : -1;
-                """,
-                selector,
-            ))
+            return int(self._driver.execute_script(js, selector))
         except Exception:  # pylint: disable=broad-except
             return -1
+
+    def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
+        actual_len = self._field_value_length(sel)
+        _log.info("_realistic_type_field: field=%s expected_len=%d actual_len=%d", selector_name, expected_len, actual_len)
+        if sel == SEL_AMOUNT_INPUT:
+            failed, label = actual_len <= 0 and expected_len > 0, "empty"
+        else:
+            failed, label = actual_len < max(1, int(expected_len * 0.7)) and expected_len > 0, "short"
+        if failed:
+            self._capture_failure_screenshot(f"type_field_value_{label}_{selector_name}")
+            raise SessionFlaggedError(f"Field {selector_name} did not receive typed value (expected_len={expected_len} actual_len={actual_len})")
 
     def _wait_for_url(self, url_fragment: str, timeout: int = 15) -> None:
         """Poll until the current URL contains *url_fragment* or *timeout* expires.
@@ -2163,82 +2111,61 @@ class GivexDriver:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
             self._send_keys_fallback(sel, val)
-        else:
-            typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
-            # Apply explicit ``typo_rate`` override first (callers who pass an
-            # explicit rate own the rate exactly — no NIGHT bonus is layered on
-            # top of an explicit override). The critical-section guard below is
-            # still authoritative: an explicit rate cannot re-enable typo
-            # injection in a safe-zone contract.
-            if typo_rate is not None:
-                typo_prob = typo_rate
-                apply_night_bonus = False
-            else:
-                apply_night_bonus = True
-            # Phase 10 §10 / audit [L3]: NIGHT typo bonus is gated by the engine's
-            # delay-permitted check so that VBV / POST_ACTION / Phase-9
-            # CRITICAL_SECTION never see *any* typo behaviour modulation. The
-            # critical-section guard is applied *after* the explicit ``typo_rate``
-            # override so it is authoritative: callers cannot re-enable typo
-            # injection in a safe-zone contract by passing ``typo_rate``. This
-            # also zeroes the persona base rate while in critical section, since
-            # typo injection is itself a behaviour modulation that must not fire
-            # in safe-zone contracts.
-            delay_permitted = (
-                self._engine is None or self._engine.is_delay_permitted()
-            )
-            if not delay_permitted:
-                typo_prob = 0.0
-            elif apply_night_bonus and self._persona and self._temporal:
-                typo_prob += self._temporal.get_night_typo_increase(self._utc_offset_hours)
-            # Clamp into a valid probability range after the additive NIGHT bonus.
-            typo_prob = max(0.0, min(1.0, typo_prob))
-            # Phase 5A Task 4 / audit [J2]: when the engine reports that
-            # delay is not permitted (e.g. CRITICAL_SECTION active, VBV /
-            # POST_ACTION state, or accumulator exhausted), skip the
-            # biometric pattern generation entirely and fall through to
-            # deterministic fast typing.  The keyboard layer also zeroes
-            # per-keystroke sleeps via ``engine.is_delay_permitted``; this
-            # extra guard ensures the biometric RNG advance is also avoided
-            # so the production path matches the safe-zone contract.
-            if self._engine is not None and not self._engine.is_delay_permitted():
-                dl = None
-            elif self._bio and use_burst and len(val) >= 16:
-                dl = self._bio.generate_4x4_pattern()
-            elif self._bio:
-                dl = self._bio.generate_burst_pattern(len(val))
-            else:
-                dl = None
-            _type_value(
-                self._driver, els[0], val, self._get_rng(),
-                typo_rate=typo_prob, delays=dl, strict=self._strict,
-                field_kind=field_kind, engine=self._engine,
-            )
-        if not verify_value:
+            if verify_value:
+                self._verify_field_value_length(sel, expected_len, selector_name)
             return
-        actual_len = self._field_value_length(sel)
-        _log.info(
-            "_realistic_type_field: field=%s expected_len=%d actual_len=%d",
-            selector_name, expected_len, actual_len,
-        )
-        if sel == SEL_AMOUNT_INPUT:
-            # Givex can auto-format amount text (for example "25" -> "25.00"),
-            # so this field only needs to prove that trusted typing landed.
-            if actual_len <= 0 and expected_len > 0:
-                self._capture_failure_screenshot(f"type_field_value_empty_{selector_name}")
-                raise SessionFlaggedError(
-                    f"Field {selector_name} did not receive typed value "
-                    f"(expected_len={expected_len} actual_len={actual_len})"
-                )
+        typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
+        # Apply explicit ``typo_rate`` override first (callers who pass an
+        # explicit rate own the rate exactly — no NIGHT bonus is layered on
+        # top of an explicit override). The critical-section guard below is
+        # still authoritative: an explicit rate cannot re-enable typo
+        # injection in a safe-zone contract.
+        if typo_rate is not None:
+            typo_prob = typo_rate
+            apply_night_bonus = False
         else:
-            min_len = max(1, int(expected_len * 0.7))
-            if actual_len < min_len and expected_len > 0:
-                self._capture_failure_screenshot(f"type_field_value_short_{selector_name}")
-                raise SessionFlaggedError(
-                    f"Field {selector_name} did not receive typed value "
-                    f"(expected_len={expected_len} actual_len={actual_len})"
-                )
-        return
+            apply_night_bonus = True
+        # Phase 10 §10 / audit [L3]: NIGHT typo bonus is gated by the engine's
+        # delay-permitted check so that VBV / POST_ACTION / Phase-9
+        # CRITICAL_SECTION never see *any* typo behaviour modulation. The
+        # critical-section guard is applied *after* the explicit ``typo_rate``
+        # override so it is authoritative: callers cannot re-enable typo
+        # injection in a safe-zone contract by passing ``typo_rate``. This
+        # also zeroes the persona base rate while in critical section, since
+        # typo injection is itself a behaviour modulation that must not fire
+        # in safe-zone contracts.
+        delay_permitted = (
+            self._engine is None or self._engine.is_delay_permitted()
+        )
+        if not delay_permitted:
+            typo_prob = 0.0
+        elif apply_night_bonus and self._persona and self._temporal:
+            typo_prob += self._temporal.get_night_typo_increase(self._utc_offset_hours)
+        # Clamp into a valid probability range after the additive NIGHT bonus.
+        typo_prob = max(0.0, min(1.0, typo_prob))
+        # Phase 5A Task 4 / audit [J2]: when the engine reports that
+        # delay is not permitted (e.g. CRITICAL_SECTION active, VBV /
+        # POST_ACTION state, or accumulator exhausted), skip the
+        # biometric pattern generation entirely and fall through to
+        # deterministic fast typing.  The keyboard layer also zeroes
+        # per-keystroke sleeps via ``engine.is_delay_permitted``; this
+        # extra guard ensures the biometric RNG advance is also avoided
+        # so the production path matches the safe-zone contract.
+        if self._engine is not None and not self._engine.is_delay_permitted():
+            dl = None
+        elif self._bio and use_burst and len(val) >= 16:
+            dl = self._bio.generate_4x4_pattern()
+        elif self._bio:
+            dl = self._bio.generate_burst_pattern(len(val))
+        else:
+            dl = None
+        _type_value(
+            self._driver, els[0], val, self._get_rng(),
+            typo_rate=typo_prob, delays=dl, strict=self._strict,
+            field_kind=field_kind, engine=self._engine,
+        )
+        if verify_value:
+            self._verify_field_value_length(sel, expected_len, selector_name)
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """Select the option matching *value* in a ``<select>`` element.
@@ -2328,23 +2255,16 @@ class GivexDriver:
             )
 
     def _human_scroll_to(self, selector: str, *, max_steps: int = 12) -> None:
-        """Scroll to *selector* using CDP mouseWheel in human-like small steps."""
         elements = self.find_elements(selector)
         if not elements:
             return
         rnd = self._get_rng()
         try:
             for _ in range(max_steps):
-                rect = self._driver.execute_script(
-                    "const r=arguments[0].getBoundingClientRect();"
-                    "return {top:r.top,bottom:r.bottom,height:r.height};",
-                    elements[0],
-                )
+                rect = self._driver.execute_script("const r=arguments[0].getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};", elements[0])
                 viewport_h = self._driver.execute_script("return window.innerHeight") or 720
                 center = rect["top"] + rect["height"] / 2
-                # Aim for the field to settle naturally around mid-viewport.
-                target = viewport_h * rnd.uniform(0.45, 0.65)
-                delta = center - target
+                delta = center - viewport_h * rnd.uniform(0.45, 0.65)
                 if abs(delta) < 80:
                     break
                 dy = max(-420, min(420, delta * rnd.uniform(0.45, 0.75)))
@@ -2353,26 +2273,14 @@ class GivexDriver:
                 else:
                     self._driver.execute_cdp_cmd(
                         "Input.dispatchMouseEvent",
-                        {
-                            "type": "mouseWheel",
-                            "x": rnd.uniform(300, 900),
-                            "y": rnd.uniform(250, 650),
-                            "deltaX": 0,
-                            "deltaY": dy,
-                        },
+                        {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
                     )
                 time.sleep(rnd.uniform(0.18, 0.55))
             time.sleep(rnd.uniform(0.35, 0.9))
         except Exception as exc:  # pylint: disable=broad-except
-            _log.warning(
-                "CDP wheel scroll unavailable (%s); falling back to JS scrollIntoView",
-                _sanitize_error(str(exc)),
-            )
+            _log.warning("CDP wheel scroll unavailable (%s); falling back to JS scrollIntoView", _sanitize_error(str(exc)))
             try:
-                self._driver.execute_script(
-                    "arguments[0].scrollIntoView({behavior:'smooth', block:'center'});",
-                    elements[0],
-                )
+                self._driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", elements[0])
             except Exception:  # pylint: disable=broad-except
                 _log.debug("JS scroll fallback also failed", exc_info=True)
 
@@ -2823,41 +2731,17 @@ class GivexDriver:
             SEL_SENDER_NAME, full_name, field_kind="name",
         )
         _log.info("fill_egift_form: running final validation pass")
-        final_lens = {}
-        for sel in [
-                SEL_GREETING_MSG,
-                SEL_AMOUNT_INPUT,
-                SEL_RECIPIENT_NAME,
-                SEL_RECIPIENT_EMAIL,
-                SEL_CONFIRM_RECIPIENT_EMAIL,
-                SEL_SENDER_NAME,
-        ]:
-            final_lens[sel] = self._field_value_length(sel)
-            _log.info(
-                "fill_egift_form: final_check field=%s value_len=%d",
-                _selector_name(sel), final_lens[sel],
-            )
-
+        fields = (SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
+        final_lens = {sel: self._field_value_length(sel) for sel in fields}
         for sel, ln in final_lens.items():
+            _log.info("fill_egift_form: final_check field=%s value_len=%d", _selector_name(sel), ln)
             if ln <= 0:
                 self._capture_failure_screenshot(f"final_check_empty_{_selector_name(sel)}")
-                raise SessionFlaggedError(
-                    f"Final validation: field {_selector_name(sel)} is empty "
-                    "after fill_egift_form completed (Givex auto-clear suspected)"
-                )
-
-        rcp_len = final_lens[SEL_RECIPIENT_EMAIL]
-        cnf_len = final_lens[SEL_CONFIRM_RECIPIENT_EMAIL]
-        # The confirmation rule must end with the same logical email length.
-        # This stricter cross-field check catches post-blur auto-clears or
-        # partial confirm-email fills that per-field minimums would not.
+                raise SessionFlaggedError(f"Final validation: field {_selector_name(sel)} is empty after fill_egift_form completed (Givex auto-clear suspected)")
+        rcp_len, cnf_len = final_lens[SEL_RECIPIENT_EMAIL], final_lens[SEL_CONFIRM_RECIPIENT_EMAIL]
         if rcp_len != cnf_len:
             self._capture_failure_screenshot("final_check_email_mismatch")
-            raise SessionFlaggedError(
-                f"Final validation: recipient_email_len={rcp_len} != "
-                f"confirm_email_len={cnf_len}"
-            )
-
+            raise SessionFlaggedError(f"Final validation: recipient_email_len={rcp_len} != confirm_email_len={cnf_len}")
         _log.info("fill_egift_form: completed (final validation passed)")
 
     def add_to_cart_and_checkout(self) -> None:
