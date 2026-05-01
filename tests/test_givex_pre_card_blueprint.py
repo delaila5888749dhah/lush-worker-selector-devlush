@@ -454,13 +454,14 @@ class WaitForInteractableTests(unittest.TestCase):
         gd._driver.execute_script.return_value = True
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
              patch.object(gd, "_wait_for_url_or_capture"), \
              patch.object(gd, "_engine_aware_sleep"), \
              patch("modules.cdp.driver.time.sleep"):
             gd.add_to_cart_and_checkout()
         scripts = [c.args[0] for c in gd._driver.execute_script.call_args_list]
-        self.assertTrue(any("closest('button,a,[role=\"button\"],.btn')" in s for s in scripts))
+        self.assertTrue(any("#cws_btn_gcBuyAdd" in s for s in scripts))
 
     def test_review_checkout_ready_requires_visible_nonzero_button(self):
         gd = GivexDriver(_make_driver(), strict=False)
@@ -483,6 +484,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
              patch.object(gd, "_wait_for_url_or_capture"), \
              patch("modules.cdp.driver.time.sleep", side_effect=sleeps.append):
@@ -494,6 +496,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True) as wait_inter, \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
              patch.object(gd, "_wait_for_element") as wait_element, \
              patch.object(gd, "_wait_for_url_or_capture"), \
@@ -507,6 +510,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, False)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"), \
@@ -521,13 +525,14 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, False)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"):
             with self.assertRaises(SelectorTimeoutError) as ctx:
                 gd.add_to_cart_and_checkout()
         self.assertEqual(ctx.exception.timeout, 21)
-        self.assertIsNone(ctx.exception.reason)
+        self.assertEqual(ctx.exception.reason, "review checkout absent")
         self.assertIsInstance(ctx.exception, SessionFlaggedError)
 
     def test_atc_present_disabled_timeout_is_distinct(self):
@@ -535,6 +540,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, True)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"):
@@ -543,6 +549,97 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         self.assertEqual(ctx.exception.timeout, 21)
         self.assertEqual(ctx.exception.reason, "present but disabled")
         self.assertIsInstance(ctx.exception, SessionFlaggedError)
+
+    def test_atc_cart_state_timeout_is_distinct_session_flagged(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        with patch.object(gd, "_click_closest_control_for"), \
+             patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_review_checkout_diagnostics", return_value={}), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(False, {})), \
+             patch.object(gd, "_wait_for_review_checkout_enabled") as review_wait, \
+             patch.object(gd, "_capture_failure_screenshot"), \
+             patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaisesRegex(SelectorTimeoutError, "cart total not materialized") as ctx:
+                gd.add_to_cart_and_checkout()
+        self.assertEqual(ctx.exception.timeout, 21)
+        self.assertEqual(ctx.exception.reason, "cart total not materialized")
+        self.assertIsInstance(ctx.exception, SessionFlaggedError)
+        review_wait.assert_not_called()
+
+    def test_click_closest_control_for_uses_control_rect_not_span_rect(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        gd._driver.execute_script.return_value = {
+            "span": {"x": 100, "y": 100, "w": 35, "h": 19},
+            "control": {"x": 10, "y": 20, "w": 313, "h": 37},
+        }
+        with patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
+             patch.object(gd, "cdp_click_absolute") as click:
+            gd._click_closest_control_for(drv.SEL_ADD_TO_CART)
+        click.assert_called_once()
+        x, y = click.call_args.args
+        self.assertGreaterEqual(x, 10)
+        self.assertLessEqual(x, 323)
+        self.assertGreaterEqual(y, 20)
+        self.assertLessEqual(y, 57)
+        script = gd._driver.execute_script.call_args.args[0]
+        self.assertIn("#cws_btn_gcBuyAdd", script)
+
+    def test_wait_for_cart_state_accepts_total_delta(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        baseline = {"total_like_present": False, "cart_like_visible_count": 1}
+        post = {"total_like_present": True, "cart_like_visible_count": 1}
+        with patch.object(gd, "_review_checkout_diagnostics", return_value=post), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            materialized, snapshot = gd._wait_for_cart_state_after_atc(baseline, timeout=1)
+        self.assertTrue(materialized)
+        self.assertIs(snapshot, post)
+        self.assertIn("signal=total_like_present", "\n".join(logs.output))
+
+    def test_wait_for_cart_state_accepts_explicit_line_item_delta(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        baseline = {
+            "total_like_present": False,
+            "explicit_cart_line_item_count": 0,
+            "explicit_cart_line_item_visible_count": 0,
+            "cart_like_visible_count": 1,
+        }
+        post = {
+            "total_like_present": False,
+            "explicit_cart_line_item_count": 1,
+            "explicit_cart_line_item_visible_count": 1,
+            "cart_like_visible_count": 1,
+        }
+        with patch.object(gd, "_review_checkout_diagnostics", return_value=post):
+            materialized, snapshot = gd._wait_for_cart_state_after_atc(baseline, timeout=1)
+        self.assertTrue(materialized)
+        self.assertIs(snapshot, post)
+
+    def test_wait_for_cart_state_accepts_review_enabled_without_total(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        baseline = {"total_like_present": False, "cart_like_visible_count": 1}
+        post = {
+            "total_like_present": False,
+            "cart_like_visible_count": 1,
+            "review_checkout": {"present": True, "enabled": True},
+        }
+        with patch.object(gd, "_review_checkout_diagnostics", return_value=post), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            materialized, snapshot = gd._wait_for_cart_state_after_atc(baseline, timeout=1)
+        self.assertTrue(materialized)
+        self.assertIs(snapshot, post)
+        self.assertIn("signal=review_checkout_enabled_without_total", "\n".join(logs.output))
+
+    def test_wait_for_cart_state_does_not_accept_cart_icon_delta_alone(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        baseline = {"total_like_present": False, "cart_like_visible_count": 1}
+        post = {"total_like_present": False, "cart_like_visible_count": 2}
+        with patch.object(gd, "_review_checkout_diagnostics", return_value=post), \
+             patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.monotonic", side_effect=[0.0, 0.0, 2.0]):
+            materialized, snapshot = gd._wait_for_cart_state_after_atc(baseline, timeout=1)
+        self.assertFalse(materialized)
+        self.assertIs(snapshot, post)
 
 
 if __name__ == "__main__":
