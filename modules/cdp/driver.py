@@ -437,6 +437,7 @@ _SELECTOR_NAMES = {
 
 
 def _selector_name(sel: str) -> str:
+    """Return a PII-safe symbolic selector name for structured field logs."""
     return _SELECTOR_NAMES.get(sel, "UNKNOWN_SELECTOR")
 
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
@@ -2330,6 +2331,7 @@ class GivexDriver:
                 )
                 viewport_h = self._driver.execute_script("return window.innerHeight") or 720
                 center = rect["top"] + rect["height"] / 2
+                # Aim for the field to settle naturally around mid-viewport.
                 target = viewport_h * rnd.uniform(0.45, 0.65)
                 delta = center - target
                 if abs(delta) < 80:

@@ -21,7 +21,7 @@ from modules.common.exceptions import SelectorTimeoutError, SessionFlaggedError
 from tests.test_givex_driver import _make_billing, _make_driver, _make_task
 
 
-class FixedRng:
+class LowBoundRng:
     def uniform(self, low, high):
         return low
 
@@ -88,7 +88,7 @@ class FocusBeforeTypeTests(unittest.TestCase):
             gd._realistic_type_field(SEL_RECIPIENT_EMAIL, "secret@example.com")
         self.assertEqual(order, ["scroll", "click", "type"])
 
-    def test_uses_existing_get_rng(self):
+    def test_realistic_type_field_calls_get_rng(self):
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
         gd = GivexDriver(selenium, strict=False)
@@ -252,7 +252,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         gd = GivexDriver(_make_driver(current_url=URL_CART), strict=False)
         sleeps = []
         with patch.object(gd, "bounding_box_click"), \
-             patch.object(gd, "_get_rng", return_value=FixedRng()), \
+             patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
              patch.object(gd, "_wait_for_url_or_capture"), \
              patch("modules.cdp.driver.time.sleep", side_effect=sleeps.append):
@@ -262,7 +262,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
     def test_atc_uses_interactable_not_just_element(self):
         gd = GivexDriver(_make_driver(current_url=URL_CART), strict=False)
         with patch.object(gd, "bounding_box_click"), \
-             patch.object(gd, "_get_rng", return_value=FixedRng()), \
+             patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True) as wait_inter, \
              patch.object(gd, "_wait_for_element") as wait_element, \
              patch.object(gd, "_wait_for_url_or_capture"), \
@@ -274,7 +274,7 @@ class AtcBlueprintWaitTests(unittest.TestCase):
     def test_atc_logs_diagnose_state_on_review_checkout_failure(self):
         gd = GivexDriver(_make_driver(), strict=False)
         with patch.object(gd, "bounding_box_click"), \
-             patch.object(gd, "_get_rng", return_value=FixedRng()), \
+             patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=False), \
              patch.object(gd, "_diagnose_non_interactable", return_value={"display": "none", "text_len": 0}) as diag, \
              patch.object(gd, "_capture_failure_screenshot"), \
