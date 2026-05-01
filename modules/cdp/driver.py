@@ -83,6 +83,7 @@ except ImportError:
     _get_current_sm = None  # type: ignore[assignment]
 
 _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
+_GIVEX_CART_STATE_POLL_DEFAULT_S = 18.0
 
 _log = logging.getLogger(__name__)
 
@@ -2011,7 +2012,7 @@ class GivexDriver:
                 const describe = (el) => {
                     if (!el) {
                         return {
-                            present: false, disabled: null, aria_disabled: null,
+                            present: false, enabled: false, disabled: null, aria_disabled: null,
                             pointer_events: null, display: null, visibility: null,
                             rect_w: 0, rect_h: 0, text_len: 0, class_len: 0
                         };
@@ -2019,8 +2020,12 @@ class GivexDriver:
                     const style = window.getComputedStyle(el);
                     const rect = el.getBoundingClientRect();
                     const text = typeof el.innerText === "string" ? el.innerText : "";
+                    const visible = rect.width > 0 && rect.height > 0
+                        && style.display !== "none" && style.visibility !== "hidden";
                     return {
                         present: true,
+                        enabled: !el.disabled && el.getAttribute("aria-disabled") !== "true"
+                            && style.pointerEvents !== "none" && visible,
                         disabled: Boolean(el.disabled),
                         aria_disabled: el.getAttribute("aria-disabled"),
                         pointer_events: style.pointerEvents,
@@ -2039,6 +2044,7 @@ class GivexDriver:
                 const reviewCheckout = document.querySelector(arguments[1]);
                 const visible = (el) => { const s = window.getComputedStyle(el), r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden"; };
                 const totalLike = document.querySelector('[class*="total"],[id*="total"]');
+                const explicitCartLineItems = document.querySelectorAll('[class*="cart-item"],[class*="lineItem"],[class*="product"][class*="row"]');
                 return {
                     localStorage_length: (() => {
                         try {
@@ -2061,6 +2067,8 @@ class GivexDriver:
                     review_checkout: describe(reviewCheckout),
                     cart_like_count: document.querySelectorAll('[class*="cart"],[id*="cart"]').length,
                     cart_like_visible_count: Array.from(document.querySelectorAll('[class*="cart"],[id*="cart"]')).filter(visible).length,
+                    explicit_cart_line_item_count: explicitCartLineItems.length,
+                    explicit_cart_line_item_visible_count: Array.from(explicitCartLineItems).filter(visible).length,
                     error_like_count: document.querySelectorAll('[class*="error"],[role="alert"]').length,
                     error_like_visible_count: Array.from(document.querySelectorAll('[class*="error"],[role="alert"]')).filter(visible).length,
                     total_like_present: Boolean(totalLike),
@@ -2472,7 +2480,8 @@ class GivexDriver:
         return changed
 
     def _wait_for_review_checkout_enabled(self, timeout: float) -> tuple[bool, bool]:
-        deadline, present = time.monotonic() + timeout, False
+        start = time.monotonic()
+        deadline, present, disabled_seen = start + timeout, False, False
         while time.monotonic() < deadline:
             try:
                 state = self._driver.execute_script(
@@ -2484,11 +2493,94 @@ class GivexDriver:
                 )
                 if isinstance(state, dict):
                     present = present or bool(state.get("present"))
+                    disabled_seen = disabled_seen or (bool(state.get("present")) and not bool(state.get("enabled")))
                     if state.get("enabled"):
+                        if disabled_seen:
+                            _log.info(
+                                "add_to_cart_and_checkout: review_checkout disabled True→False t+%.1fs",
+                                time.monotonic() - start,
+                            )
                         return True, True
             except Exception: pass  # noqa: E701  # pylint: disable=broad-except
             time.sleep(0.5)  # raw poll cadence; not behavioral pacing/DelayEngine budget
         return False, present
+
+    @staticmethod
+    def _snapshot_int(snapshot: dict, key: str) -> int:
+        try: return int(snapshot.get(key, 0) or 0)  # noqa: E701
+        except (TypeError, ValueError): return 0  # noqa: E701
+
+    @staticmethod
+    def _cart_log_snapshot(snapshot: dict) -> dict:
+        keys = ("cookie_count", "localStorage_length", "sessionStorage_length", "cart_like_count", "cart_like_visible_count", "explicit_cart_line_item_count", "explicit_cart_line_item_visible_count", "error_like_count", "error_like_visible_count", "total_like_present", "total_like_text_len")
+        return {key: snapshot.get(key) for key in keys if isinstance(snapshot, dict) and key in snapshot}
+
+    def _cart_state_snapshot(self) -> dict:
+        try:
+            data = self._driver.execute_script("const v=(e)=>{if(!e)return false;const s=getComputedStyle(e),r=e.getBoundingClientRect();return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'};const t=document.querySelector('[class*=\"total\"],[id*=\"total\"]');const l=document.querySelectorAll('[class*=\"cart-item\"],[class*=\"lineItem\"],[class*=\"product\"][class*=\"row\"]');const c=document.querySelectorAll('[class*=\"cart\"],[id*=\"cart\"]');const e=document.querySelectorAll('[class*=\"error\"],[role=\"alert\"]');const b=document.querySelector(arguments[0]);return {total_like_present:Boolean(t),total_like_text_len:t&&typeof t.innerText==='string'?t.innerText.length:0,explicit_cart_line_item_count:l.length,explicit_cart_line_item_visible_count:Array.from(l).filter(v).length,cart_like_visible_count:Array.from(c).filter(v).length,error_like_visible_count:Array.from(e).filter(v).length,review_checkout:{present:Boolean(b),enabled:!!b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true'&&getComputedStyle(b).pointerEvents!=='none'&&v(b),disabled:b?Boolean(b.disabled):null}};", SEL_REVIEW_CHECKOUT)
+            return data if isinstance(data, dict) else {}
+        except Exception: return {}  # noqa: E701  # pylint: disable=broad-except
+
+    def _wait_for_cart_state_after_atc(self, baseline: dict, timeout: float) -> tuple[bool, dict]:
+        """Poll for delta-based cart/total materialization after Add-to-Cart."""
+        start = time.monotonic()
+        deadline = start + timeout
+        baseline = baseline if isinstance(baseline, dict) else {}
+        baseline_total = bool(baseline.get("total_like_present"))
+        baseline_line_count = self._snapshot_int(baseline, "explicit_cart_line_item_count")
+        baseline_line_visible = self._snapshot_int(baseline, "explicit_cart_line_item_visible_count")
+        baseline_cart_visible = self._snapshot_int(baseline, "cart_like_visible_count")
+        baseline_review = baseline.get("review_checkout")
+        baseline_review_disabled = isinstance(baseline_review, dict) and bool(baseline_review.get("present")) and not bool(baseline_review.get("enabled"))
+        last_snapshot = baseline
+
+        while time.monotonic() < deadline:
+            snapshot = self._cart_state_snapshot()
+            if isinstance(snapshot, dict):
+                last_snapshot = snapshot
+            total_like_present = bool(last_snapshot.get("total_like_present"))
+            line_count_delta = self._snapshot_int(last_snapshot, "explicit_cart_line_item_count") - baseline_line_count
+            line_visible_delta = self._snapshot_int(last_snapshot, "explicit_cart_line_item_visible_count") - baseline_line_visible
+            cart_visible_delta = self._snapshot_int(last_snapshot, "cart_like_visible_count") - baseline_cart_visible
+
+            signal = None
+            if total_like_present and not baseline_total:
+                signal = "total_like_present"
+            elif line_visible_delta > 0 or line_count_delta > 0:
+                signal = "explicit_cart_line_item"
+            else:
+                review = last_snapshot.get("review_checkout")
+                if baseline_review_disabled and isinstance(review, dict) and bool(review.get("present")) and bool(review.get("enabled")):
+                    signal = "review_checkout_enabled_without_total"
+
+            if signal:
+                if signal == "review_checkout_enabled_without_total" and baseline_review_disabled:
+                    _log.info("add_to_cart_and_checkout: review_checkout disabled True→False t+%.1fs", time.monotonic() - start)
+                _log.info(
+                    "add_to_cart_and_checkout: cart_state materialized t+%.1fs signal=%s "
+                    "total_like_present=%s total_like_baseline=%s "
+                    "explicit_line_count_delta=%s explicit_line_visible_delta=%s "
+                    "cart_like_visible_delta=%s",
+                    time.monotonic() - start,
+                    signal,
+                    total_like_present,
+                    baseline_total,
+                    line_count_delta,
+                    line_visible_delta,
+                    cart_visible_delta,
+                )
+                return True, last_snapshot
+
+            time.sleep(0.5)  # raw poll cadence; not behavioral pacing/DelayEngine budget
+
+        _log.error(
+            "add_to_cart_and_checkout: cart_state timeout after %.0fs "
+            "snapshot=%s cart_like_visible_delta=%s",
+            timeout,
+            self._cart_log_snapshot(last_snapshot),
+            self._snapshot_int(last_snapshot, "cart_like_visible_count") - baseline_cart_visible,
+        )
+        return False, last_snapshot
 
     def _human_scroll_to(self, selector: str, *, max_steps: int = 12) -> None:
         elements = self.find_elements(selector)
@@ -2588,6 +2680,67 @@ class GivexDriver:
             return
 
         time.sleep(click_delay * len(points))
+
+    def _click_closest_control_for(self, span_selector: str) -> None:
+        """Click the nearest clickable control for a span locator."""
+        try:
+            rects = self._driver.execute_script(
+                "const s=document.querySelector(arguments[0]);"
+                "if(!s)return null;"
+                "const c=s.closest('button,a,[role=\"button\"],.btn,#cws_btn_gcBuyAdd')||s;"
+                "const sr=s.getBoundingClientRect(),cr=c.getBoundingClientRect();"
+                "return {span:{x:sr.x,y:sr.y,w:sr.width,h:sr.height},"
+                "control:{x:cr.x,y:cr.y,w:cr.width,h:cr.height}};",
+                span_selector,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if self._strict:
+                raise CDPClickError(f"closest-control rect failed for {span_selector}: {exc}") from exc
+            _log.warning(
+                "_click_closest_control_for: rect lookup failed for %r; falling back to locator click",
+                span_selector,
+                exc_info=True,
+            )
+            self.bounding_box_click(span_selector)
+            return
+
+        if not isinstance(rects, dict) or not isinstance(rects.get("control"), dict):
+            if rects is None:
+                raise SelectorTimeoutError(span_selector, 0)
+            if self._strict:
+                raise CDPClickError(f"closest-control rect missing for {span_selector}: {rects}")
+            self.bounding_box_click(span_selector)
+            return
+
+        control = rects["control"]
+        try:
+            left = float(control["x"])
+            top = float(control["y"])
+            width = float(control["w"])
+            height = float(control["h"])
+        except (KeyError, TypeError, ValueError) as exc:
+            if self._strict:
+                raise CDPClickError(f"closest-control rect invalid for {span_selector}: {rects}") from exc
+            self.bounding_box_click(span_selector)
+            return
+
+        if width <= 0 or height <= 0:
+            if self._strict:
+                raise CDPClickError(f"closest-control rect zero-size for {span_selector}: {rects}")
+            self.bounding_box_click(span_selector)
+            return
+
+        rnd = self._get_rng()
+        inset_x = min(width / 2.0, max(1.0, width * 0.12))
+        inset_y = min(height / 2.0, max(1.0, height * 0.18))
+        x_low, x_high = left + inset_x, left + width - inset_x
+        y_low, y_high = top + inset_y, top + height - inset_y
+        x = (left + width / 2.0) if x_low > x_high else rnd.uniform(x_low, x_high)
+        y = (top + height / 2.0) if y_low > y_high else rnd.uniform(y_low, y_high)
+        # Minimal adaptation to live DOM — span used as locator, click resolved to
+        # nearest control because diagnostic shows span 35×19 < control 313×37.
+        self._ghost_move_to(span_selector)
+        self.cdp_click_absolute(float(x), float(y))
 
     def bounding_box_click(self, selector: str) -> None:
         """Click using randomized bounding-box coordinates, with safe fallbacks.
@@ -3012,7 +3165,7 @@ class GivexDriver:
         if not self._wait_for_interactable(SEL_ADD_TO_CART, timeout=add_to_cart_timeout):
             raise SelectorTimeoutError(SEL_ADD_TO_CART, add_to_cart_timeout)
         atc_deadline = time.monotonic() + add_to_cart_timeout
-        atc_ready_js = "const el=document.querySelector(arguments[0]);const c=el?el.closest('button,a,[role=\"button\"],.btn'):null;return !!c&&!c.disabled&&c.getAttribute('aria-disabled')!=='true';"
+        atc_ready_js = "const el=document.querySelector(arguments[0]);const c=el?el.closest('button,a,[role=\"button\"],.btn,#cws_btn_gcBuyAdd'):null;return !!c&&!c.disabled&&c.getAttribute('aria-disabled')!=='true';"
         while True:
             try:
                 if bool(self._driver.execute_script(atc_ready_js, SEL_ADD_TO_CART)):
@@ -3022,33 +3175,60 @@ class GivexDriver:
                 raise SelectorTimeoutError(SEL_ADD_TO_CART, add_to_cart_timeout, reason="add-to-cart present but disabled")
             time.sleep(0.25)
         self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
-        self.bounding_box_click(SEL_ADD_TO_CART)
+        cart_baseline = self._review_checkout_diagnostics()
+        atc_flow_start = time.monotonic()
+        self._click_closest_control_for(SEL_ADD_TO_CART)
         delay = 3.0 + self._get_rng().uniform(0.1, 0.8)
         _log.info(
-            "add_to_cart_and_checkout: ATC clicked, waiting %.2fs per blueprint",
+            "add_to_cart_and_checkout: ATC clicked t+%.1fs baseline=%s; "
+            "waiting %.2fs per blueprint",
+            time.monotonic() - atc_flow_start,
+            self._cart_log_snapshot(cart_baseline),
             delay,
         )
         time.sleep(delay)
+        try:
+            cart_timeout = float(os.environ.get("GIVEX_CART_STATE_POLL_S", str(_GIVEX_CART_STATE_POLL_DEFAULT_S)))
+        except ValueError:
+            cart_timeout = _GIVEX_CART_STATE_POLL_DEFAULT_S
+        cart_poll_start = time.monotonic()
+        cart_materialized, _cart_snapshot = self._wait_for_cart_state_after_atc(
+            cart_baseline,
+            timeout=cart_timeout,
+        )
+        cart_poll_elapsed = time.monotonic() - cart_poll_start
+        if not cart_materialized:
+            self._capture_failure_screenshot("cart_state_not_materialized")
+            raise SelectorTimeoutError(
+                SEL_REVIEW_CHECKOUT,
+                int(time.monotonic() - atc_flow_start),
+                reason="cart total not materialized",
+            )
         _log.info("add_to_cart_and_checkout: settled, waiting Review-Checkout interactable")
         try:
             interactable_timeout = float(os.environ.get("GIVEX_REVIEW_CHECKOUT_POLL_S", str(_GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S)))
         except ValueError:
             interactable_timeout = _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S
+        review_poll_start = time.monotonic()
         found, present = self._wait_for_review_checkout_enabled(timeout=interactable_timeout)
+        review_poll_elapsed = time.monotonic() - review_poll_start
         if not found:
             flavor = "present but disabled" if present else "not found"
+            total_elapsed = time.monotonic() - atc_flow_start
             _log.error(
-                "add_to_cart_and_checkout: Review-Checkout %s after %.2fs blueprint wait + %.0fs poll",
+                "add_to_cart_and_checkout: Review-Checkout %s blueprint_wait=%.2fs cart_poll_elapsed=%.2fs review_poll=%.2fs total_elapsed=%.2fs",
                 flavor,
                 delay,
-                interactable_timeout,
+                cart_poll_elapsed,
+                review_poll_elapsed,
+                total_elapsed,
             )
             self._log_review_checkout_diagnostics()
             self._capture_failure_screenshot("review_checkout_not_interactable")
-            timeout = int(delay + interactable_timeout)
+            timeout = int(total_elapsed)
             if present:
                 raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout, reason="present but disabled")
-            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout)
+            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout, reason="review checkout absent")
         _log.info("add_to_cart_and_checkout: Review-Checkout interactable")
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
         _log.info("add_to_cart_and_checkout: Review-Checkout clicked")

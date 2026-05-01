@@ -247,6 +247,23 @@ def test_orchestrator_records_failure_on_review_checkout_disabled_timeout():
     autoscaler.record_failure.assert_called_once_with("worker-1")
 
 
+def test_orchestrator_records_failure_on_cart_total_not_materialized_timeout():
+    autoscaler = MagicMock()
+    store = MagicMock()
+    store.is_duplicate.return_value = False
+    err = SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 21, reason="cart total not materialized")
+    assert "cart total not materialized" in str(err)  # nosec B101
+    with ExitStack() as stack:
+        stack.enter_context(patch("integration.orchestrator._get_autoscaler", return_value=autoscaler))
+        stack.enter_context(patch("integration.orchestrator._get_idempotency_store", return_value=store))
+        stack.enter_context(patch("integration.orchestrator.initialize_cycle", side_effect=err))
+        stack.enter_context(patch("integration.orchestrator.cdp.unregister_driver"))
+        stack.enter_context(patch("integration.orchestrator.fsm.cleanup_worker"))
+        with pytest.raises(SessionFlaggedError):
+            orchestrator.run_cycle(_task(), worker_id="worker-1")
+    autoscaler.record_failure.assert_called_once_with("worker-1")
+
+
 def test_startup_config_rejects_worker_count_zero():
     """WORKER_COUNT=0 → ConfigError raised."""
     with patch.dict(os.environ, {"WORKER_COUNT": "0"}, clear=True), \
