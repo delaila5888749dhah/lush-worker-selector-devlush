@@ -544,6 +544,11 @@ class TestSelectGuestCheckout(unittest.TestCase):
 
         begin_el.click.assert_called_once()
         email_el.send_keys.assert_not_called()
+        cdp_chars = "".join(
+            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
+            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
+        )
+        self.assertIn("guest@example.com", cdp_chars)
         continue_el.click.assert_called_once()
         self.assertIn("signal=guest_email", "\n".join(logs.output))
         self.assertIn("skipping heading click", "\n".join(logs.output))

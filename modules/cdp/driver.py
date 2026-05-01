@@ -3640,8 +3640,13 @@ class GivexDriver:
             current = ""
             try:
                 current = self._driver.current_url or ""
-            except Exception:  # URL briefly unavailable during page transition
+            except WebDriverException:  # URL briefly unavailable during page transition
                 _log.debug("Checkout/guest inline wait deferred: URL unavailable")
+            except Exception as exc:  # pylint: disable=broad-except
+                _log.warning(
+                    "Checkout/guest inline wait URL read failed: %s",
+                    _sanitize_error(str(exc)),
+                )
             if current:
                 last_url = current
             if URL_CHECKOUT in current:
@@ -3662,12 +3667,13 @@ class GivexDriver:
 
         Steps:
         1. Wait for and click Begin Checkout on the cart page.
-        2. Wait for the checkout page (``URL_CHECKOUT``) or inline guest
+        2. Verify Begin Checkout is hittable after scroll before clicking.
+        3. Wait for the checkout page (``URL_CHECKOUT``) or inline guest
            checkout controls on the cart page.
-        3. Click the guest heading (``#guestHeading``) if the guest email
+        4. Click the guest heading (``#guestHeading``) if the guest email
            field is not already visible.
-        4. Enter *guest_email* and click Continue.
-        5. Wait for the payment page (``URL_PAYMENT``).
+        5. Enter *guest_email* and click Continue.
+        6. Wait for the payment page (``URL_PAYMENT``).
 
         Args:
             guest_email: Email address to enter in the guest checkout field.
