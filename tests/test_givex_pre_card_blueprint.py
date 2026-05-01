@@ -745,7 +745,7 @@ _CANONICAL_AUDIT = {
 }
 
 _FORBIDDEN_PII_PATTERN = _re.compile(
-    r"innerText|outerHTML|innerHTML(?!\.length)|placeholder|cookie|storage|email|sender|recipient|card|password",
+    r"innerText|outerHTML|innerHTML|placeholder|cookie|storage|email|sender|recipient|card|password",
     _re.I,
 )
 
@@ -796,7 +796,7 @@ class CartDomAuditTests(unittest.TestCase):
         forbidden = _FORBIDDEN_PII_PATTERN
         for k in audit:
             self.assertIsNone(forbidden.search(k), f"Forbidden key found: {k}")
-        self.assertNotRegex(repr(audit), r"@\.")
+        self.assertNotRegex(repr(audit), r"@[^@\s]+\.")
 
     def test_cart_dom_audit_logged_on_timeout(self):
         gd = GivexDriver(_make_driver(), strict=False)
