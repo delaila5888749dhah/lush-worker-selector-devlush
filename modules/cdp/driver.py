@@ -1975,7 +1975,10 @@ class GivexDriver:
                     }
                     const style = window.getComputedStyle(el);
                     const rect = el.getBoundingClientRect();
-                    const className = el.getAttribute("class") || "";
+                    const rawClass = el.className;
+                    const className = rawClass && typeof rawClass.baseVal === "string"
+                        ? rawClass.baseVal
+                        : (typeof rawClass === "string" ? rawClass : (el.getAttribute("class") || ""));
                     const text = typeof el.innerText === "string" ? el.innerText : "";
                     return {
                         present: true,
@@ -2000,6 +2003,7 @@ class GivexDriver:
                         try {
                             return window.localStorage ? window.localStorage.length : -1;
                         } catch (e) {
+                            // PII-safe sentinel for restricted storage contexts.
                             return -1;
                         }
                     })(),
@@ -2007,6 +2011,7 @@ class GivexDriver:
                         try {
                             return window.sessionStorage ? window.sessionStorage.length : -1;
                         } catch (e) {
+                            // PII-safe sentinel for restricted storage contexts.
                             return -1;
                         }
                     })(),
