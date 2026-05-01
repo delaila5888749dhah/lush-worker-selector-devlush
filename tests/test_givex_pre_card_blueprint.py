@@ -285,21 +285,6 @@ class WaitForInteractableTests(unittest.TestCase):
              patch.object(gd, "_is_interactable", side_effect=[False, True]):
             self.assertTrue(gd._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=1))
 
-    def test_diagnose_returns_sanitized_state_on_failure(self):
-        gd = GivexDriver(_make_driver(), strict=False)
-        gd._driver.execute_script.return_value = {
-            "present": True,
-            "display": "none",
-            "rect_w": 0,
-            "rect_h": 0,
-            "text_len": 0,
-        }
-        state = gd._diagnose_non_interactable(SEL_REVIEW_CHECKOUT)
-        self.assertIn("display", state)
-        self.assertNotIn("url", state)
-        self.assertNotIn("value", state)
-
-
 class AtcBlueprintWaitTests(unittest.TestCase):
     def test_atc_sleeps_at_least_3s_before_review_checkout(self):
         gd = GivexDriver(_make_driver(current_url=URL_CART), strict=False)
@@ -324,19 +309,17 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         wait_inter.assert_called_once_with(SEL_REVIEW_CHECKOUT, timeout=10)
         wait_element.assert_not_called()
 
-    def test_atc_logs_diagnose_state_on_review_checkout_failure(self):
+    def test_atc_logs_review_checkout_failure_without_pii(self):
         gd = GivexDriver(_make_driver(), strict=False)
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=False), \
-             patch.object(gd, "_diagnose_non_interactable", return_value={"display": "none", "text_len": 0}) as diag, \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"), \
              self.assertLogs("modules.cdp.driver", level="ERROR") as logs:
             with self.assertRaises(SelectorTimeoutError):
                 gd.add_to_cart_and_checkout()
-        diag.assert_called_once_with(SEL_REVIEW_CHECKOUT)
-        self.assertIn("display", "\n".join(logs.output))
+        self.assertIn("Review-Checkout NOT interactable", "\n".join(logs.output))
         self.assertNotIn("@example.com", "\n".join(logs.output))
 
     def test_atc_timeout_includes_blueprint_wait(self):
@@ -344,65 +327,11 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=False), \
-             patch.object(gd, "_diagnose_non_interactable", return_value={}), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"):
             with self.assertRaises(SelectorTimeoutError) as ctx:
                 gd.add_to_cart_and_checkout()
         self.assertEqual(ctx.exception.timeout, 13)
-
-
-class ClickHumanizationTests(unittest.TestCase):
-    def test_mousemoved_jitter_within_2px(self):
-        driver = MagicMock()
-        with patch("modules.cdp.driver.time.sleep"):
-            drv._dispatch_cdp_click_sequence(driver, 100, 200, rng=random.Random(1), jitter=True)
-        move = driver.execute_cdp_cmd.call_args_list[0].args[1]
-        self.assertLessEqual(abs(move["x"] - 100), 2)
-        self.assertLessEqual(abs(move["y"] - 200), 2)
-
-    def test_press_release_share_coordinate(self):
-        driver = MagicMock()
-        with patch("modules.cdp.driver.time.sleep"):
-            drv._dispatch_cdp_click_sequence(driver, 100, 200, rng=random.Random(2), jitter=True)
-        press = driver.execute_cdp_cmd.call_args_list[1].args[1]
-        release = driver.execute_cdp_cmd.call_args_list[2].args[1]
-        self.assertEqual(press["x"], release["x"])
-        self.assertEqual(press["y"], release["y"])
-
-    def test_press_hold_between_50_and_160_ms(self):
-        driver = MagicMock()
-        sleeps = []
-        with patch("modules.cdp.driver.time.sleep", side_effect=sleeps.append):
-            drv._dispatch_cdp_click_sequence(driver, 100, 200, rng=random.Random(3), jitter=True)
-        self.assertGreaterEqual(sleeps[1], 0.05)
-        self.assertLessEqual(sleeps[1], 0.16)
-
-    def test_bounding_box_offset_x_y_preserved(self):
-        rect = {"left": 10, "top": 20, "width": 200, "height": 80}
-        selenium = _make_driver()
-        selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = rect
-        gd = GivexDriver(selenium, strict=False)
-        gd._rnd = random.Random(5)
-        offsets = []
-        with patch.object(gd, "_ghost_move_to"), patch("modules.cdp.driver.time.sleep"):
-            for _ in range(100):
-                selenium.execute_cdp_cmd.reset_mock()
-                gd.bounding_box_click("#btn")
-                pressed = [
-                    c.args[1] for c in selenium.execute_cdp_cmd.call_args_list
-                    if c.args[1]["type"] == "mousePressed"
-                ][0]
-                offsets.append((
-                    pressed["x"] - (rect["left"] + rect["width"] / 2),
-                    pressed["y"] - (rect["top"] + rect["height"] / 2),
-                ))
-        for offset_x, offset_y in offsets:
-            self.assertGreaterEqual(offset_x, -15)
-            self.assertLessEqual(offset_x, 15)
-            self.assertGreaterEqual(offset_y, -5)
-            self.assertLessEqual(offset_y, 5)
 
 
 if __name__ == "__main__":

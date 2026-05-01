@@ -894,7 +894,7 @@ def _dispatch_cdp_click_sequence(
     Emits ``Input.dispatchMouseEvent`` at ``(abs_x, abs_y)`` for each event
     type so the target receives a proper hover-then-click sequence (matching
     real user input). When ``jitter`` is True, a small sub-pixel offset is
-    added to the hover event to better mimic human cursor settle.
+    added to each successive event to better mimic human cursor drift.
 
     Args:
         driver: Raw Selenium WebDriver exposing ``execute_cdp_cmd``.
@@ -904,24 +904,24 @@ def _dispatch_cdp_click_sequence(
             ``jitter`` is True. If ``None``, a fresh per-call
             ``random.Random()`` instance is used so no module-level RNG
             state is shared across threads.
-        jitter: When True, apply settle wobble to the hover event.
+        jitter: When True, apply up to ±0.5px per-event drift.
     """
     rnd = rng if rng is not None else _random.Random()
-    move_x = abs_x + (rnd.uniform(-2.0, 2.0) if jitter else 0.0)
-    move_y = abs_y + (rnd.uniform(-2.0, 2.0) if jitter else 0.0)
-    driver.execute_cdp_cmd(
-        "Input.dispatchMouseEvent", {"type": "mouseMoved", "x": move_x, "y": move_y, "button": "none"},
-    )
-    time.sleep(rnd.uniform(0.08, 0.25))
-    driver.execute_cdp_cmd(
-        "Input.dispatchMouseEvent",
-        {"type": "mousePressed", "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1},
-    )
-    time.sleep(rnd.uniform(0.05, 0.16))
-    driver.execute_cdp_cmd(
-        "Input.dispatchMouseEvent",
-        {"type": "mouseReleased", "x": abs_x, "y": abs_y, "button": "left", "clickCount": 1},
-    )
+    for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+        event_x, event_y = abs_x, abs_y
+        if jitter:
+            event_x += rnd.uniform(-0.5, 0.5)
+            event_y += rnd.uniform(-0.5, 0.5)
+        driver.execute_cdp_cmd(
+            "Input.dispatchMouseEvent",
+            {
+                "type": event_type,
+                "x": event_x,
+                "y": event_y,
+                "button": "left",
+                "clickCount": 1,
+            },
+        )
 
 
 def _get_proxy_ip(proxy_str: str | None = None) -> str | None:
@@ -1936,18 +1936,6 @@ class GivexDriver:
             time.sleep(0.5)
         return False
 
-    def _diagnose_non_interactable(self, selector: str) -> dict:
-        js = ("const e=document.querySelector(arguments[0]);if(!e)return {present:false};"
-              "const s=getComputedStyle(e),r=e.getBoundingClientRect(),txt=(e.textContent||'').trim();"
-              "return {present:true,displayed:!!(r.width>0&&r.height>0),disabled:!!e.disabled,"
-              "aria_disabled:e.getAttribute('aria-disabled'),rect_w:r.width,rect_h:r.height,"
-              "display:s.display,visibility:s.visibility,pointer_events:s.pointerEvents,"
-              "class_name_snippet:(e.className||'').slice(0,80),text_len:txt.length};")
-        try:
-            return self._driver.execute_script(js, selector) or {"present": False}
-        except Exception:  # pylint: disable=broad-except
-            return {"present": False, "diagnose_error": True}
-
     def _field_value_length(self, selector: str) -> int:
         js = "const el=document.querySelector(arguments[0]);return el&&typeof el.value==='string'?el.value.length:-1;"
         try:
@@ -2481,7 +2469,7 @@ class GivexDriver:
 
         # Branch 4: CDP dispatch failure
         try:
-            _dispatch_cdp_click_sequence(self._driver, abs_x, abs_y, rng=rnd, jitter=True)
+            _dispatch_cdp_click_sequence(self._driver, abs_x, abs_y)
             return
         except Exception as exc:  # pylint: disable=broad-except
             if self._strict:
@@ -2812,12 +2800,10 @@ class GivexDriver:
         interactable_timeout = 10
         found = self._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=interactable_timeout)
         if not found:
-            state = self._diagnose_non_interactable(SEL_REVIEW_CHECKOUT)
             _log.error(
-                "add_to_cart_and_checkout: Review-Checkout NOT interactable after %.2fs blueprint wait + %ds poll; state=%s",
+                "add_to_cart_and_checkout: Review-Checkout NOT interactable after %.2fs blueprint wait + %ds poll",
                 delay,
                 interactable_timeout,
-                state,
             )
             self._capture_failure_screenshot("review_checkout_not_interactable")
             raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, int(delay) + interactable_timeout)
