@@ -113,6 +113,8 @@ FSM §6, Anti-detect §9, Behavior §8 KHÔNG đổi.
 
 3. Xâm nhập & Cách ly Phiên (00:20 - 00:30)
 
+· Hard-Reset State: Selenium thực thi script dọn sạch Cookies, Local Storage và Session Storage ngay lập tức. Giỏ hàng bị ép về trạng thái "trắng", loại trừ 100% rủi ro cộng dồn đơn hàng cũ.
+
 · Khởi tạo & Điều hướng
 
 · URL mục tiêu: https://wwws-usa2.givex.com/cws4.0/lushusa/
@@ -124,8 +126,6 @@ FSM §6, Anti-detect §9, Behavior §8 KHÔNG đổi.
   Selector: #cardForeground > div > div.bannerButtons.clearfix > div.bannerBtn.btn1.displaySectionYes > a
 
 · Sau đó điều hướng tới URL tạo thẻ: https://wwws-usa2.givex.com/cws4.0/lushusa/e-gifts/
-
-· Hard-Reset State: Selenium thực thi script dọn sạch Cookies, Local Storage và Session Storage ngay lập tức. Giỏ hàng bị ép về trạng thái "trắng", loại trừ 100% rủi ro cộng dồn đơn hàng cũ.
 
 4. Mô Phỏng Sinh Học Trên Form (00:30 - 00:50)
 
