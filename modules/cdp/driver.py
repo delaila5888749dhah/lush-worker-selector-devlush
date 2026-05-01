@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import math
 import os
 import random as _random
 import secrets
@@ -74,10 +75,14 @@ try:
     from modules.delay.state import BehaviorStateMachine as _BehaviorStateMachine  # type: ignore
     from modules.delay.state import get_current_sm as _get_current_sm  # type: ignore
     from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
+    from modules.delay.config import MAX_STEP_DELAY as _MAX_STEP_DELAY  # type: ignore
 except ImportError:
     _BiometricProfile = _TemporalModel = None
     _BehaviorStateMachine = _DelayEngine = None
+    _MAX_STEP_DELAY = 7.0
     _get_current_sm = None  # type: ignore[assignment]
+
+_GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 
 _log = logging.getLogger(__name__)
 
@@ -1859,6 +1864,20 @@ class GivexDriver:
         import random as _random  # noqa: PLC0415
         return _random.SystemRandom()
 
+    def _engine_aware_sleep(self, low: float, high: float, reason: str) -> float:
+        rnd = self._get_rng()
+        low, high = (high, low) if high < low else (low, high)
+        requested = max(0.0, min(float(rnd.uniform(low, high)), float(_MAX_STEP_DELAY)))
+        if self._engine is not None:
+            if not self._engine.is_delay_permitted():
+                requested = 0.0
+            else:
+                requested = self._engine.accumulate_delay(requested)
+        _log.debug("engine_aware_sleep: reason=%s delay=%.3f", reason, requested)
+        if requested > 0:
+            time.sleep(requested)
+        return requested if requested > 0 else 0.0
+
     def set_proxy_utc_offset(self, utc_offset_hours: int) -> None:
         """Set UTC offset for temporal model (injected by orchestrator after geo-check)."""
         self._utc_offset_hours = utc_offset_hours
@@ -1955,6 +1974,13 @@ class GivexDriver:
         except Exception:  # pylint: disable=broad-except
             return None
 
+    def _form_validation_diagnostics(self) -> dict:
+        js = 'const known=new Map([[arguments[0],"SEL_GREETING_MSG"],[arguments[1],"SEL_AMOUNT_INPUT"],[arguments[2],"SEL_RECIPIENT_NAME"],[arguments[3],"SEL_RECIPIENT_EMAIL"],[arguments[4],"SEL_CONFIRM_RECIPIENT_EMAIL"],[arguments[5],"SEL_SENDER_NAME"]]);const sym=(el)=>{for(const [sel,name] of known.entries()){try{if(el.matches(sel))return name;}catch(e){}}return null;};const desc=(el)=>{const v=el.validity||{},value=typeof el.value==="string"?el.value:"",msg=typeof el.validationMessage==="string"?el.validationMessage:"";return {selector_name:sym(el),tag:(el.tagName||"").toLowerCase(),type:el.getAttribute("type")||"",id_len:(el.id||"").length,name_len:(el.getAttribute("name")||"").length,value_len:value.length,validity:{valid:Boolean(v.valid),valueMissing:Boolean(v.valueMissing),typeMismatch:Boolean(v.typeMismatch),patternMismatch:Boolean(v.patternMismatch),rangeUnderflow:Boolean(v.rangeUnderflow),rangeOverflow:Boolean(v.rangeOverflow),tooShort:Boolean(v.tooShort),tooLong:Boolean(v.tooLong),customError:Boolean(v.customError)},validationMessage_len:msg.length};};return {forms:Array.from(document.forms||[]).map((form)=>({checkValidity:(()=>{try{return Boolean(form.checkValidity())}catch(e){return false}})(),elements_length:(form.elements||[]).length,elements:Array.from(form.elements||[]).map(desc)}))};'
+        try:
+            data = self._driver.execute_script(js, SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
+            return data if isinstance(data, dict) else {"forms": []}
+        except Exception: return {"forms": []}  # noqa: E701  # pylint: disable=broad-except
+
     def _review_checkout_diagnostics(self) -> dict:
         """Return PII-safe diagnostics for the Add-to-Cart → Review Checkout handoff.
 
@@ -2011,6 +2037,8 @@ class GivexDriver:
                     ? addToCartSpan.closest('button,a,[role="button"],.btn')
                     : null;
                 const reviewCheckout = document.querySelector(arguments[1]);
+                const visible = (el) => { const s = window.getComputedStyle(el), r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden"; };
+                const totalLike = document.querySelector('[class*="total"],[id*="total"]');
                 return {
                     localStorage_length: (() => {
                         try {
@@ -2030,7 +2058,13 @@ class GivexDriver:
                     })(),
                     add_to_cart_span: describe(addToCartSpan),
                     add_to_cart_parent: describe(addToCartParent),
-                    review_checkout: describe(reviewCheckout)
+                    review_checkout: describe(reviewCheckout),
+                    cart_like_count: document.querySelectorAll('[class*="cart"],[id*="cart"]').length,
+                    cart_like_visible_count: Array.from(document.querySelectorAll('[class*="cart"],[id*="cart"]')).filter(visible).length,
+                    error_like_count: document.querySelectorAll('[class*="error"],[role="alert"]').length,
+                    error_like_visible_count: Array.from(document.querySelectorAll('[class*="error"],[role="alert"]')).filter(visible).length,
+                    total_like_present: Boolean(totalLike),
+                    total_like_text_len: totalLike && typeof totalLike.innerText === "string" ? totalLike.innerText.length : 0
                 };
                 """,
                 SEL_ADD_TO_CART,
@@ -2038,30 +2072,31 @@ class GivexDriver:
             )
             if isinstance(data, dict):
                 data["cookie_count"] = cookie_count
+                data["form_validation"] = self._form_validation_diagnostics()
                 return data
         except Exception:  # pylint: disable=broad-except
             _log.debug("review_checkout_diagnostics: DOM snapshot unavailable", exc_info=True)
         return {
-            "cookie_count": cookie_count,
-            "localStorage_length": -1,
-            "sessionStorage_length": -1,
-            "add_to_cart_span": {},
-            "add_to_cart_parent": {},
-            "review_checkout": {},
+            "cookie_count": cookie_count, "localStorage_length": -1,
+            "sessionStorage_length": -1, "add_to_cart_span": {},
+            "add_to_cart_parent": {}, "review_checkout": {},
         }
 
     def _log_review_checkout_diagnostics(self) -> None:
         data = self._review_checkout_diagnostics()
+        logged_keys = {"cookie_count", "localStorage_length", "sessionStorage_length", "add_to_cart_span", "add_to_cart_parent", "review_checkout"}  # fields expanded in log slots below
+        extra = {k: v for k, v in data.items() if k not in logged_keys}
         _log.error(
             "add_to_cart_and_checkout: Review-Checkout diagnostics "
             "cookie_count=%s localStorage.length=%s sessionStorage.length=%s "
-            "add_to_cart_span=%s add_to_cart_parent=%s review_checkout=%s",
+            "add_to_cart_span=%s add_to_cart_parent=%s review_checkout=%s extra=%s",
             data.get("cookie_count"),
             data.get("localStorage_length"),
             data.get("sessionStorage_length"),
             data.get("add_to_cart_span"),
             data.get("add_to_cart_parent"),
             data.get("review_checkout"),
+            extra,
         )
 
     def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
@@ -2233,14 +2268,17 @@ class GivexDriver:
         verify_value = sel in _SELECTOR_NAMES
         if verify_value:
             self._human_scroll_to(sel)
+            self._wait_scroll_stable()
+            self._engine_aware_sleep(0.08, 0.20, "pre_focus_pause")
             self.bounding_box_click(sel)
-            time.sleep(self._get_rng().uniform(0.08, 0.25))
+            self._engine_aware_sleep(0.08, 0.25, "post_focus_pause")
         if _type_value is None:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
             self._send_keys_fallback(sel, val)
             if verify_value:
                 self._verify_field_value_length(sel, expected_len, selector_name)
+                self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
             return
         typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
         # Apply explicit ``typo_rate`` override first (callers who pass an
@@ -2294,6 +2332,7 @@ class GivexDriver:
         )
         if verify_value:
             self._verify_field_value_length(sel, expected_len, selector_name)
+            self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """Select the option matching *value* in a ``<select>`` element.
@@ -2382,6 +2421,75 @@ class GivexDriver:
                 f"_cdp_select_option: failed to dispatch Enter for {selector!r}",
             )
 
+    def _wait_scroll_stable(self, timeout: float = 2.0, stable_ms: float | None = None) -> bool:
+        stable_window = (stable_ms if stable_ms is not None else self._get_rng().uniform(350, 600)) / 1000.0
+        deadline, last, stable_since = time.monotonic() + timeout, None, None
+        while time.monotonic() < deadline:
+            try:
+                current = tuple(self._driver.execute_script(
+                    "return [window.scrollY||0,document.documentElement?document.documentElement.scrollTop||0:0,"
+                    "document.body?document.body.scrollTop||0:0];"
+                ))
+            except Exception: current = None  # noqa: E701  # pylint: disable=broad-except
+            now = time.monotonic()
+            if current is not None and current == last:
+                stable_since = now if stable_since is None else stable_since
+                if now - stable_since >= stable_window:
+                    return True
+            else:
+                last, stable_since = current, now if current is not None else None
+            time.sleep(0.1)  # raw poll cadence; not behavioral pacing/DelayEngine budget
+        _log.warning("_wait_scroll_stable: timeout after %.2fs", timeout)
+        return False
+
+    def _blur_active_field_naturally(self) -> bool:
+        active_js = "const el=document.activeElement;return el?{tag:(el.tagName||'').toLowerCase(),id_len:(el.id||'').length}:null;"
+        def active_snapshot():
+            try:
+                data = self._driver.execute_script(active_js)
+            except Exception: return None  # noqa: E701  # pylint: disable=broad-except
+            return data if isinstance(data, dict) else None
+
+        before = active_snapshot()
+        changed = False
+        from modules.cdp.keyboard import dispatch_key  # local import: avoid cycle
+        if dispatch_key(self._driver, "Tab"):
+            changed = (after := active_snapshot()) is not None and after != before
+        if not changed:
+            try:
+                point = self._driver.execute_script(
+                    "const unsafe=(el)=>{if(!el)return true;const tag=(el.tagName||'').toLowerCase();"
+                    "return ['input','button','a','select','textarea'].includes(tag)||el.getAttribute('role')==='button'};"
+                    "const c=[[Math.floor(window.innerWidth/2),Math.floor(window.innerHeight/2)],[24,24],"
+                    "[window.innerWidth-24,24],[24,window.innerHeight-24],[window.innerWidth-24,window.innerHeight-24]];"
+                    "for(const [x,y] of c){const el=document.elementFromPoint(x,y);if(!unsafe(el))return {x,y};}return null;"
+                )
+                if isinstance(point, dict) and "x" in point and "y" in point:
+                    self.cdp_click_absolute(float(point["x"]), float(point["y"]))
+                    changed = (after := active_snapshot()) is not None and after != before
+            except Exception: pass  # noqa: E701  # pylint: disable=broad-except
+        self._engine_aware_sleep(1.0, 2.2, "blur_sender_name_settle")
+        return changed
+
+    def _wait_for_review_checkout_enabled(self, timeout: float) -> tuple[bool, bool]:
+        deadline, present = time.monotonic() + timeout, False
+        while time.monotonic() < deadline:
+            try:
+                state = self._driver.execute_script(
+                    "const btn=document.querySelector(arguments[0]);if(!btn)return {present:false,enabled:false};"
+                    "const style=window.getComputedStyle(btn),rect=btn.getBoundingClientRect();"
+                    "return {present:true,enabled:!btn.disabled&&btn.getAttribute('aria-disabled')!=='true'"
+                    "&&style.pointerEvents!=='none'&&style.display!=='none'&&style.visibility!=='hidden'&&rect.width>0&&rect.height>0};",
+                    SEL_REVIEW_CHECKOUT,
+                )
+                if isinstance(state, dict):
+                    present = present or bool(state.get("present"))
+                    if state.get("enabled"):
+                        return True, True
+            except Exception: pass  # noqa: E701  # pylint: disable=broad-except
+            time.sleep(0.5)  # raw poll cadence; not behavioral pacing/DelayEngine budget
+        return False, present
+
     def _human_scroll_to(self, selector: str, *, max_steps: int = 12) -> None:
         elements = self.find_elements(selector)
         if not elements:
@@ -2389,26 +2497,26 @@ class GivexDriver:
         rnd = self._get_rng()
         stage = "init"
         try:
-            for _ in range(max_steps):
-                stage = "rect_read"
-                rect = self._driver.execute_script("const r=arguments[0].getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};", elements[0])
-                stage = "viewport_read"
-                viewport_h = self._driver.execute_script("return window.innerHeight") or 720
-                center = rect["top"] + rect["height"] / 2
-                delta = center - viewport_h * rnd.uniform(0.45, 0.65)
-                if abs(delta) < 80:
-                    break
-                dy = max(-420, min(420, delta * rnd.uniform(0.45, 0.75)))
-                stage = "wheel_dispatch"
-                if self._cursor is not None and hasattr(self._cursor, "scroll_wheel"):
-                    self._cursor.scroll_wheel(dy, steps=rnd.randint(3, 6))
-                else:
+            stage = "rect_read"
+            rect = self._driver.execute_script("const r=arguments[0].getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};", elements[0])
+            stage = "viewport_read"
+            viewport_h = self._driver.execute_script("return window.innerHeight") or 720
+            center = rect["top"] + rect["height"] / 2
+            delta = center - viewport_h * rnd.uniform(0.45, 0.65)
+            if abs(delta) >= 80:
+                pixels_per_tick = rnd.uniform(70, 115)
+                ticks = max(1, min(max_steps * 4, math.ceil(abs(delta) / pixels_per_tick)))  # cap each step to 4 micro-ticks
+                direction = 1 if delta > 0 else -1
+                for _tick_index in range(ticks):
+                    dy = direction * rnd.uniform(70, 120)
+                    stage = "wheel_dispatch"
                     self._driver.execute_cdp_cmd(
                         "Input.dispatchMouseEvent",
                         {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
                     )
-                time.sleep(rnd.uniform(0.18, 0.55))
-            time.sleep(rnd.uniform(0.35, 0.9))
+                    self._engine_aware_sleep(0.04, 0.11, "scroll_micro_tick")
+            stage = "scroll_final_settle"  # used by the except log if final settle raises
+            self._engine_aware_sleep(0.9, 1.8, "scroll_final_settle")
         except Exception as exc:  # pylint: disable=broad-except
             _log.warning(
                 "CDP wheel scroll failed at stage=%s (%s); falling back to JS scrollIntoView",
@@ -2836,6 +2944,7 @@ class GivexDriver:
         _log.info("fill_egift_form: started")
         if self._sm is not None:
             self._sm.transition("FILLING_FORM")
+        self._engine_aware_sleep(0.9, 2.2, "egift_observation_before_form_scroll")
         self._smooth_scroll_to(SEL_GREETING_MSG)
         full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
         greeting = _random_greeting(self._rnd)
@@ -2865,6 +2974,8 @@ class GivexDriver:
         self._realistic_type_field(
             SEL_SENDER_NAME, full_name, field_kind="name",
         )
+        if not self._blur_active_field_naturally():
+            _log.warning("fill_egift_form: blur active field failed after Tab and safe body-click fallback")
         _log.info("fill_egift_form: running final validation pass")
         fields = (SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
         final_lens = {sel: self._field_value_length(sel) for sel in fields}
@@ -2897,6 +3008,20 @@ class GivexDriver:
         the cart page (``URL_CART``) before returning.
         """
         _log.info("add_to_cart_and_checkout: started")
+        add_to_cart_timeout = 8
+        if not self._wait_for_interactable(SEL_ADD_TO_CART, timeout=add_to_cart_timeout):
+            raise SelectorTimeoutError(SEL_ADD_TO_CART, add_to_cart_timeout)
+        atc_deadline = time.monotonic() + add_to_cart_timeout
+        atc_ready_js = "const el=document.querySelector(arguments[0]);const c=el?el.closest('button,a,[role=\"button\"],.btn'):null;return !!c&&!c.disabled&&c.getAttribute('aria-disabled')!=='true';"
+        while True:
+            try:
+                if bool(self._driver.execute_script(atc_ready_js, SEL_ADD_TO_CART)):
+                    break
+            except Exception: pass  # noqa: E701  # pylint: disable=broad-except
+            if time.monotonic() >= atc_deadline:
+                raise SelectorTimeoutError(SEL_ADD_TO_CART, add_to_cart_timeout, reason="add-to-cart present but disabled")
+            time.sleep(0.25)
+        self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
         self.bounding_box_click(SEL_ADD_TO_CART)
         delay = 3.0 + self._get_rng().uniform(0.1, 0.8)
         _log.info(
@@ -2905,17 +3030,25 @@ class GivexDriver:
         )
         time.sleep(delay)
         _log.info("add_to_cart_and_checkout: settled, waiting Review-Checkout interactable")
-        interactable_timeout = 10
-        found = self._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=interactable_timeout)
+        try:
+            interactable_timeout = float(os.environ.get("GIVEX_REVIEW_CHECKOUT_POLL_S", str(_GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S)))
+        except ValueError:
+            interactable_timeout = _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S
+        found, present = self._wait_for_review_checkout_enabled(timeout=interactable_timeout)
         if not found:
+            flavor = "present but disabled" if present else "not found"
             _log.error(
-                "add_to_cart_and_checkout: Review-Checkout NOT interactable after %.2fs blueprint wait + %ds poll",
+                "add_to_cart_and_checkout: Review-Checkout %s after %.2fs blueprint wait + %.0fs poll",
+                flavor,
                 delay,
                 interactable_timeout,
             )
             self._log_review_checkout_diagnostics()
             self._capture_failure_screenshot("review_checkout_not_interactable")
-            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, int(delay) + interactable_timeout)
+            timeout = int(delay + interactable_timeout)
+            if present:
+                raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout, reason="present but disabled")
+            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, timeout)
         _log.info("add_to_cart_and_checkout: Review-Checkout interactable")
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
         _log.info("add_to_cart_and_checkout: Review-Checkout clicked")

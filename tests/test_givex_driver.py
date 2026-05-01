@@ -326,7 +326,8 @@ class TestAddToCartAndCheckout(unittest.TestCase):
         selenium.find_elements.side_effect = side_effect
         gd = GivexDriver(selenium, strict=False)
 
-        with patch("time.sleep"):
+        with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)):
             gd.add_to_cart_and_checkout()
 
         cart_el.click.assert_called_once()
@@ -399,27 +400,23 @@ class TestAddToCartAndCheckout(unittest.TestCase):
 
         with patch("time.sleep"), \
              patch.object(gd, "bounding_box_click"), \
-             patch.object(gd, "_wait_for_interactable", return_value=False), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, False)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              self.assertLogs("modules.cdp.driver", level="ERROR") as logs:
             with self.assertRaises(SelectorTimeoutError):
                 gd.add_to_cart_and_checkout()
 
         joined = "\n".join(logs.output)
-        self.assertIn("cookie_count=2", joined)
-        self.assertIn("localStorage.length=3", joined)
-        self.assertIn("sessionStorage.length=4", joined)
+        self.assertIn("'cookie_count': 2", joined)
+        self.assertIn("'localStorage_length': 3", joined)
+        self.assertIn("'sessionStorage_length': 4", joined)
         self.assertIn("add_to_cart_span", joined)
         self.assertIn("add_to_cart_parent", joined)
         self.assertIn("review_checkout", joined)
         self.assertIn("pointer_events", joined)
         self.assertIn("rect_w", joined)
-        self.assertRegex(
-            joined,
-            r"Review-Checkout diagnostics cookie_count=2 "
-            r"localStorage\.length=3 sessionStorage\.length=4 "
-            r"add_to_cart_span=.*add_to_cart_parent=.*review_checkout=",
-        )
+        self.assertIn("Review-Checkout diagnostics", joined)
 
 
 class TestSelectGuestCheckout(unittest.TestCase):
