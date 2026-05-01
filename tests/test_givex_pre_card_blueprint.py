@@ -1153,6 +1153,40 @@ class SelectCardDesignTests(unittest.TestCase):
         mock_click.assert_not_called()
         mock_shot.assert_called_once_with("card_design_offscreen")
 
+    def test_select_card_design_raises_when_center_outside_viewport_partial_intersect(self):
+        """SessionFlaggedError for partial intersection where click-center is outside viewport.
+
+        Emulates the edge case: element at x=-50, w=60 intersects the left
+        viewport edge (right=10 > 0) but its center is at cx=-20, which is
+        outside the viewport.  The updated center-point JS returns
+        in_viewport=False for this case, preventing cdp_click_absolute from
+        being called with a negative coordinate.
+        """
+        candidates = [{"id": "cws_lbl_415760", "x": -50.0, "y": 100.0, "w": 60.0, "h": 40.0}]
+        state_before = {
+            "value_present": True,
+            "value_text_len": 0,
+            "value_value_len": 0,
+            "value_attr_len": 5,
+            "selected_like_count": 0,
+            "visible_option_count": 1,
+        }
+        # Partial-intersection rect: rect intersects viewport but center (cx=-20) is outside.
+        # The updated center-point JS sets in_viewport=False for this geometry.
+        partial_rect = {"x": -50.0, "y": 100.0, "w": 60.0, "h": 40.0, "in_viewport": False}
+        gd = self._make_gd_with_script_side_effect([
+            candidates,    # detect
+            state_before,  # state_before
+            None,          # scroll
+            partial_rect,  # post-rect (center outside viewport)
+        ])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch.object(gd, "_capture_failure_screenshot") as mock_shot:
+            with self.assertRaisesRegex(SessionFlaggedError, "offscreen after scroll"):
+                gd._select_card_design_if_required()
+        mock_click.assert_not_called()
+        mock_shot.assert_called_once_with("card_design_offscreen")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3318,9 +3318,11 @@ class GivexDriver:
                 "const el=document.getElementById(arguments[0]);"
                 "if(!el)return null;"
                 "const r=el.getBoundingClientRect();"
+                "const cx=r.x+r.width/2,cy=r.y+r.height/2;"
                 "return{x:r.x,y:r.y,w:r.width,h:r.height,"
-                "in_viewport:r.width>0&&r.height>0&&r.bottom>0&&r.right>0"
-                "&&r.top<window.innerHeight&&r.left<window.innerWidth};",
+                "in_viewport:r.width>0&&r.height>0&&"
+                "cx>=0&&cx<window.innerWidth&&"
+                "cy>=0&&cy<window.innerHeight};",
                 chosen_id,
             )
         except Exception:  # pylint: disable=broad-except
