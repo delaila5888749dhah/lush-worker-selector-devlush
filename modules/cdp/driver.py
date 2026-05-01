@@ -2513,11 +2513,6 @@ class GivexDriver:
             return 0
 
     @staticmethod
-    def _snapshot_review_enabled(snapshot: dict) -> bool:
-        review = snapshot.get("review_checkout")
-        return isinstance(review, dict) and bool(review.get("present")) and bool(review.get("enabled"))
-
-    @staticmethod
     def _cart_log_snapshot(snapshot: dict) -> dict:
         if not isinstance(snapshot, dict):
             return {}
@@ -2528,18 +2523,7 @@ class GivexDriver:
             "error_like_count", "error_like_visible_count",
             "total_like_present", "total_like_text_len",
         )
-        element_keys = (
-            "present", "enabled", "disabled", "aria_disabled", "pointer_events",
-            "display", "visibility", "rect_w", "rect_h", "text_len", "class_len",
-        )
-        safe = {key: snapshot.get(key) for key in safe_keys if key in snapshot}
-        for element_name in ("add_to_cart_span", "add_to_cart_parent", "review_checkout"):
-            element = snapshot.get(element_name)
-            if isinstance(element, dict):
-                safe[element_name] = {
-                    key: element.get(key) for key in element_keys if key in element
-                }
-        return safe
+        return {key: snapshot.get(key) for key in safe_keys if key in snapshot}
 
     def _wait_for_cart_state_after_atc(self, baseline: dict, timeout: float) -> tuple[bool, dict]:
         """Poll for delta-based cart/total materialization after Add-to-Cart."""
@@ -2551,11 +2535,7 @@ class GivexDriver:
         baseline_line_visible = self._snapshot_int(baseline, "explicit_cart_line_item_visible_count")
         baseline_cart_visible = self._snapshot_int(baseline, "cart_like_visible_count")
         baseline_review = baseline.get("review_checkout")
-        baseline_review_disabled = (
-            isinstance(baseline_review, dict)
-            and bool(baseline_review.get("present"))
-            and not bool(baseline_review.get("enabled"))
-        )
+        baseline_review_disabled = isinstance(baseline_review, dict) and bool(baseline_review.get("present")) and not bool(baseline_review.get("enabled"))
         last_snapshot = baseline
 
         while time.monotonic() < deadline:
@@ -2581,8 +2561,10 @@ class GivexDriver:
                 signal = "total_like_present"
             elif line_visible_delta > 0 or line_count_delta > 0:
                 signal = "explicit_cart_line_item"
-            elif self._snapshot_review_enabled(last_snapshot):
-                signal = "review_checkout_enabled_without_total"
+            else:
+                review = last_snapshot.get("review_checkout")
+                if isinstance(review, dict) and bool(review.get("present")) and bool(review.get("enabled")):
+                    signal = "review_checkout_enabled_without_total"
 
             if signal:
                 if signal == "review_checkout_enabled_without_total" and baseline_review_disabled:
@@ -2718,7 +2700,6 @@ class GivexDriver:
     def _click_closest_control_for(self, span_selector: str) -> None:
         """Click the nearest clickable control for a span locator."""
         try:
-            # Include the known parent id because Givex uses that div as the live control.
             rects = self._driver.execute_script(
                 "const s=document.querySelector(arguments[0]);"
                 "if(!s)return null;"

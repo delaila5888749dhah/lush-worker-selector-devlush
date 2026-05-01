@@ -657,10 +657,9 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         }
         logged = GivexDriver._cart_log_snapshot(snapshot)
         self.assertEqual(logged["cart_like_visible_count"], 1)
-        self.assertEqual(logged["review_checkout"]["text_len"], 15)
         self.assertNotIn("recipient_email", logged)
         self.assertNotIn("form_validation", logged)
-        self.assertNotIn("innerText", logged["review_checkout"])
+        self.assertNotIn("review_checkout", logged)
         self.assertNotIn("recipient@example.com", repr(logged))
 
 
