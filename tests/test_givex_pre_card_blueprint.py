@@ -973,8 +973,6 @@ class SelectCardDesignTests(unittest.TestCase):
 
     def test_select_card_design_no_op_when_no_picker(self):
         """Empty candidates list must produce no click and an INFO log."""
-        gd = _make_driver()
-        selenium = gd
         selenium = _make_driver()
         selenium.execute_script.return_value = []
         gd = GivexDriver(selenium, strict=False)
