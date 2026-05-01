@@ -2517,6 +2517,30 @@ class GivexDriver:
         review = snapshot.get("review_checkout")
         return isinstance(review, dict) and bool(review.get("present")) and bool(review.get("enabled"))
 
+    @staticmethod
+    def _cart_log_snapshot(snapshot: dict) -> dict:
+        if not isinstance(snapshot, dict):
+            return {}
+        safe_keys = (
+            "cookie_count", "localStorage_length", "sessionStorage_length",
+            "cart_like_count", "cart_like_visible_count",
+            "explicit_cart_line_item_count", "explicit_cart_line_item_visible_count",
+            "error_like_count", "error_like_visible_count",
+            "total_like_present", "total_like_text_len",
+        )
+        element_keys = (
+            "present", "enabled", "disabled", "aria_disabled", "pointer_events",
+            "display", "visibility", "rect_w", "rect_h", "text_len", "class_len",
+        )
+        safe = {key: snapshot.get(key) for key in safe_keys if key in snapshot}
+        for element_name in ("add_to_cart_span", "add_to_cart_parent", "review_checkout"):
+            element = snapshot.get(element_name)
+            if isinstance(element, dict):
+                safe[element_name] = {
+                    key: element.get(key) for key in element_keys if key in element
+                }
+        return safe
+
     def _wait_for_cart_state_after_atc(self, baseline: dict, timeout: float) -> tuple[bool, dict]:
         """Poll for delta-based cart/total materialization after Add-to-Cart."""
         start = time.monotonic()
@@ -2587,7 +2611,7 @@ class GivexDriver:
             "add_to_cart_and_checkout: cart_state timeout after %.0fs "
             "snapshot=%s cart_like_visible_delta=%s",
             timeout,
-            last_snapshot,
+            self._cart_log_snapshot(last_snapshot),
             self._snapshot_int(last_snapshot, "cart_like_visible_count") - baseline_cart_visible,
         )
         return False, last_snapshot
@@ -3188,7 +3212,7 @@ class GivexDriver:
         _log.info(
             "add_to_cart_and_checkout: ATC clicked t+0.0s baseline=%s; "
             "waiting %.2fs per blueprint",
-            cart_baseline,
+            self._cart_log_snapshot(cart_baseline),
             delay,
         )
         time.sleep(delay)

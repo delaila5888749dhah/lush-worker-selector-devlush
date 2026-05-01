@@ -641,6 +641,27 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         self.assertFalse(materialized)
         self.assertIs(snapshot, post)
 
+    def test_cart_log_snapshot_excludes_raw_values(self):
+        snapshot = {
+            "total_like_present": False,
+            "cart_like_visible_count": 1,
+            "recipient_email": "recipient@example.com",
+            "form_validation": {"raw": "recipient@example.com"},
+            "review_checkout": {
+                "present": True,
+                "enabled": False,
+                "text_len": 15,
+                "innerText": "recipient@example.com",
+            },
+        }
+        logged = GivexDriver._cart_log_snapshot(snapshot)
+        self.assertEqual(logged["cart_like_visible_count"], 1)
+        self.assertEqual(logged["review_checkout"]["text_len"], 15)
+        self.assertNotIn("recipient_email", logged)
+        self.assertNotIn("form_validation", logged)
+        self.assertNotIn("innerText", logged["review_checkout"])
+        self.assertNotIn("recipient@example.com", repr(logged))
+
 
 if __name__ == "__main__":
     unittest.main()
