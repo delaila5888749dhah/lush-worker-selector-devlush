@@ -731,15 +731,6 @@ _CANONICAL_AUDIT = {
     "alt_line_item_patterns": {"cws_underscored": 0, "table_rows_in_cart": 0, "list_items_in_cart": 0},
     "alt_total_patterns": {"grand": 0, "sub": 0, "order": 0, "cws": 0},
     "sample_cws_ids": ["cws_btn_gcBuyAdd", "cws_btn_gcBuyCheckout", "cws_div_cart"],
-    "cart_state_snapshot_keys_present": [
-        "total_like_present",
-        "total_like_text_len",
-        "explicit_cart_line_item_count",
-        "explicit_cart_line_item_visible_count",
-        "cart_like_visible_count",
-        "error_like_visible_count",
-        "review_checkout",
-    ],
     "alert_count": 0,
     "alert_visible_count": 0,
 }
@@ -770,7 +761,6 @@ class CartDomAuditTests(unittest.TestCase):
             "alt_line_item_patterns",
             "alt_total_patterns",
             "sample_cws_ids",
-            "cart_state_snapshot_keys_present",
             "alert_count",
             "alert_visible_count",
         ]
@@ -847,6 +837,90 @@ class CartDomAuditTests(unittest.TestCase):
         audit = gd._cart_dom_audit()
         for k in audit:
             self.assertIsNone(_FORBIDDEN_PII_PATTERN.search(k), f"Forbidden key found in audit result: {k}")
+
+    def test_cart_state_snapshot_keys_present_reflects_actual_timeout_snapshot(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        partial_snapshot = {"total_like_present": False, "cart_like_visible_count": 1}
+        non_materializing = dict(partial_snapshot)
+        audit_without_keys = dict(_CANONICAL_AUDIT)
+        audit_without_keys.pop("cart_state_snapshot_keys_present", None)
+        with patch.object(gd, "_cart_state_snapshot", return_value=non_materializing), \
+             patch.object(gd, "_cart_dom_audit", return_value=audit_without_keys), \
+             patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.monotonic", side_effect=[0.0, 0.0, 2.0]), \
+             self.assertLogs("modules.cdp.driver", level="ERROR") as logs:
+            result = gd._wait_for_cart_state_after_atc(
+                baseline={"total_like_present": False, "cart_like_visible_count": 1},
+                timeout=1,
+            )
+        self.assertEqual(result[0], False)
+        joined = "\n".join(logs.output)
+        self.assertIn("dom_audit=", joined)
+        self.assertIn("cart_state_snapshot_keys_present", joined)
+        self.assertIn("'cart_like_visible_count'", joined)
+        self.assertIn("'total_like_present'", joined)
+        # Must be sorted alphabetically and contain only the 2 actual keys
+        self.assertIn("['cart_like_visible_count', 'total_like_present']", joined)
+
+    def test_cart_state_snapshot_keys_present_empty_when_snapshot_missing(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        empty_snapshot: dict = {}
+        audit_without_keys = dict(_CANONICAL_AUDIT)
+        audit_without_keys.pop("cart_state_snapshot_keys_present", None)
+        with patch.object(gd, "_cart_state_snapshot", return_value=empty_snapshot), \
+             patch.object(gd, "_cart_dom_audit", return_value=audit_without_keys), \
+             patch("modules.cdp.driver.time.sleep"), \
+             patch("modules.cdp.driver.time.monotonic", side_effect=[0.0, 0.0, 2.0]), \
+             self.assertLogs("modules.cdp.driver", level="ERROR") as logs:
+            result = gd._wait_for_cart_state_after_atc(
+                baseline={},
+                timeout=1,
+            )
+        self.assertEqual(result[0], False)
+        joined = "\n".join(logs.output)
+        self.assertIn("dom_audit=", joined)
+        self.assertIn("'cart_state_snapshot_keys_present': []", joined)
+
+    def test_cart_dom_audit_sample_cws_ids_filters_only_card_password_ssn(self):
+        import inspect
+        import re
+
+        _SAFE_CWS_ID_RE = re.compile(r"^cws_", re.I)
+        _UNSAFE_CWS_ID_RE = re.compile(r"cc(num|cvv|exp|name)|password|ssn", re.I)
+
+        def _python_safe_cws_id(id_):
+            return bool(_SAFE_CWS_ID_RE.match(id_ or "")) and not _UNSAFE_CWS_ID_RE.search(id_ or "")
+
+        # IDs that must be KEPT
+        keep = [
+            "cws_btn_gcBuyAdd",
+            "cws_btn_gcBuyCheckout",
+            "cws_div_cart",
+            "cws_lbl_subtotalAmount",
+            "cws_txt_orderTotal",
+            "cws_div_cartItemName_0",
+            "cws_txt_recipEmail",
+            "cws_txt_gcBuyFrom",
+            "cws_txt_billingAddr1",
+        ]
+        # IDs that must be EXCLUDED
+        exclude = [
+            "cws_txt_ccNum",
+            "cws_txt_ccCvv",
+            "cws_txt_ccExpMon",
+            "cws_txt_ccName",
+            "cws_password_field",
+            "cws_ssn_input",
+        ]
+        for id_ in keep:
+            self.assertTrue(_python_safe_cws_id(id_), f"Expected KEEP but got EXCLUDE: {id_}")
+        for id_ in exclude:
+            self.assertFalse(_python_safe_cws_id(id_), f"Expected EXCLUDE but got KEEP: {id_}")
+
+        # Verify the JS source contains safeCwsId and the correct regex pattern
+        source = inspect.getsource(GivexDriver._cart_dom_audit)
+        self.assertIn("safeCwsId", source)
+        self.assertIn("cc(num|cvv|exp|name)|password|ssn", source)
 
 
 if __name__ == "__main__":

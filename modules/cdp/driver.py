@@ -2539,6 +2539,7 @@ class GivexDriver:
                 "const atcEl=document.querySelector('#cws_btn_gcBuyAdd');"
                 "const rcEl=document.querySelector('#cws_btn_gcBuyCheckout');"
                 "const cwsIds=Array.from(document.querySelectorAll('[id^=\"cws_\"]'));"
+                "const safeCwsId=(id)=>/^cws_/i.test(id||'')&&!/(cc(num|cvv|exp|name)|password|ssn)/i.test(id||'');"
                 "const cartContainers=document.querySelectorAll('[id*=\"cart\" i],[class*=\"cart\" i]');"
                 "return {"
                 "current_url_path:location.pathname,"
@@ -2562,8 +2563,7 @@ class GivexDriver:
                 "order:document.querySelectorAll('[class*=\"orderTotal\" i],[id*=\"orderTotal\" i],[class*=\"order_total\" i],[id*=\"order_total\" i]').length,"
                 "cws:document.querySelectorAll('[id^=\"cws_\"][id*=\"otal\" i],[class*=\"cws_\"][class*=\"otal\" i]').length"
                 "},"
-                "sample_cws_ids:cwsIds.slice(0,30).map(e=>e.id),"
-                "cart_state_snapshot_keys_present:Object.keys({total_like_present:null,total_like_text_len:null,explicit_cart_line_item_count:null,explicit_cart_line_item_visible_count:null,cart_like_visible_count:null,error_like_visible_count:null,review_checkout:null}),"
+                "sample_cws_ids:cwsIds.map(e=>e.id||'').filter(safeCwsId).slice(0,30),"
                 "alert_count:document.querySelectorAll('[role=\"alert\"]').length,"
                 "alert_visible_count:Array.from(document.querySelectorAll('[role=\"alert\"]')).filter(v).length"
                 "};"
@@ -2634,6 +2634,10 @@ class GivexDriver:
             audit = self._cart_dom_audit()
         except Exception:  # pylint: disable=broad-except
             audit = {"audit_failed": True}
+        if isinstance(audit, dict):
+            audit["cart_state_snapshot_keys_present"] = (
+                sorted(last_snapshot.keys()) if isinstance(last_snapshot, dict) else []
+            )
         _log.error("add_to_cart_and_checkout: cart_state timeout dom_audit=%s", audit)
         return False, last_snapshot
 
