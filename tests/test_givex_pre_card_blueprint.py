@@ -1301,10 +1301,36 @@ class Round4DetectionTests(unittest.TestCase):
         selenium.execute_script.return_value = None
         gd = GivexDriver(selenium, strict=False)
         with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch("modules.cdp.driver.time.sleep") as mock_sleep, \
              self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd._select_card_design_if_required()
         mock_click.assert_not_called()
+        mock_sleep.assert_not_called()
+        self.assertEqual(selenium.execute_script.call_count, 1)
         self.assertIn("no_picker_detected", "\n".join(logs.output))
+
+    def test_container_present_empty_polls_until_candidate(self):
+        """Empty list means picker exists but candidates are still rendering."""
+        candidates = [
+            {"id": "cws_lbl_415760", "radio_id_len": 6, "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+        ]
+        state = {"checked_count": 0, "preview_src_len": -1, "preview_name_len": -1,
+                 "clicked_radio_checked": False,
+                 "value_text_len": 0, "value_value_len": 0, "value_attr_len": 0,
+                 "selected_like_count": 0, "visible_option_count": 1}
+        state_after = dict(state)
+        state_after["clicked_radio_checked"] = True
+        gd = self._make_gd([
+            [], candidates, state, None,
+            {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True},
+            state_after,
+        ])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch("modules.cdp.driver.time.sleep") as mock_sleep, \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()
+        mock_sleep.assert_called()
+        mock_click.assert_called_once()
 
     def test_no_picker_detected_does_not_raise(self):
         """no_picker_detected path must return gracefully (no exception)."""
@@ -1320,24 +1346,9 @@ class Round4DetectionTests(unittest.TestCase):
 
     def test_non_numeric_labels_excluded_from_candidates(self):
         """Labels like cws_lbl_gcMsg must NOT be treated as card design picks."""
-        # If non-numeric labels somehow end up in the JS results (shouldn't
-        # happen with the new regex-filtered JS, but defend against it), they
-        # must be filtered out in Python too.
-        non_numeric = [
-            {"id": "cws_lbl_gcMsg", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0},
-            {"id": "cws_lbl_recipEmail", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0},
-            {"id": "cws_lbl_delivDate", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0},
-            {"id": "cws_lbl_gcBuyFrom", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0},
-            {"id": "cws_lbl_selector-app-wrappers", "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0},
-        ]
-        # Non-numeric-suffix labels have no `radio_id_len`, but importantly
-        # the Python code only checks c.get("id") for truthiness.  The real
-        # filtering is in JS.  We verify the JS source contains the regex.
         import inspect
         src = inspect.getsource(GivexDriver._select_card_design_if_required)
-        # Regex must require exactly 6 digits
         self.assertIn(r"cws_lbl_\d{6}", src)
-        # The detect JS must also verify the radio input exists
         self.assertIn("radio.type==='radio'", src)
 
 
