@@ -1109,8 +1109,12 @@ class SelectCardDesignTests(unittest.TestCase):
             "selected_like_count": 0,
             "visible_option_count": 1,
         }
-        for bad_rect in [None, {}, {"x": 10.0, "y": 100.0, "w": 0, "h": 0}]:
-            with self.subTest(post_rect=bad_rect):
+        for label, bad_rect in [
+            ("none_rect", None),
+            ("empty_dict", {}),
+            ("zero_size", {"x": 10.0, "y": 100.0, "w": 0, "h": 0}),
+        ]:
+            with self.subTest(label):
                 gd = self._make_gd_with_script_side_effect([
                     candidates,   # detect
                     state_before, # state_before
