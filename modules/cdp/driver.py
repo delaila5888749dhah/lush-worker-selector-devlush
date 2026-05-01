@@ -437,7 +437,10 @@ _SELECTOR_NAMES = {
 
 
 def _selector_name(sel: str) -> str:
-    """Return a PII-safe symbolic selector name for structured field logs."""
+    """Map CSS selector to symbolic constant for PII-safe field logging.
+
+    Returns ``UNKNOWN_SELECTOR`` when *sel* is not in the registered field set.
+    """
     return _SELECTOR_NAMES.get(sel, "UNKNOWN_SELECTOR")
 
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
@@ -1998,8 +2001,10 @@ class GivexDriver:
     def _field_value_length(self, selector: str) -> int:
         try:
             return int(self._driver.execute_script(
-                "const el=document.querySelector(arguments[0]);"
-                "return el && typeof el.value === 'string' ? el.value.length : -1;",
+                """
+                const el = document.querySelector(arguments[0]);
+                return el && typeof el.value === 'string' ? el.value.length : -1;
+                """,
                 selector,
             ))
         except Exception:  # pylint: disable=broad-except
@@ -2198,8 +2203,12 @@ class GivexDriver:
             # so the production path matches the safe-zone contract.
             if self._engine is not None and not self._engine.is_delay_permitted():
                 dl = None
+            elif self._bio and use_burst and len(val) >= 16:
+                dl = self._bio.generate_4x4_pattern()
+            elif self._bio:
+                dl = self._bio.generate_burst_pattern(len(val))
             else:
-                dl = (self._bio.generate_4x4_pattern() if self._bio and use_burst and len(val) >= 16 else self._bio.generate_burst_pattern(len(val)) if self._bio else None)
+                dl = None
             _type_value(
                 self._driver, els[0], val, self._get_rng(),
                 typo_rate=typo_prob, delays=dl, strict=self._strict,

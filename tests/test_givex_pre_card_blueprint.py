@@ -29,7 +29,7 @@ class LowBoundRng:
         return low
 
 
-def _scroll_driver():
+def _make_scroll_test_driver():
     selenium = _make_driver()
     selenium.find_elements.return_value = [MagicMock()]
 
@@ -46,7 +46,7 @@ def _scroll_driver():
 
 class HumanScrollToTests(unittest.TestCase):
     def test_uses_cdp_wheel_as_primary(self):
-        selenium = _scroll_driver()
+        selenium = _make_scroll_test_driver()
         gd = GivexDriver(selenium)
         with patch("modules.cdp.driver.time.sleep"):
             gd._human_scroll_to(SEL_GREETING_MSG, max_steps=1)
@@ -56,7 +56,7 @@ class HumanScrollToTests(unittest.TestCase):
         self.assertFalse(any("scrollIntoView" in s for s in scripts))
 
     def test_falls_back_to_js_when_cdp_wheel_raises(self):
-        selenium = _scroll_driver()
+        selenium = _make_scroll_test_driver()
         selenium.execute_cdp_cmd.side_effect = WebDriverException("no wheel")
         gd = GivexDriver(selenium)
         with patch("modules.cdp.driver.time.sleep"), \
@@ -67,7 +67,7 @@ class HumanScrollToTests(unittest.TestCase):
         self.assertTrue(any("scrollIntoView" in s for s in scripts))
 
     def test_degraded_mode_no_crash(self):
-        selenium = _scroll_driver()
+        selenium = _make_scroll_test_driver()
         selenium.execute_cdp_cmd.side_effect = AttributeError("degraded")
         gd = GivexDriver(selenium)
         with patch("modules.cdp.driver.time.sleep"):
@@ -201,7 +201,7 @@ class FillEgiftFormFinalValidationTests(unittest.TestCase):
 
 
 class WaitForInteractableTests(unittest.TestCase):
-    def _elem(self):
+    def _make_interactable_element(self):
         elem = MagicMock()
         elem.is_displayed.return_value = True
         elem.is_enabled.return_value = True
@@ -210,27 +210,27 @@ class WaitForInteractableTests(unittest.TestCase):
     def test_rejects_present_but_display_none(self):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = False
-        self.assertFalse(gd._is_interactable(self._elem()))
+        self.assertFalse(gd._is_interactable(self._make_interactable_element()))
 
     def test_rejects_present_but_pointer_events_none(self):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = False
-        self.assertFalse(gd._is_interactable(self._elem()))
+        self.assertFalse(gd._is_interactable(self._make_interactable_element()))
 
     def test_rejects_aria_disabled(self):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = False
-        self.assertFalse(gd._is_interactable(self._elem()))
+        self.assertFalse(gd._is_interactable(self._make_interactable_element()))
 
     def test_rejects_zero_size_rect(self):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = False
-        self.assertFalse(gd._is_interactable(self._elem()))
+        self.assertFalse(gd._is_interactable(self._make_interactable_element()))
 
     def test_accepts_normal_button(self):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = True
-        self.assertTrue(gd._is_interactable(self._elem()))
+        self.assertTrue(gd._is_interactable(self._make_interactable_element()))
 
     def test_diagnose_returns_sanitized_state_on_failure(self):
         gd = GivexDriver(_make_driver(), strict=False)
