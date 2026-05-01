@@ -923,5 +923,170 @@ class CartDomAuditTests(unittest.TestCase):
         self.assertIn("cc(num|cvv|exp|name)|password|ssn", source)
 
 
+class SelectCardDesignTests(unittest.TestCase):
+    """Tests for GivexDriver._select_card_design_if_required()."""
+
+    _CANDIDATES_6 = [
+        {"id": f"cws_lbl_41576{i}", "x": 10.0 + i * 90, "y": 100.0, "w": 80.0, "h": 40.0}
+        for i in range(6)
+    ]
+    _POST_RECT = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+    _STATE_BEFORE = {
+        "value_present": True,
+        "value_text_len": 0,
+        "value_value_len": 0,
+        "value_attr_len": 5,
+        "selected_like_count": 0,
+        "visible_option_count": 6,
+    }
+    _STATE_AFTER = {
+        "value_present": True,
+        "value_text_len": 8,
+        "value_value_len": 0,
+        "value_attr_len": 5,
+        "selected_like_count": 1,
+        "visible_option_count": 6,
+    }
+
+    def _make_gd_with_script_side_effect(self, side_effects):
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = list(side_effects)
+        return GivexDriver(selenium, strict=False)
+
+    def test_select_card_design_clicks_visible_candidate(self):
+        """Clicking one of 6 candidates should call cdp_click_absolute once, no error."""
+        gd = self._make_gd_with_script_side_effect([
+            self._CANDIDATES_6,    # detect
+            self._STATE_BEFORE,    # state_before snapshot
+            None,                  # scroll
+            self._POST_RECT,       # post-scroll rect
+            self._STATE_AFTER,     # state_after snapshot
+        ])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()
+        mock_click.assert_called_once()
+        x, y = mock_click.call_args.args
+        # click center = 10 + 80/2 = 50 (or nearby, depends on rng idx)
+        self.assertIsInstance(x, float)
+        self.assertIsInstance(y, float)
+
+    def test_select_card_design_no_op_when_no_picker(self):
+        """Empty candidates list must produce no click and an INFO log."""
+        gd = _make_driver()
+        selenium = gd
+        selenium = _make_driver()
+        selenium.execute_script.return_value = []
+        gd = GivexDriver(selenium, strict=False)
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        mock_click.assert_not_called()
+        self.assertIn("no_picker_detected", "\n".join(logs.output))
+
+    def test_select_card_design_raises_when_state_unchanged(self):
+        """If state_before == state_after on all signals → SessionFlaggedError."""
+        state_same = {
+            "value_present": True,
+            "value_text_len": 5,
+            "value_value_len": 0,
+            "value_attr_len": 5,
+            "selected_like_count": 1,
+            "visible_option_count": 1,
+        }
+        candidates = [{"id": "cws_lbl_415760", "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}]
+        gd = self._make_gd_with_script_side_effect([
+            candidates,                           # detect
+            state_same,                           # state_before
+            None,                                 # scroll
+            {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0},  # post-rect
+            state_same,                           # state_after (unchanged)
+        ])
+        with patch.object(gd, "cdp_click_absolute"), \
+             patch.object(gd, "_capture_failure_screenshot"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            with self.assertRaisesRegex(SessionFlaggedError, "Card design"):
+                gd._select_card_design_if_required()
+
+    def test_select_card_design_log_does_not_contain_raw_text_or_innertext(self):
+        """INFO log line must not contain raw IDs, innerText, outerHTML, or PII."""
+        gd = self._make_gd_with_script_side_effect([
+            self._CANDIDATES_6,
+            self._STATE_BEFORE,
+            None,
+            self._POST_RECT,
+            self._STATE_AFTER,
+        ])
+        with patch.object(gd, "cdp_click_absolute"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        info_lines = [l for l in logs.output if "INFO" in l and "card_design" in l]
+        self.assertTrue(info_lines, "Expected at least one INFO card_design log line")
+        combined = "\n".join(info_lines)
+        # No raw ID strings at INFO level (IDs contain the full cws_lbl_NNNNNN pattern)
+        for cand in self._CANDIDATES_6:
+            self.assertNotIn(cand["id"], combined,
+                             f"Raw candidate ID {cand['id']!r} must not appear in INFO log")
+        # No DOM content keywords
+        for forbidden in ("innerText", "outerHTML", "innerHTML", "textContent"):
+            self.assertNotIn(forbidden, combined)
+
+    def test_fill_egift_form_calls_card_design_before_completion(self):
+        """_select_card_design_if_required must be called before fill_egift_form: completed."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        order = []
+
+        def spy_card_design():
+            order.append("card_design")
+
+        with patch.object(gd, "_smooth_scroll_to"), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_blur_active_field_naturally", return_value=True), \
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
+             patch.object(gd, "_select_card_design_if_required", side_effect=spy_card_design), \
+             patch.object(drv, "_random_greeting", return_value="Hi"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd.fill_egift_form(_make_task(), _make_billing())
+        log_text = "\n".join(logs.output)
+        self.assertIn("card_design", order, "_select_card_design_if_required was not called")
+        self.assertIn("fill_egift_form: completed", log_text)
+
+    def test_select_card_design_verification_passes_on_any_signal_change(self):
+        """Any one changed signal is sufficient to pass verification (no raise)."""
+        candidates = [{"id": "cws_lbl_415760", "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}]
+        post_rect = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+        base = {
+            "value_present": True,
+            "value_text_len": 0,
+            "value_value_len": 0,
+            "value_attr_len": 5,
+            "selected_like_count": 1,
+            "visible_option_count": 1,
+        }
+        signal_cases = [
+            ("value_text_len", 8),
+            ("value_value_len", 3),
+            ("value_attr_len", 12),
+            ("selected_like_count", 2),
+        ]
+        for signal_key, new_val in signal_cases:
+            with self.subTest(signal=signal_key):
+                state_after = dict(base)
+                state_after[signal_key] = new_val
+                gd = self._make_gd_with_script_side_effect([
+                    candidates,   # detect
+                    dict(base),   # state_before
+                    None,         # scroll
+                    post_rect,    # post-rect
+                    state_after,  # state_after with one signal changed
+                ])
+                with patch.object(gd, "cdp_click_absolute"), \
+                     self.assertLogs("modules.cdp.driver", level="INFO"):
+                    # Must not raise
+                    gd._select_card_design_if_required()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3188,6 +3188,7 @@ class GivexDriver:
         )
         if not self._blur_active_field_naturally():
             _log.warning("fill_egift_form: blur active field failed after Tab and safe body-click fallback")
+        self._select_card_design_if_required()
         _log.info("fill_egift_form: running final validation pass")
         fields = (SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
         final_lens = {sel: self._field_value_length(sel) for sel in fields}
@@ -3212,6 +3213,150 @@ class GivexDriver:
             self._capture_failure_screenshot("final_check_email_mismatch")
             raise SessionFlaggedError("Final validation: recipient email and confirm email values differ")
         _log.info("fill_egift_form: completed (final validation passed)")
+
+    # ── eGift card design picker (Step 1 sub-step) ──────────────────────────
+
+    def _card_design_state_snapshot(self) -> dict:
+        """Return a PII-safe length-only snapshot of the card design picker state."""
+        state_js = (
+            "(function(){"
+            "const v=(e)=>{"
+            "if(!e)return false;"
+            "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
+            "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};"
+            "const valEl=document.querySelector('#cws_val_cardDesign');"
+            "return{"
+            "value_present:!!valEl,"
+            "value_text_len:valEl?(valEl.textContent||'').length:0,"
+            "value_value_len:valEl&&'value' in valEl?(valEl.value||'').length:0,"
+            "value_attr_len:valEl?Array.from(valEl.attributes).reduce((sum,a)=>sum+(a.value||'').length,0):0,"
+            "selected_like_count:document.querySelectorAll("
+            "'[aria-selected=\"true\"],[aria-checked=\"true\"],.selected,.active,[data-selected=\"true\"]'"
+            ").length,"
+            "visible_option_count:Array.from(document.querySelectorAll('[id^=\"cws_lbl_\"]'))"
+            r".filter(e=>/^cws_lbl_\d{6}$/.test(e.id)&&v(e)).length"
+            "};"
+            "})();"
+        )
+        try:
+            result = self._driver.execute_script(state_js)
+            if isinstance(result, dict):
+                return result
+            return {}
+        except Exception:  # pylint: disable=broad-except
+            return {}
+
+    def _select_card_design_if_required(self) -> None:
+        """Detect and click a card design thumbnail on the eGift page if present.
+
+        Looks for visible ``cws_lbl_NNNNNN`` elements (the Givex card design
+        picker).  If none are found, logs at INFO and returns without error.
+        When candidates are found, one is chosen deterministic-randomly using
+        the persona RNG (or ``random.Random(0)`` as a stable test fallback),
+        clicked via CDP absolute coordinates, and the selection state is
+        verified via PII-safe length-only signals.
+
+        Raises:
+            SessionFlaggedError: if design candidates exist but none of the
+                safe verification signals change after clicking (indicates
+                client-side form validation rejected the click).
+        """
+        detect_js = (
+            "(function(){"
+            "const v=(e)=>{"
+            "if(!e)return false;"
+            "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
+            "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};"
+            "const p=Array.from(document.querySelectorAll('[id^=\"cws_lbl_\"]'))"
+            r".filter(e=>/^cws_lbl_\d{6}$/.test(e.id)&&v(e));"
+            "return p.slice(0,20).map(e=>{"
+            "const r=e.getBoundingClientRect();"
+            "return{id:e.id,x:r.x,y:r.y,w:r.width,h:r.height};});})();"
+        )
+        try:
+            raw = self._driver.execute_script(detect_js)
+        except Exception:  # pylint: disable=broad-except
+            _log.info("fill_egift_form: card_design detect_error, skipping")
+            return
+
+        if not isinstance(raw, list):
+            _log.info("fill_egift_form: card_design no_picker_detected, skipping")
+            return
+
+        candidates = [c for c in raw if isinstance(c, dict) and c.get("id")]
+        if not candidates:
+            _log.info("fill_egift_form: card_design no_picker_detected, skipping")
+            return
+
+        rng = self._rnd if self._rnd is not None else _random.Random(0)
+        idx = rng.randrange(len(candidates))
+        chosen = candidates[idx]
+        chosen_id = chosen["id"]
+
+        _log.debug(
+            "fill_egift_form: card_design candidates=%r choosing idx=%d",
+            [c.get("id") for c in candidates],
+            idx,
+        )
+
+        state_before = self._card_design_state_snapshot()
+
+        # Scroll chosen element into view before clicking
+        try:
+            self._driver.execute_script(
+                "const el=document.getElementById(arguments[0]);"
+                "if(el)el.scrollIntoView({block:'center',inline:'center'});",
+                chosen_id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass  # best-effort scroll
+
+        # Re-compute rect post-scroll for accurate click coordinates
+        post_rect = None
+        try:
+            post_rect = self._driver.execute_script(
+                "const el=document.getElementById(arguments[0]);"
+                "if(!el)return null;"
+                "const r=el.getBoundingClientRect();"
+                "return{x:r.x,y:r.y,w:r.width,h:r.height};",
+                chosen_id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+        if isinstance(post_rect, dict) and post_rect.get("w", 0) > 0 and post_rect.get("h", 0) > 0:
+            click_x = post_rect["x"] + post_rect["w"] / 2.0
+            click_y = post_rect["y"] + post_rect["h"] / 2.0
+        else:
+            click_x = chosen.get("x", 0.0) + chosen.get("w", 0.0) / 2.0
+            click_y = chosen.get("y", 0.0) + chosen.get("h", 0.0) / 2.0
+
+        self.cdp_click_absolute(click_x, click_y)
+
+        state_after = self._card_design_state_snapshot()
+
+        selection_verified = (
+            state_after.get("value_text_len", 0) != state_before.get("value_text_len", 0)
+            or state_after.get("value_value_len", 0) != state_before.get("value_value_len", 0)
+            or state_after.get("value_attr_len", 0) != state_before.get("value_attr_len", 0)
+            or state_after.get("selected_like_count", 0) > state_before.get("selected_like_count", 0)
+        )
+
+        _log.info(
+            "fill_egift_form: card_design selected_index=%d visible_options=%d "
+            "value_len_before=%d value_len_after=%d "
+            "selected_like_count_before=%d selected_like_count_after=%d",
+            idx,
+            len(candidates),
+            state_before.get("value_text_len", 0),
+            state_after.get("value_text_len", 0),
+            state_before.get("selected_like_count", 0),
+            state_after.get("selected_like_count", 0),
+        )
+
+        if not selection_verified:
+            self._capture_failure_screenshot("card_design_not_verified")
+            raise SessionFlaggedError("Card design selection required but not verified")
 
     def add_to_cart_and_checkout(self) -> None:
         """Click Add-to-Cart, wait for Review & Checkout button, then click it.
