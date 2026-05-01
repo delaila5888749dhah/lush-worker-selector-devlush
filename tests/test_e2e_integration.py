@@ -235,6 +235,7 @@ def test_orchestrator_records_failure_on_review_checkout_disabled_timeout():
     store = MagicMock()
     store.is_duplicate.return_value = False
     err = SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 21, reason="present but disabled")
+    assert "present but disabled" in str(err)  # nosec B101
     with ExitStack() as stack:
         stack.enter_context(patch("integration.orchestrator._get_autoscaler", return_value=autoscaler))
         stack.enter_context(patch("integration.orchestrator._get_idempotency_store", return_value=store))

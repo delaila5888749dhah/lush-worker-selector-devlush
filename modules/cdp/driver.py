@@ -2038,6 +2038,7 @@ class GivexDriver:
                     : null;
                 const reviewCheckout = document.querySelector(arguments[1]);
                 const visible = (el) => { const s = window.getComputedStyle(el), r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden"; };
+                const totalLike = document.querySelector('[class*="total"],[id*="total"]');
                 return {
                     localStorage_length: (() => {
                         try {
@@ -2062,8 +2063,8 @@ class GivexDriver:
                     cart_like_visible_count: Array.from(document.querySelectorAll('[class*="cart"],[id*="cart"]')).filter(visible).length,
                     error_like_count: document.querySelectorAll('[class*="error"],[role="alert"]').length,
                     error_like_visible_count: Array.from(document.querySelectorAll('[class*="error"],[role="alert"]')).filter(visible).length,
-                    total_like_present: Boolean(document.querySelector('[class*="total"],[id*="total"]')),
-                    total_like_text_len: ((el) => (el && typeof el.innerText === "string" ? el.innerText.length : 0))(document.querySelector('[class*="total"],[id*="total"]'))
+                    total_like_present: Boolean(totalLike),
+                    total_like_text_len: totalLike && typeof totalLike.innerText === "string" ? totalLike.innerText.length : 0
                 };
                 """,
                 SEL_ADD_TO_CART,
@@ -2514,7 +2515,7 @@ class GivexDriver:
                         {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
                     )
                     self._engine_aware_sleep(0.04, 0.11, "scroll_micro_tick")
-            stage = "scroll_final_settle"
+            stage = "scroll_final_settle"  # used by the except log if final settle raises
             self._engine_aware_sleep(0.9, 1.8, "scroll_final_settle")
         except Exception as exc:  # pylint: disable=broad-except
             _log.warning(
