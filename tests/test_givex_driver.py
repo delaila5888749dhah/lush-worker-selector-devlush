@@ -77,6 +77,14 @@ def _make_driver(current_url: str = "https://example.com/page") -> MagicMock:
     return d
 
 
+def _cdp_typed_chars(driver: MagicMock) -> str:
+    """Return text characters dispatched through CDP keyDown calls."""
+    return "".join(
+        c[0][1].get("text", "") for c in driver.execute_cdp_cmd.call_args_list
+        if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
+    )
+
+
 def _make_task() -> WorkerTask:
     card = CardInfo(
         card_number="4111111111111111",
@@ -460,11 +468,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
         # Phase 3A Task 1: guest email is now routed through CDP dispatchKeyEvent
         # via _realistic_type_field, NOT Selenium send_keys.
         email_el.send_keys.assert_not_called()
-        cdp_chars = "".join(
-            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
-            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
-        )
-        self.assertIn("guest@example.com", cdp_chars)
+        self.assertIn("guest@example.com", _cdp_typed_chars(selenium))
         continue_el.click.assert_called_once()
 
     def test_select_guest_checkout_raises_if_begin_checkout_missing(self):
@@ -546,11 +550,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
         begin_el.click.assert_called_once()
         mock_type.assert_called_once_with(SEL_GUEST_EMAIL, "guest@example.com", field_kind="text")
         email_el.send_keys.assert_not_called()
-        cdp_chars = "".join(
-            c[0][1].get("text", "") for c in selenium.execute_cdp_cmd.call_args_list
-            if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
-        )
-        self.assertIn("guest@example.com", cdp_chars)
+        self.assertIn("guest@example.com", _cdp_typed_chars(selenium))
         continue_el.click.assert_called_once()
         self.assertIn("signal=guest_email", "\n".join(logs.output))
         self.assertIn("skipping heading click", "\n".join(logs.output))

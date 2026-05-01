@@ -3621,6 +3621,7 @@ class GivexDriver:
     # ── Cart & Guest Checkout (Step 2) ───────────────────────────────────────
 
     def _is_selector_present_visible(self, selector: str) -> bool:
+        """Return True when selector exists with non-zero visible dimensions."""
         try:
             result = self._driver.execute_script(
                 "const el=document.querySelector(arguments[0]);"
@@ -3634,6 +3635,13 @@ class GivexDriver:
             return False
 
     def _wait_for_checkout_or_guest_inline(self, timeout: int = 15) -> str:
+        """Wait for checkout URL or inline guest checkout controls.
+
+        Returns:
+            ``"url"`` when ``URL_CHECKOUT`` is reached, ``"guest_heading"``
+            when the guest accordion heading is visible inline, or
+            ``"guest_email"`` when the guest email field is visible inline.
+        """
         deadline = time.monotonic() + timeout
         last_url = ""
         while time.monotonic() < deadline:
