@@ -99,8 +99,8 @@ class HumanScrollToTests(unittest.TestCase):
         ]
         self.assertEqual(len(wheel_payloads), 10)
         for payload in wheel_payloads:
-            self.assertGreaterEqual(abs(payload["deltaY"]), drv._SCROLL_DELTA_PER_TICK_MIN)
-            self.assertLessEqual(abs(payload["deltaY"]), drv._SCROLL_DELTA_PER_TICK_MAX)
+            self.assertGreaterEqual(abs(payload["deltaY"]), 70)
+            self.assertLessEqual(abs(payload["deltaY"]), 120)
 
 
 class EngineAwareSleepTests(unittest.TestCase):
@@ -420,9 +420,15 @@ class WaitForInteractableTests(unittest.TestCase):
     def test_atc_ready_check_uses_closest_control_parent(self):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = True
-        self.assertTrue(gd._is_closest_control_ready(drv.SEL_ADD_TO_CART))
-        script = gd._driver.execute_script.call_args.args[0]
-        self.assertIn("closest('button,a,[role=\"button\"],.btn')", script)
+        with patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
+             patch.object(gd, "_wait_for_url_or_capture"), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch("modules.cdp.driver.time.sleep"):
+            gd.add_to_cart_and_checkout()
+        scripts = [c.args[0] for c in gd._driver.execute_script.call_args_list]
+        self.assertTrue(any("closest('button,a,[role=\"button\"],.btn')" in s for s in scripts))
 
 class AtcBlueprintWaitTests(unittest.TestCase):
     def test_atc_sleeps_at_least_3s_before_review_checkout(self):
@@ -431,7 +437,6 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
-             patch.object(gd, "_is_closest_control_ready", return_value=True), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
              patch.object(gd, "_wait_for_url_or_capture"), \
              patch("modules.cdp.driver.time.sleep", side_effect=sleeps.append):
@@ -443,7 +448,6 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True) as wait_inter, \
-             patch.object(gd, "_is_closest_control_ready", return_value=True), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
              patch.object(gd, "_wait_for_element") as wait_element, \
              patch.object(gd, "_wait_for_url_or_capture"), \
@@ -457,7 +461,6 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
-             patch.object(gd, "_is_closest_control_ready", return_value=True), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, False)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"), \
@@ -472,7 +475,6 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
-             patch.object(gd, "_is_closest_control_ready", return_value=True), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, False)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"):
@@ -487,7 +489,6 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         with patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
              patch.object(gd, "_wait_for_interactable", return_value=True), \
-             patch.object(gd, "_is_closest_control_ready", return_value=True), \
              patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, True)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver.time.sleep"):

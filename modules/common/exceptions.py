@@ -23,17 +23,12 @@ class SelectorTimeoutError(SessionFlaggedError):
     Attributes:
         selector: The CSS selector or locator that timed out.
         timeout: The timeout in seconds that was exceeded.
-        reason: Optional timeout flavor, e.g. "present but disabled".
     """
     def __init__(self, selector: str, timeout: float, reason: str | None = None):
         self.selector = selector
         self.timeout = timeout
         self.reason = reason
-        if reason:
-            message = f"Selector '{selector}' {reason} after {timeout}s"
-        else:
-            message = f"Selector '{selector}' not found within {timeout}s"
-        super().__init__(message)
+        super().__init__(f"Selector '{selector}' {reason} after {timeout}s" if reason else f"Selector '{selector}' not found within {timeout}s")
 
 
 class PageStateError(SessionFlaggedError):
