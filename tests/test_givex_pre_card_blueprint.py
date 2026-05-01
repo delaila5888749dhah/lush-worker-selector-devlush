@@ -1188,5 +1188,411 @@ class SelectCardDesignTests(unittest.TestCase):
         mock_shot.assert_called_once_with("card_design_offscreen")
 
 
+# ── Round-4 new tests ────────────────────────────────────────────────────────
+
+
+class Round4TimingOrderTests(unittest.TestCase):
+    """Fix 1 — _select_card_design_if_required() is called BEFORE _smooth_scroll_to."""
+
+    def test_card_design_called_before_smooth_scroll_to(self):
+        """`_select_card_design_if_required` must fire before `_smooth_scroll_to`."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        order = []
+
+        def _spy_design():
+            order.append("card_design")
+
+        def _spy_scroll(_sel):
+            order.append("scroll")
+
+        with patch.object(gd, "_select_card_design_if_required", side_effect=_spy_design), \
+             patch.object(gd, "_smooth_scroll_to", side_effect=_spy_scroll), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_blur_active_field_naturally", return_value=True), \
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
+             patch.object(drv, "_random_greeting", return_value="Hi"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd.fill_egift_form(_make_task(), _make_billing())
+        self.assertIn("card_design", order)
+        self.assertIn("scroll", order)
+        self.assertLess(
+            order.index("card_design"),
+            order.index("scroll"),
+            f"card_design must precede smooth_scroll_to; actual order={order}",
+        )
+
+    def test_card_design_called_exactly_once(self):
+        """`_select_card_design_if_required` must be called exactly once."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        call_count = []
+
+        def _spy_design():
+            call_count.append(1)
+
+        with patch.object(gd, "_select_card_design_if_required", side_effect=_spy_design), \
+             patch.object(gd, "_smooth_scroll_to"), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_blur_active_field_naturally", return_value=True), \
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
+             patch.object(drv, "_random_greeting", return_value="Hi"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd.fill_egift_form(_make_task(), _make_billing())
+        self.assertEqual(len(call_count), 1, "_select_card_design_if_required called more than once")
+
+
+class Round4DetectionTests(unittest.TestCase):
+    """Fix 2 — detection JS scoped to containers, using getElementById for radios."""
+
+    def _make_gd(self, side_effects):
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = list(side_effects)
+        return GivexDriver(selenium, strict=False)
+
+    def test_detect_js_scopes_to_form_select_card(self):
+        """Detection script must reference #form--select-card container."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        gd._driver.execute_script.return_value = []
+        import inspect
+        src = inspect.getsource(gd._select_card_design_if_required)
+        self.assertIn("#form--select-card", src)
+
+    def test_detect_js_scopes_to_cards_container(self):
+        """Detection script must reference #cardsContainer container."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        import inspect
+        src = inspect.getsource(gd._select_card_design_if_required)
+        self.assertIn("#cardsContainer", src)
+
+    def test_detect_js_uses_get_element_by_id_not_css_query(self):
+        """Radio lookup must use getElementById (CSS cannot start with digit)."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        import inspect
+        src = inspect.getsource(gd._select_card_design_if_required)
+        self.assertIn("getElementById", src)
+        # Must NOT use querySelector with bare numeric id
+        self.assertNotIn('querySelector("#4', src)
+
+    def test_returns_candidate_with_valid_label_and_radio(self):
+        """A candidate with numeric-suffix label + matching radio → accepted."""
+        # Simulate JS returning a single valid candidate (as the real DOM would)
+        candidates = [
+            {"id": "cws_lbl_415760", "radio_id_len": 6, "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+        ]
+        state = {"checked_count": 0, "preview_src_len": -1, "preview_name_len": -1,
+                 "clicked_radio_checked": False,
+                 "value_text_len": 0, "value_value_len": 0, "value_attr_len": 0,
+                 "selected_like_count": 0, "visible_option_count": 1}
+        post_rect = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True}
+        state_after = dict(state)
+        state_after["clicked_radio_checked"] = True  # radio is now checked
+        gd = self._make_gd([candidates, state, None, post_rect, state_after])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()
+        mock_click.assert_called_once()
+
+    def test_no_picker_detected_when_js_returns_none(self):
+        """When execute_script returns None (no container), skip gracefully."""
+        selenium = _make_driver()
+        selenium.execute_script.return_value = None
+        gd = GivexDriver(selenium, strict=False)
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch("modules.cdp.driver.time.sleep") as mock_sleep, \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        mock_click.assert_not_called()
+        mock_sleep.assert_not_called()
+        self.assertEqual(selenium.execute_script.call_count, 1)
+        self.assertIn("no_picker_detected", "\n".join(logs.output))
+
+    def test_container_present_empty_polls_until_candidate(self):
+        """Empty list means picker exists but candidates are still rendering."""
+        candidates = [
+            {"id": "cws_lbl_415760", "radio_id_len": 6, "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+        ]
+        state = {"checked_count": 0, "preview_src_len": -1, "preview_name_len": -1,
+                 "clicked_radio_checked": False,
+                 "value_text_len": 0, "value_value_len": 0, "value_attr_len": 0,
+                 "selected_like_count": 0, "visible_option_count": 1}
+        state_after = dict(state)
+        state_after["clicked_radio_checked"] = True
+        gd = self._make_gd([
+            [], candidates, state, None,
+            {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True},
+            state_after,
+        ])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch("modules.cdp.driver.time.sleep") as mock_sleep, \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()
+        mock_sleep.assert_called()
+        self.assertGreaterEqual(gd._driver.execute_script.call_count, 2)
+        mock_click.assert_called_once()
+
+    def test_poll_stops_when_retry_returns_none(self):
+        """A later None sentinel means the picker disappeared; stop polling."""
+        gd = self._make_gd([[], None])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch("modules.cdp.driver.time.sleep") as mock_sleep, \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        mock_sleep.assert_called_once()
+        self.assertEqual(gd._driver.execute_script.call_count, 2)
+        mock_click.assert_not_called()
+        self.assertIn("no_picker_detected", "\n".join(logs.output))
+
+    def test_no_picker_detected_does_not_raise(self):
+        """no_picker_detected path must return gracefully (no exception)."""
+        selenium = _make_driver()
+        selenium.execute_script.return_value = None
+        gd = GivexDriver(selenium, strict=False)
+        with self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            try:
+                gd._select_card_design_if_required()
+            except Exception as exc:  # pylint: disable=broad-except
+                self.fail(f"_select_card_design_if_required raised unexpectedly: {exc}")
+        self.assertIn("no_picker_detected", "\n".join(logs.output))
+
+    def test_non_numeric_labels_excluded_from_candidates(self):
+        """Labels like cws_lbl_gcMsg must NOT be treated as card design picks."""
+        import inspect
+        src = inspect.getsource(GivexDriver._select_card_design_if_required)
+        self.assertIn(r"cws_lbl_\d{6}", src)
+        self.assertIn("radio.type==='radio'", src)
+
+
+class Round4VerificationTests(unittest.TestCase):
+    """Fix 3 — verification signals: clicked_radio_checked, checked_count, preview."""
+
+    _BASE_BEFORE = {
+        "clicked_radio_checked": False,
+        "checked_count": 0,
+        "preview_src_len": -1,
+        "preview_name_len": -1,
+        "value_text_len": 0,
+        "value_value_len": 0,
+        "value_attr_len": 0,
+        "selected_like_count": 0,
+    }
+
+    def _make_gd(self, candidates, state_before, state_after):
+        side_effects = [
+            candidates,
+            state_before,
+            None,  # scroll
+            {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True},
+            state_after,
+        ]
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = list(side_effects)
+        return GivexDriver(selenium, strict=False)
+
+    def _candidates(self):
+        return [{"id": "cws_lbl_415760", "radio_id_len": 6,
+                 "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}]
+
+    def test_clicked_radio_checked_is_sufficient(self):
+        """clicked_radio_checked=True alone → no raise."""
+        after = dict(self._BASE_BEFORE)
+        after["clicked_radio_checked"] = True
+        gd = self._make_gd(self._candidates(), dict(self._BASE_BEFORE), after)
+        with patch.object(gd, "cdp_click_absolute"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()  # must not raise
+
+    def test_checked_count_increase_is_sufficient(self):
+        """checked_count increasing from 0 → 1 alone → no raise."""
+        after = dict(self._BASE_BEFORE)
+        after["checked_count"] = 1
+        gd = self._make_gd(self._candidates(), dict(self._BASE_BEFORE), after)
+        with patch.object(gd, "cdp_click_absolute"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()  # must not raise
+
+    def test_preview_src_len_change_is_sufficient(self):
+        """#cardPreview src length changing (from -1 to 100) alone → no raise."""
+        before = dict(self._BASE_BEFORE)
+        before["preview_src_len"] = -1
+        after = dict(self._BASE_BEFORE)
+        after["preview_src_len"] = 100
+        gd = self._make_gd(self._candidates(), before, after)
+        with patch.object(gd, "cdp_click_absolute"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()  # must not raise
+
+    def test_preview_name_len_change_is_sufficient(self):
+        """#cardPreviewName text length changing (from -1 to 20) alone → no raise."""
+        before = dict(self._BASE_BEFORE)
+        before["preview_name_len"] = -1
+        after = dict(self._BASE_BEFORE)
+        after["preview_name_len"] = 20
+        gd = self._make_gd(self._candidates(), before, after)
+        with patch.object(gd, "cdp_click_absolute"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._select_card_design_if_required()  # must not raise
+
+    def test_no_new_signal_raises_session_flagged_error(self):
+        """No primary OR legacy signal changed → SessionFlaggedError + screenshot."""
+        before = dict(self._BASE_BEFORE)
+        after = dict(self._BASE_BEFORE)  # all same — nothing changed
+        gd = self._make_gd(self._candidates(), before, after)
+        with patch.object(gd, "cdp_click_absolute"), \
+             patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            with self.assertRaisesRegex(SessionFlaggedError, "Card design selection required"):
+                gd._select_card_design_if_required()
+        mock_shot.assert_called_once_with("card_design_not_verified")
+
+    def test_verification_info_log_includes_counts_not_raw_values(self):
+        """INFO log must include count/length fields and no raw PII."""
+        after = dict(self._BASE_BEFORE)
+        after["clicked_radio_checked"] = True
+        after["checked_count"] = 1
+        gd = self._make_gd(self._candidates(), dict(self._BASE_BEFORE), after)
+        with patch.object(gd, "cdp_click_absolute"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        combined = "\n".join(l for l in logs.output if "card_design" in l and "INFO" in l)
+        self.assertTrue(combined, "Expected INFO card_design log line")
+        self.assertIn("checked_count_before", combined)
+        self.assertIn("checked_count_after", combined)
+        self.assertIn("clicked_radio_checked", combined)
+        # No raw IDs in INFO logs
+        self.assertNotIn("cws_lbl_415760", combined)
+
+
+class Round4AtcHittabilityTests(unittest.TestCase):
+    """Fix 4 — ATC viewport/hit-test before click."""
+
+    def _make_gd(self, scroll_ret=None, hittest_ret=None):
+        selenium = _make_driver()
+        side = [scroll_ret, hittest_ret]
+        selenium.execute_script.side_effect = side
+        return GivexDriver(selenium, strict=False)
+
+    def test_center_outside_viewport_raises_session_flagged_error(self):
+        """ATC center outside viewport → SessionFlaggedError + screenshot."""
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": False, "hittest_pass": False, "w": 100, "h": 40},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            with self.assertRaisesRegex(SessionFlaggedError, "Add-to-Cart not hittable"):
+                gd._verify_atc_hittable()
+        mock_shot.assert_called_once_with("add_to_cart_not_hittable")
+
+    def test_hittest_unrelated_element_raises_session_flagged_error(self):
+        """elementFromPoint returns unrelated element → raises."""
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": True, "hittest_pass": False, "w": 100, "h": 40},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            with self.assertRaisesRegex(SessionFlaggedError, "Add-to-Cart not hittable"):
+                gd._verify_atc_hittable()
+        mock_shot.assert_called_once_with("add_to_cart_not_hittable")
+
+    def test_hittest_returns_control_passes(self):
+        """elementFromPoint returns the control itself → no raise."""
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": True, "hittest_pass": True, "w": 100, "h": 40},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._verify_atc_hittable()  # must not raise
+        mock_shot.assert_not_called()
+
+    def test_hittest_returns_descendant_passes(self):
+        """elementFromPoint returns span child (control.contains(hit)) → pass."""
+        # hittest_pass=True covers el.contains(hit) case in JS
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": True, "hittest_pass": True, "w": 313, "h": 37},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._verify_atc_hittable()  # must not raise
+        mock_shot.assert_not_called()
+
+    def test_hittest_returns_ancestor_passes(self):
+        """elementFromPoint returns wrapper div (hit.contains(el)) → pass."""
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": True, "hittest_pass": True, "w": 400, "h": 50},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._verify_atc_hittable()  # must not raise
+        mock_shot.assert_not_called()
+
+    def test_element_absent_proceeds_without_raise(self):
+        """JS returns None (element not found) → inconclusive, no raise."""
+        gd = self._make_gd(scroll_ret=None, hittest_ret=None)
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="WARNING"):
+            gd._verify_atc_hittable()  # must not raise
+        mock_shot.assert_not_called()
+
+    def test_atc_verify_called_before_click_in_add_to_cart(self):
+        """_verify_atc_hittable must be called before _click_closest_control_for."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        order = []
+        with patch.object(gd, "_verify_atc_hittable", side_effect=lambda: order.append("verify")), \
+             patch.object(gd, "_click_closest_control_for", side_effect=lambda *a: order.append("click")), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_review_checkout_diagnostics", return_value={}), \
+             patch.object(gd, "_wait_for_cart_state_after_atc", return_value=(True, {})), \
+             patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(True, True)), \
+             patch.object(gd, "_wait_for_url_or_capture"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch("modules.cdp.driver.time.sleep"):
+            gd.add_to_cart_and_checkout()
+        self.assertIn("verify", order)
+        self.assertIn("click", order)
+        self.assertLess(
+            order.index("verify"),
+            order.index("click"),
+            f"_verify_atc_hittable must precede _click_closest_control_for; order={order}",
+        )
+
+    def test_atc_not_hittable_prevents_click(self):
+        """When _verify_atc_hittable raises, _click_closest_control_for NOT called."""
+        gd = GivexDriver(_make_driver(), strict=False)
+        click_called = []
+        with patch.object(gd, "_verify_atc_hittable",
+                          side_effect=SessionFlaggedError("Add-to-Cart not hittable after scroll")), \
+             patch.object(gd, "_click_closest_control_for",
+                          side_effect=lambda *a: click_called.append(1)), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_review_checkout_diagnostics", return_value={}), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaisesRegex(SessionFlaggedError, "Add-to-Cart not hittable"):
+                gd.add_to_cart_and_checkout()
+        self.assertEqual(click_called, [], "_click_closest_control_for must NOT be called")
+
+    def test_verify_atc_js_contains_expected_selectors(self):
+        """_verify_atc_hittable JS must reference #cws_btn_gcBuyAdd and elementFromPoint."""
+        import inspect
+        src = inspect.getsource(GivexDriver._verify_atc_hittable)
+        self.assertIn("#cws_btn_gcBuyAdd", src)
+        self.assertIn("elementFromPoint", src)
+        self.assertIn("scrollIntoView", src)
+
+
 if __name__ == "__main__":
     unittest.main()
