@@ -1330,6 +1330,7 @@ class Round4DetectionTests(unittest.TestCase):
              self.assertLogs("modules.cdp.driver", level="INFO"):
             gd._select_card_design_if_required()
         mock_sleep.assert_called()
+        self.assertGreaterEqual(gd._driver.execute_script.call_count, 2)
         mock_click.assert_called_once()
 
     def test_no_picker_detected_does_not_raise(self):

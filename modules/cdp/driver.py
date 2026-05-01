@@ -3269,6 +3269,7 @@ class GivexDriver:
             "const s=getComputedStyle(e),r=e.getBoundingClientRect();"
             "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};"
             "const cont=document.querySelector('#form--select-card')||document.querySelector('#cardsContainer');"
+            "// null skips polling; [] means container exists but labels are still rendering."
             "if(!cont)return null;"
             "const labels=Array.from(cont.querySelectorAll('label[id^=\"cws_lbl_\"]'));"
             "const valid=labels.filter(e=>{"
