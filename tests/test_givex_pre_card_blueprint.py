@@ -930,7 +930,7 @@ class SelectCardDesignTests(unittest.TestCase):
         {"id": f"cws_lbl_41576{i}", "x": 10.0 + i * 90, "y": 100.0, "w": 80.0, "h": 40.0}
         for i in range(6)
     ]
-    _POST_RECT = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+    _POST_RECT = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True}
     _STATE_BEFORE = {
         "value_present": True,
         "value_text_len": 0,
@@ -997,7 +997,7 @@ class SelectCardDesignTests(unittest.TestCase):
             candidates,                           # detect
             state_same,                           # state_before
             None,                                 # scroll
-            {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0},  # post-rect
+            {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True},  # post-rect
             state_same,                           # state_after (unchanged)
         ])
         with patch.object(gd, "cdp_click_absolute"), \
@@ -1030,31 +1030,43 @@ class SelectCardDesignTests(unittest.TestCase):
             self.assertNotIn(forbidden, combined)
 
     def test_fill_egift_form_calls_card_design_before_completion(self):
-        """_select_card_design_if_required must be called before fill_egift_form: completed."""
+        """_select_card_design_if_required must be called BEFORE final validation."""
         gd = GivexDriver(_make_driver(), strict=False)
         order = []
 
         def spy_card_design():
             order.append("card_design")
 
+        def spy_field_value_length(_sel):
+            order.append("final_validation")
+            return 10
+
         with patch.object(gd, "_smooth_scroll_to"), \
              patch.object(gd, "_engine_aware_sleep"), \
              patch.object(gd, "_realistic_type_field"), \
              patch.object(gd, "_blur_active_field_naturally", return_value=True), \
-             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value_length", side_effect=spy_field_value_length), \
              patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch.object(gd, "_select_card_design_if_required", side_effect=spy_card_design), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd.fill_egift_form(_make_task(), _make_billing())
         log_text = "\n".join(logs.output)
+        # Both events must have occurred
         self.assertIn("card_design", order, "_select_card_design_if_required was not called")
+        self.assertIn("final_validation", order, "final_validation (_field_value_length) was not called")
+        # AND card_design must come BEFORE final_validation
+        self.assertLess(
+            order.index("card_design"),
+            order.index("final_validation"),
+            f"card_design must be called before final_validation; actual order={order}",
+        )
         self.assertIn("fill_egift_form: completed", log_text)
 
     def test_select_card_design_verification_passes_on_any_signal_change(self):
         """Any one changed signal is sufficient to pass verification (no raise)."""
         candidates = [{"id": "cws_lbl_415760", "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}]
-        post_rect = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}
+        post_rect = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": True}
         base = {
             "value_present": True,
             "value_text_len": 0,
@@ -1084,6 +1096,96 @@ class SelectCardDesignTests(unittest.TestCase):
                      self.assertLogs("modules.cdp.driver", level="INFO"):
                     # Must not raise
                     gd._select_card_design_if_required()
+
+
+    def test_select_card_design_raises_when_post_rect_unavailable(self):
+        """SessionFlaggedError when post-scroll rect is unavailable (None / empty / zero-size)."""
+        candidates = [{"id": "cws_lbl_415760", "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}]
+        state_before = {
+            "value_present": True,
+            "value_text_len": 0,
+            "value_value_len": 0,
+            "value_attr_len": 5,
+            "selected_like_count": 0,
+            "visible_option_count": 1,
+        }
+        for label, bad_rect in [
+            ("none_rect", None),
+            ("empty_dict", {}),
+            ("zero_size", {"x": 10.0, "y": 100.0, "w": 0, "h": 0}),
+        ]:
+            with self.subTest(label):
+                gd = self._make_gd_with_script_side_effect([
+                    candidates,   # detect
+                    state_before, # state_before
+                    None,         # scroll
+                    bad_rect,     # post-rect (unavailable)
+                ])
+                with patch.object(gd, "cdp_click_absolute") as mock_click, \
+                     patch.object(gd, "_capture_failure_screenshot") as mock_shot:
+                    with self.assertRaisesRegex(SessionFlaggedError, "post-scroll rect unavailable"):
+                        gd._select_card_design_if_required()
+                mock_click.assert_not_called()
+                mock_shot.assert_called_once_with("card_design_post_rect_unavailable")
+
+    def test_select_card_design_raises_when_offscreen_after_scroll(self):
+        """SessionFlaggedError when element reports in_viewport=False after scroll."""
+        candidates = [{"id": "cws_lbl_415760", "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0}]
+        state_before = {
+            "value_present": True,
+            "value_text_len": 0,
+            "value_value_len": 0,
+            "value_attr_len": 5,
+            "selected_like_count": 0,
+            "visible_option_count": 1,
+        }
+        offscreen_rect = {"x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0, "in_viewport": False}
+        gd = self._make_gd_with_script_side_effect([
+            candidates,     # detect
+            state_before,   # state_before
+            None,           # scroll
+            offscreen_rect, # post-rect (offscreen)
+        ])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch.object(gd, "_capture_failure_screenshot") as mock_shot:
+            with self.assertRaisesRegex(SessionFlaggedError, "offscreen after scroll"):
+                gd._select_card_design_if_required()
+        mock_click.assert_not_called()
+        mock_shot.assert_called_once_with("card_design_offscreen")
+
+    def test_select_card_design_raises_when_center_outside_viewport_partial_intersect(self):
+        """SessionFlaggedError for partial intersection where click-center is outside viewport.
+
+        Emulates the edge case: element at x=-50, w=60 intersects the left
+        viewport edge (right=10 > 0) but its center is at cx=-20, which is
+        outside the viewport.  The updated center-point JS returns
+        in_viewport=False for this case, preventing cdp_click_absolute from
+        being called with a negative coordinate.
+        """
+        candidates = [{"id": "cws_lbl_415760", "x": -50.0, "y": 100.0, "w": 60.0, "h": 40.0}]
+        state_before = {
+            "value_present": True,
+            "value_text_len": 0,
+            "value_value_len": 0,
+            "value_attr_len": 5,
+            "selected_like_count": 0,
+            "visible_option_count": 1,
+        }
+        # Partial-intersection rect: rect intersects viewport but center (cx=-20) is outside.
+        # The updated center-point JS sets in_viewport=False for this geometry.
+        partial_rect = {"x": -50.0, "y": 100.0, "w": 60.0, "h": 40.0, "in_viewport": False}
+        gd = self._make_gd_with_script_side_effect([
+            candidates,    # detect
+            state_before,  # state_before
+            None,          # scroll
+            partial_rect,  # post-rect (center outside viewport)
+        ])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch.object(gd, "_capture_failure_screenshot") as mock_shot:
+            with self.assertRaisesRegex(SessionFlaggedError, "offscreen after scroll"):
+                gd._select_card_design_if_required()
+        mock_click.assert_not_called()
+        mock_shot.assert_called_once_with("card_design_offscreen")
 
 
 if __name__ == "__main__":
