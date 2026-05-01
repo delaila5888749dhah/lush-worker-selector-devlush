@@ -3318,19 +3318,24 @@ class GivexDriver:
                 "const el=document.getElementById(arguments[0]);"
                 "if(!el)return null;"
                 "const r=el.getBoundingClientRect();"
-                "return{x:r.x,y:r.y,w:r.width,h:r.height};",
+                "return{x:r.x,y:r.y,w:r.width,h:r.height,"
+                "in_viewport:r.width>0&&r.height>0&&r.bottom>0&&r.right>0"
+                "&&r.top<window.innerHeight&&r.left<window.innerWidth};",
                 chosen_id,
             )
         except Exception:  # pylint: disable=broad-except
             pass
 
-        if isinstance(post_rect, dict) and post_rect.get("w", 0) > 0 and post_rect.get("h", 0) > 0:
-            click_x = post_rect["x"] + post_rect["w"] / 2.0
-            click_y = post_rect["y"] + post_rect["h"] / 2.0
-        else:
-            click_x = chosen.get("x", 0.0) + chosen.get("w", 0.0) / 2.0
-            click_y = chosen.get("y", 0.0) + chosen.get("h", 0.0) / 2.0
+        if not isinstance(post_rect, dict) or post_rect.get("w", 0) <= 0 or post_rect.get("h", 0) <= 0:
+            self._capture_failure_screenshot("card_design_post_rect_unavailable")
+            raise SessionFlaggedError("Card design post-scroll rect unavailable")
 
+        if not post_rect.get("in_viewport"):
+            self._capture_failure_screenshot("card_design_offscreen")
+            raise SessionFlaggedError("Card design candidate offscreen after scroll")
+
+        click_x = post_rect["x"] + post_rect["w"] / 2.0
+        click_y = post_rect["y"] + post_rect["h"] / 2.0
         self.cdp_click_absolute(click_x, click_y)
 
         state_after = self._card_design_state_snapshot()
