@@ -351,7 +351,10 @@ class TestAddToCartAndCheckout(unittest.TestCase):
 
     def test_add_to_cart_logs_pii_safe_diagnostics_when_review_missing(self):
         selenium = _make_driver()
-        selenium.get_cookies.return_value = [{}, {}]
+        selenium.get_cookies.return_value = [
+            {"name": "session", "value": "redacted"},
+            {"name": "cart", "value": "redacted"},
+        ]
         selenium.execute_script.return_value = {
             "localStorage_length": 3,
             "sessionStorage_length": 4,

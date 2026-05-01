@@ -1975,7 +1975,7 @@ class GivexDriver:
                     }
                     const style = window.getComputedStyle(el);
                     const rect = el.getBoundingClientRect();
-                    const className = typeof el.className === "string" ? el.className : "";
+                    const className = el.getAttribute("class") || "";
                     const text = typeof el.innerText === "string" ? el.innerText : "";
                     return {
                         present: true,
@@ -1996,8 +1996,20 @@ class GivexDriver:
                     : null;
                 const reviewCheckout = document.querySelector(arguments[1]);
                 return {
-                    localStorage_length: window.localStorage ? window.localStorage.length : -1,
-                    sessionStorage_length: window.sessionStorage ? window.sessionStorage.length : -1,
+                    localStorage_length: (() => {
+                        try {
+                            return window.localStorage ? window.localStorage.length : -1;
+                        } catch (e) {
+                            return -1;
+                        }
+                    })(),
+                    sessionStorage_length: (() => {
+                        try {
+                            return window.sessionStorage ? window.sessionStorage.length : -1;
+                        } catch (e) {
+                            return -1;
+                        }
+                    })(),
                     add_to_cart_span: describe(addToCartSpan),
                     add_to_cart_parent: describe(addToCartParent),
                     review_checkout: describe(reviewCheckout)
