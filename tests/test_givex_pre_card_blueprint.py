@@ -111,6 +111,7 @@ class HumanScrollToTests(unittest.TestCase):
         )
         with patch.object(gd, "_get_rng", return_value=LowBoundRng()), patch("modules.cdp.driver.time.sleep"):
             gd._human_scroll_to(SEL_GREETING_MSG, max_steps=2)
+        # max_steps=2 is capped at max_steps * 4 adaptive micro-ticks.
         self.assertEqual(sum(1 for c in selenium.execute_cdp_cmd.call_args_list if c.args[1].get("type") == "mouseWheel"), 8)
 
     def test_cursor_path_does_not_use_ghostcursor_sleep(self):

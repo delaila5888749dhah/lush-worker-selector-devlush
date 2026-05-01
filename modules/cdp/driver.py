@@ -2083,7 +2083,8 @@ class GivexDriver:
 
     def _log_review_checkout_diagnostics(self) -> None:
         data = self._review_checkout_diagnostics()
-        extra = {k: v for k, v in data.items() if k not in ("cookie_count", "localStorage_length", "sessionStorage_length", "add_to_cart_span", "add_to_cart_parent", "review_checkout")}
+        logged_keys = {"cookie_count", "localStorage_length", "sessionStorage_length", "add_to_cart_span", "add_to_cart_parent", "review_checkout"}
+        extra = {k: v for k, v in data.items() if k not in logged_keys}
         _log.error(
             "add_to_cart_and_checkout: Review-Checkout diagnostics "
             "cookie_count=%s localStorage.length=%s sessionStorage.length=%s "
@@ -2513,7 +2514,7 @@ class GivexDriver:
                         {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
                     )
                     self._engine_aware_sleep(0.04, 0.11, "scroll_micro_tick")
-                stage = "scroll_final_settle"
+            stage = "scroll_final_settle"
             self._engine_aware_sleep(0.9, 1.8, "scroll_final_settle")
         except Exception as exc:  # pylint: disable=broad-except
             _log.warning(
