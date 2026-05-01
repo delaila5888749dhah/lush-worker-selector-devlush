@@ -1956,7 +1956,13 @@ class GivexDriver:
             return None
 
     def _review_checkout_diagnostics(self) -> dict:
-        """Return PII-safe structural diagnostics for the cart handoff."""
+        """Return PII-safe diagnostics for the Add-to-Cart → Review Checkout handoff.
+
+        The returned mapping contains ``cookie_count``, storage lengths, and
+        structural-only element snapshots for ``add_to_cart_span``,
+        ``add_to_cart_parent``, and ``review_checkout``.  Element snapshots log
+        booleans, style flags, dimensions, and text/class lengths only.
+        """
         cookie_count = -1
         try:
             cookie_count = len(self._driver.get_cookies())
