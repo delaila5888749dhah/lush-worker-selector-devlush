@@ -3666,8 +3666,9 @@ class GivexDriver:
             time.sleep(0.5)
         self._capture_failure_screenshot("url_checkout_not_reached")
         raise PageStateError(
-            "checkout_or_guest_wait expected="
-            f"{_short_url(URL_CHECKOUT)} last_seen={_sanitize_url_for_log(last_url)}"
+            "url_wait expected="
+            f"{_short_url(URL_CHECKOUT)} or_guest_inline "
+            f"last_seen={_sanitize_url_for_log(last_url)}"
         )
 
     def select_guest_checkout(self, guest_email: str) -> None:

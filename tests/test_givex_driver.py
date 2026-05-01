@@ -565,6 +565,20 @@ class TestSelectGuestCheckout(unittest.TestCase):
         ), patch("time.sleep"):
             self.assertEqual(gd._wait_for_checkout_or_guest_inline(timeout=1), "guest_heading")
 
+    def test_wait_for_checkout_or_guest_inline_timeout_message_keeps_url_wait_prefix(self):
+        """Backward-compat: timeout message keeps url_wait prefix for legacy log grep."""
+        selenium = _make_driver(current_url=URL_CART)
+        gd = GivexDriver(selenium, strict=False)
+        with patch.object(gd, "_is_selector_present_visible", return_value=False), \
+             patch.object(gd, "_capture_failure_screenshot"), \
+             patch("time.sleep"):
+            with self.assertRaises(PageStateError) as ctx:
+                gd._wait_for_checkout_or_guest_inline(timeout=0)
+        msg = str(ctx.exception)
+        self.assertIn("url_wait expected=", msg)
+        self.assertIn("or_guest_inline", msg)
+        self.assertIn("last_seen=", msg)
+
     def test_verify_begin_checkout_called_before_click(self):
         selenium = _make_driver(current_url=URL_CART)
         begin_el = MagicMock()
