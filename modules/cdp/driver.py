@@ -425,6 +425,19 @@ SEL_GUEST_HEADING  = "#guestHeading"
 SEL_GUEST_EMAIL    = "#cws_txt_guestEmail"
 SEL_GUEST_CONTINUE = "#cws_btn_guestChkout"
 
+_SELECTOR_NAMES = dict(
+    (sel, name) for sel, name in (
+        (SEL_GREETING_MSG, "SEL_GREETING_MSG"), (SEL_AMOUNT_INPUT, "SEL_AMOUNT_INPUT"),
+        (SEL_RECIPIENT_NAME, "SEL_RECIPIENT_NAME"), (SEL_RECIPIENT_EMAIL, "SEL_RECIPIENT_EMAIL"),
+        (SEL_CONFIRM_RECIPIENT_EMAIL, "SEL_CONFIRM_RECIPIENT_EMAIL"), (SEL_SENDER_NAME, "SEL_SENDER_NAME"),
+        (SEL_GUEST_EMAIL, "SEL_GUEST_EMAIL"),
+    )
+)
+
+
+def _selector_name(sel: str) -> str:
+    return _SELECTOR_NAMES.get(sel, "UNKNOWN_SELECTOR")
+
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
 SEL_CARD_NAME         = "#cws_txt_ccName"
 SEL_CARD_NUMBER       = "#cws_txt_ccNum"
@@ -1887,6 +1900,79 @@ class GivexDriver:
             time.sleep(0.5)
         return False
 
+    def _is_interactable(self, elem) -> bool:
+        try:
+            if not elem.is_displayed():
+                return False
+        except Exception:  # pylint: disable=broad-except
+            return False
+        try:
+            if not elem.is_enabled():
+                return False
+        except Exception:  # pylint: disable=broad-except
+            pass
+        js = ("const e=arguments[0],s=getComputedStyle(e),r=e.getBoundingClientRect();"
+              "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'"
+              "&&s.pointerEvents!=='none'&&e.getAttribute('aria-disabled')!=='true'&&!e.disabled;")
+        try:
+            return bool(self._driver.execute_script(js, elem))
+        except Exception:  # pylint: disable=broad-except
+            return False
+
+    def _wait_for_interactable(self, selector: str, timeout: int = 10) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            elements = self.find_elements(selector)
+            for elem in elements:
+                try:
+                    if self._is_interactable(elem):
+                        return True
+                except (StaleElementReferenceException, NoSuchElementException) as exc:
+                    _log.debug(
+                        "_wait_for_interactable: ignored transient interactability error for %s: %s",
+                        _selector_name(selector),
+                        _sanitize_error(str(exc)),
+                    )
+            time.sleep(0.5)
+        return False
+
+    def _field_value_length(self, selector: str) -> int:
+        js = "const el=document.querySelector(arguments[0]);return el&&typeof el.value==='string'?el.value.length:-1;"
+        try:
+            return int(self._driver.execute_script(js, selector))
+        except Exception:  # pylint: disable=broad-except
+            return -1
+
+    def _field_value(self, selector: str) -> str | None:
+        """Read element value via JS. Callers must never log this PII-bearing value."""
+        try:
+            value = self._driver.execute_script(
+                "const el=document.querySelector(arguments[0]);"
+                "return el&&typeof el.value==='string'?el.value:null;",
+                selector,
+            )
+            return value if isinstance(value, str) else None
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
+        actual_len = self._field_value_length(sel)
+        _log.info("_realistic_type_field: field=%s expected_len=%d actual_len=%d", selector_name, expected_len, actual_len)
+        if actual_len < 0:
+            self._capture_failure_screenshot(f"type_field_unreadable_{selector_name}")
+            raise SessionFlaggedError(
+                f"Field {selector_name} value unreadable (JS read failed); expected_len={expected_len}"
+            )
+        if expected_len <= 0:
+            return
+        if sel == SEL_AMOUNT_INPUT:
+            failed, label = actual_len <= 0, "empty"
+        else:
+            failed, label = actual_len < max(1, int(expected_len * 0.7)), "short"
+        if failed:
+            self._capture_failure_screenshot(f"type_field_value_{label}_{selector_name}")
+            raise SessionFlaggedError(f"Field {selector_name} did not receive typed value (expected_len={expected_len} actual_len={actual_len})")
+
     def _wait_for_url(self, url_fragment: str, timeout: int = 15) -> None:
         """Poll until the current URL contains *url_fragment* or *timeout* expires.
 
@@ -2029,10 +2115,23 @@ class GivexDriver:
     ):
         els = self.find_elements(sel)
         if not els: raise SelectorTimeoutError(sel, 0)  # noqa: E701
+        selector_name = _selector_name(sel)
+        expected_len = len(str(val))
+        # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
+        # add its selector + symbolic name to the module-level _SELECTOR_NAMES registry
+        # defined immediately after SEL_GUEST_EMAIL. Unregistered fields keep legacy
+        # no-verify typing.
+        verify_value = sel in _SELECTOR_NAMES
+        if verify_value:
+            self._human_scroll_to(sel)
+            self.bounding_box_click(sel)
+            time.sleep(self._get_rng().uniform(0.08, 0.25))
         if _type_value is None:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
             self._send_keys_fallback(sel, val)
+            if verify_value:
+                self._verify_field_value_length(sel, expected_len, selector_name)
             return
         typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
         # Apply explicit ``typo_rate`` override first (callers who pass an
@@ -2073,13 +2172,19 @@ class GivexDriver:
         # so the production path matches the safe-zone contract.
         if self._engine is not None and not self._engine.is_delay_permitted():
             dl = None
+        elif self._bio and use_burst and len(val) >= 16:
+            dl = self._bio.generate_4x4_pattern()
+        elif self._bio:
+            dl = self._bio.generate_burst_pattern(len(val))
         else:
-            dl = (self._bio.generate_4x4_pattern() if self._bio and use_burst and len(val) >= 16 else self._bio.generate_burst_pattern(len(val)) if self._bio else None)
+            dl = None
         _type_value(
             self._driver, els[0], val, self._get_rng(),
             typo_rate=typo_prob, delays=dl, strict=self._strict,
             field_kind=field_kind, engine=self._engine,
         )
+        if verify_value:
+            self._verify_field_value_length(sel, expected_len, selector_name)
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """Select the option matching *value* in a ``<select>`` element.
@@ -2168,24 +2273,46 @@ class GivexDriver:
                 f"_cdp_select_option: failed to dispatch Enter for {selector!r}",
             )
 
-    def _smooth_scroll_to(self, selector: str) -> None:
-        """Scroll an element into view with a smooth pass and micro-correction."""
+    def _human_scroll_to(self, selector: str, *, max_steps: int = 12) -> None:
         elements = self.find_elements(selector)
         if not elements:
             return
+        rnd = self._get_rng()
+        stage = "init"
         try:
-            self._driver.execute_script(
-                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
-                elements[0],
+            for _ in range(max_steps):
+                stage = "rect_read"
+                rect = self._driver.execute_script("const r=arguments[0].getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};", elements[0])
+                stage = "viewport_read"
+                viewport_h = self._driver.execute_script("return window.innerHeight") or 720
+                center = rect["top"] + rect["height"] / 2
+                delta = center - viewport_h * rnd.uniform(0.45, 0.65)
+                if abs(delta) < 80:
+                    break
+                dy = max(-420, min(420, delta * rnd.uniform(0.45, 0.75)))
+                stage = "wheel_dispatch"
+                if self._cursor is not None and hasattr(self._cursor, "scroll_wheel"):
+                    self._cursor.scroll_wheel(dy, steps=rnd.randint(3, 6))
+                else:
+                    self._driver.execute_cdp_cmd(
+                        "Input.dispatchMouseEvent",
+                        {"type": "mouseWheel", "x": rnd.uniform(300, 900), "y": rnd.uniform(250, 650), "deltaX": 0, "deltaY": dy},
+                    )
+                time.sleep(rnd.uniform(0.18, 0.55))
+            time.sleep(rnd.uniform(0.35, 0.9))
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning(
+                "CDP wheel scroll failed at stage=%s (%s); falling back to JS scrollIntoView",
+                stage,
+                _sanitize_error(str(exc)),
             )
-            if self._cursor is not None:  # Prefer CDP wheel for micro-correction.
-                self._cursor.scroll_wheel(-8.0, steps=2)
-            else:
-                self._driver.execute_script("window.scrollBy(0, -8);")
-        except Exception:
-            _log.debug("_smooth_scroll_to: execute_script skipped")
-        delay = self._persona.get_click_delay() if self._persona is not None else 0.15
-        time.sleep(delay)
+            try:
+                self._driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", elements[0])
+            except Exception:  # pylint: disable=broad-except
+                _log.debug("JS scroll fallback also failed", exc_info=True)
+
+    def _smooth_scroll_to(self, selector: str) -> None:
+        self._human_scroll_to(selector)
 
     def _ghost_move_to(self, selector: str) -> None:
         """Move mouse to the target element via CDP mouseMoved events.
@@ -2630,7 +2757,30 @@ class GivexDriver:
         self._realistic_type_field(
             SEL_SENDER_NAME, full_name, field_kind="name",
         )
-        _log.info("fill_egift_form: completed")
+        _log.info("fill_egift_form: running final validation pass")
+        fields = (SEL_GREETING_MSG, SEL_AMOUNT_INPUT, SEL_RECIPIENT_NAME, SEL_RECIPIENT_EMAIL, SEL_CONFIRM_RECIPIENT_EMAIL, SEL_SENDER_NAME)
+        final_lens = {sel: self._field_value_length(sel) for sel in fields}
+        for sel, ln in final_lens.items():
+            _log.info("fill_egift_form: final_check field=%s value_len=%d", _selector_name(sel), ln)
+            if ln < 0:
+                self._capture_failure_screenshot(f"final_check_unreadable_{_selector_name(sel)}")
+                raise SessionFlaggedError(
+                    f"Final validation: field {_selector_name(sel)} unreadable (JS read error, not auto-clear)"
+                )
+            if ln == 0:
+                self._capture_failure_screenshot(f"final_check_empty_{_selector_name(sel)}")
+                raise SessionFlaggedError(f"Final validation: field {_selector_name(sel)} is empty after fill_egift_form completed (Givex auto-clear suspected)")
+        recipient = self._field_value(SEL_RECIPIENT_EMAIL)
+        confirm = self._field_value(SEL_CONFIRM_RECIPIENT_EMAIL)
+        if recipient is None or confirm is None:
+            _log.warning("fill_egift_form: final_check recipient/confirm email unreadable")
+            self._capture_failure_screenshot("final_check_email_unreadable")
+            raise SessionFlaggedError("Final validation: recipient/confirm email unreadable")
+        if recipient != confirm:
+            _log.warning("fill_egift_form: final_check recipient/confirm email mismatch detected")
+            self._capture_failure_screenshot("final_check_email_mismatch")
+            raise SessionFlaggedError("Final validation: recipient email and confirm email values differ")
+        _log.info("fill_egift_form: completed (final validation passed)")
 
     def add_to_cart_and_checkout(self) -> None:
         """Click Add-to-Cart, wait for Review & Checkout button, then click it.
@@ -2640,14 +2790,24 @@ class GivexDriver:
         """
         _log.info("add_to_cart_and_checkout: started")
         self.bounding_box_click(SEL_ADD_TO_CART)
+        delay = 3.0 + self._get_rng().uniform(0.1, 0.8)
         _log.info(
-            "add_to_cart_and_checkout: Add-to-Cart clicked, "
-            "waiting Review-Checkout selector"
+            "add_to_cart_and_checkout: ATC clicked, waiting %.2fs per blueprint",
+            delay,
         )
-        found = self._wait_for_element(SEL_REVIEW_CHECKOUT, timeout=10)
+        time.sleep(delay)
+        _log.info("add_to_cart_and_checkout: settled, waiting Review-Checkout interactable")
+        interactable_timeout = 10
+        found = self._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=interactable_timeout)
         if not found:
-            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 10)
-        _log.info("add_to_cart_and_checkout: Review-Checkout visible")
+            _log.error(
+                "add_to_cart_and_checkout: Review-Checkout NOT interactable after %.2fs blueprint wait + %ds poll",
+                delay,
+                interactable_timeout,
+            )
+            self._capture_failure_screenshot("review_checkout_not_interactable")
+            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, int(delay) + interactable_timeout)
+        _log.info("add_to_cart_and_checkout: Review-Checkout interactable")
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
         _log.info("add_to_cart_and_checkout: Review-Checkout clicked")
         _log.info("add_to_cart_and_checkout: waiting URL_CART")

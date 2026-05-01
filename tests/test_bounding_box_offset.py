@@ -20,11 +20,15 @@ class TestBoundingBoxOffset(unittest.TestCase):
         gd._rnd = random.Random(5)
 
         offsets = []
-        with patch.object(gd, "_ghost_move_to"):
+        with patch.object(gd, "_ghost_move_to"), \
+             patch("modules.cdp.driver.time.sleep"):
             for _ in range(100):
                 driver.execute_cdp_cmd.reset_mock()
                 gd.bounding_box_click("#btn")
-                payload = driver.execute_cdp_cmd.call_args_list[0].args[1]
+                payload = [
+                    c.args[1] for c in driver.execute_cdp_cmd.call_args_list
+                    if c.args[1]["type"] == "mousePressed"
+                ][0]
                 center_x = rect["left"] + rect["width"] / 2
                 offsets.append(payload["x"] - center_x)
 
@@ -39,11 +43,15 @@ class TestBoundingBoxOffset(unittest.TestCase):
         gd._rnd = random.Random(8)
 
         offsets = []
-        with patch.object(gd, "_ghost_move_to"):
+        with patch.object(gd, "_ghost_move_to"), \
+             patch("modules.cdp.driver.time.sleep"):
             for _ in range(100):
                 driver.execute_cdp_cmd.reset_mock()
                 gd.bounding_box_click("#btn")
-                payload = driver.execute_cdp_cmd.call_args_list[0].args[1]
+                payload = [
+                    c.args[1] for c in driver.execute_cdp_cmd.call_args_list
+                    if c.args[1]["type"] == "mousePressed"
+                ][0]
                 center_y = rect["top"] + rect["height"] / 2
                 offsets.append(payload["y"] - center_y)
 

@@ -78,6 +78,7 @@ class GuestEmailRoutesThroughCDP(unittest.TestCase):
              patch.object(gd, "_wait_for_element", return_value=True), \
              patch.object(gd, "_wait_for_url"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")
         self.assertTrue(spy.called, "type_value (CDP dispatchKeyEvent) must be invoked")
@@ -152,6 +153,7 @@ class AllSection5FieldsAvoidSendKeys(unittest.TestCase):
              patch.object(gd, "_wait_for_element", return_value=True), \
              patch.object(gd, "_wait_for_url"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
              patch.object(gd, "_sm"), \
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")
