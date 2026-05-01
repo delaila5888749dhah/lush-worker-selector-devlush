@@ -1,162 +1,839 @@
-## 🤖 NATIVE AI WORKFLOW (GitHub Copilot Business)
+# AI_CONTEXT.md — AI Debug, Fix, and Review Protocol
 
-Hệ thống vận hành theo kiến trúc 3 tầng bản địa (Single Source of Truth), lấy **Issue/PR** làm trung tâm điều phối và **Copilot Coding Agent** làm nơi thực thi. Tuyệt đối không sử dụng AI bên ngoài — **Zero-External AI** — để duy trì tính toàn vẹn của Copilot Memory Index.
+## 0. Purpose
+
+This file defines the standing operating protocol for AI agents working in this repository.
+
+It is for:
+
+- GitHub Copilot Coding Agent
+- Primary AI reviewer/debugger
+- Independent secondary AI reviewer/debugger
+- Human maintainers
+
+This file is not runtime code. It does not control the bot directly.
+
+It controls how AI agents must:
+
+```text
+- understand new issues
+- analyze logs
+- form and challenge hypotheses
+- implement fixes
+- review PRs
+- stay aligned with blueprint/spec/contracts
+- avoid lazy or unsafe reviews
+```
+
+GitHub Issues, Pull Requests, latest human instructions, smoke logs, tests, and blueprint/spec files are the source of truth for each specific task.
+
+This file intentionally avoids hard-coding one current bug, one active issue, one model version, or one temporary incident as permanent repository truth.
 
 ---
 
-### 1. Tầng Định hướng (Human)
-* **Vai trò:** Supreme Commander (Chỉ huy tối cao).
-* **Nhiệm vụ:** Tạo Issue mô tả Task → Tag `@github-copilot` hoặc Assign Issue cho Copilot → Ra quyết định `Merge` cuối cùng.
-* **Không làm:** Không tự viết Prompt kỹ thuật, không copy-paste output AI, không can thiệp thủ công vào code.
+## 0.1 Risk Classification
 
-### 2. Tầng Thiết kế & Kiểm duyệt (GitHub Web)
-* **Architect (Anthropic Claude Opus 4.6):** Kích hoạt qua comment `@github-copilot` trên Issue/PR. Đọc toàn bộ repo từ Copilot Memory Index, phân tích yêu cầu và vạch ra Spec chi tiết (Implementation Plan).
-* **Reviewer (OpenAI GPT-5.4):** Tự động kích hoạt qua PR Ruleset khi có PR mới hoặc push mới. Đối chiếu code với Spec, kiểm tra CodeQL alerts, cấp `APPROVED` hoặc `REQUEST_CHANGES`.
-* **Cross-Inspector (Google Gemini 3.1 Pro):** Kích hoạt thủ công trên Web (Circuit Breaker) khi PR bị reject ≥3 lần hoặc có xung đột logic nghiêm trọng.
+Agents must classify every task before choosing review depth.
 
-### 3. Tầng Thực thi (Copilot Coding Agent)
-* **Developer (OpenAI GPT-5.2-Codex):** Kích hoạt bằng **Assign Issue cho Copilot** hoặc comment `@github-copilot` trên Issue. Agent tự đọc repo qua GitHub API (không qua IDE), tạo branch, sinh code, chạy CI và đẩy PR tự động. **Không dùng `@workspace` thủ công** — Agent đọc ngữ cảnh trực tiếp từ repo, đảm bảo context liền mạch.
+```text
+TRIVIAL:
+  - docs-only changes
+  - comment-only changes
+  - typo / formatting only
+  - test-only changes that do not alter production behavior expectations
 
-### 4. Sơ đồ luồng CI/CD
-```
-Issue (Human tạo)
-  │
-  ├─► Architect (Opus 4.6) phân tích → viết Spec vào Issue comment
-  │
-  ├─► Assign Issue → Copilot Coding Agent (Codex 5.2)
-  │     │
-  │     ├─► Agent đọc repo + Spec → tạo branch → sinh code + test
-  │     │
-  │     └─► Agent tự push → PR tự động được tạo
-  │           │
-  │           ├─► CI Pipeline (GitHub Actions)
-  │           │     ├── check_import_scope
-  │           │     ├── check_signature
-  │           │     ├── check_pr_scope
-  │           │     ├── check_spec_lock
-  │           │     └── Unit tests
-  │           │
-  │           ├─► Security Gates (Guard 4.9)
-  │           │     ├── CodeQL Analysis (no high/critical)
-  │           │     ├── Dependency Review (Dependabot)
-  │           │     ├── Secret Scanning + Push Protection
-  │           │     └── Copilot Autofix suggestions
-  │           │
-  │           ├─► Auto Review (GPT-5.4) → APPROVED / REQUEST_CHANGES
-  │           │     │
-  │           │     ├─► Nếu REQUEST_CHANGES: Agent tự đọc review → auto-fix → push lại
-  │           │     │
-  │           │     └─► Nếu reject ≥3 lần: Circuit Breaker → Gemini 3.1 Pro phân xử
-  │           │
-  │           └─► Human Merge (quyết định cuối cùng)
-  │
-  └─► ✅ Merge vào develop → main
+NON-TRIVIAL (default):
+  - any production code change
+  - any test that changes assertions about production behavior
+  - any config/env/CI change
+  - any diagnostics/logging change
+  - any exception/message behavior change
+
+HIGH-RISK:
+  - browser automation / CDP / Selenium / selectors
+  - checkout / cart / payment / card / CVV / VBV / 3DS
+  - session / cookie / storage / fingerprint / anti-detect
+  - DelayEngine / timing / pacing / scrolling / typing / blur / click behavior
+  - orchestrator / worker runtime / retry / watchdog / exception hierarchy
+  - PII handling / logging / screenshots / diagnostics
+  - billing pool / proxy pool / BitBrowser profiles
+  - blueprint/spec/contracts
 ```
 
-### 5. Giao thức Kết nối & Xử lý Ngoại lệ (Hard Rules)
+If uncertain, classify as `NON-TRIVIAL`.
 
-* **Rule 1 — Assign-to-Deploy (Giao việc = Triển khai):** Mọi task cho Developer (Codex) phải đi qua cơ chế **Assign Issue**. Human ghi Spec rõ ràng vào Issue body hoặc comment, sau đó Assign cho Copilot. Agent tự đọc Issue, đọc repo context qua API, tạo branch và PR. **Tuyệt đối không dùng `@workspace` thủ công trong IDE** — đây là nguyên nhân gây đứt gãy ngữ cảnh Web ↔ IDE.
+If the task touches runtime automation, checkout, payment, anti-detect, PII, or exception handling, classify as `HIGH-RISK`.
 
-* **Rule 2 — Auto-Fix Loop (Vòng lặp tự sửa):** Khi GPT-5.4 đánh `REQUEST_CHANGES`, Copilot Coding Agent tự đọc review comments trên PR và push bản sửa mới. Human **không** copy lỗi thủ công, **không** can thiệp vào IDE. Nếu Agent không tự fix được, Human comment hướng dẫn bổ sung trực tiếp trên PR.
+---
 
-* **Rule 3 — Circuit Breaker (Quy tắc quá tam ba bận):** Nếu PR bị `REQUEST_CHANGES` từ **3 lần trở lên** (bởi cùng reviewer hoặc cùng loại lỗi), quy trình REJECT tự động dừng. Human triệu hồi **Gemini 3.1 Pro** vào PR để phân xử độc lập, tìm nguyên nhân gốc rễ, và đề xuất mã code chốt hạ.
+## 1. Context Precedence
 
-* **Rule 4 — Security Gate Enforcement (Cổng bảo mật bắt buộc):** Mọi PR phải vượt qua **4 cổng bảo mật** trước khi được phép Merge:
-  1. **CodeQL:** Không có alert mức High hoặc Critical.
-  2. **Dependency Review:** Dependabot không phát hiện vulnerability mức High+ chưa được xử lý.
-  3. **Secret Scanning + Push Protection:** Không có secret bị rò rỉ. Push Protection chặn commit chứa secret.
-  4. **Copilot Autofix:** Mọi suggestion từ Autofix phải được review (accept hoặc dismiss có lý do).
+For every task, AI agents must use this precedence order:
 
-* **Rule 5 — CI Failure Recovery (Phục hồi lỗi CI):** Khi CI fail:
-  1. Coding Agent tự đọc log lỗi từ GitHub Actions API và push bản sửa.
-  2. Nếu fail lặp lại ≥2 lần cùng lỗi: Human đọc log, comment hướng dẫn cụ thể lên PR.
-  3. Nếu fail do infrastructure (flaky test, runner issue): Human re-run workflow thủ công.
-  4. Nếu fail do security gate: Xử lý theo Rule 4, **không** bypass bằng force-merge.
+```text
+1. Latest explicit human instruction in the current conversation
+2. Current GitHub Issue body and comments
+3. Current PR description and review comments
+4. Latest smoke logs / screenshots / diagnostics
+5. Current repository code
+6. Blueprint/spec/contracts
+7. This AI_CONTEXT.md standing protocol
+```
 
-### 6. Exception Framework & Change Classification (Final Architecture)
+Blueprint/spec/contracts are binding constraints. If a human request or proposed fix conflicts with blueprint/spec/contracts, the agent must report the conflict instead of silently violating the design.
 
-`CHANGE_CLASS` là **REQUIRED** cho mọi PR.  Nếu thiếu → CI **FAIL** ngay lập tức.
-Đây là **SINGLE source of truth** cho CI policy selection.
-Tất cả legacy flags (`ALLOW_MULTI_MODULE`) đã bị loại bỏ hoàn toàn.
+This file must not be used to override a newer issue, PR, human instruction, or smoke log.
 
-**Auto-detection:** CI workflow tự detect `CHANGE_CLASS` từ PR title:
-- `[emergency]` → `emergency_override`
-- `[spec-sync]` → `spec_sync`
-- `[infra]` → `infra_change`
-- Mặc định → `normal`
+---
 
-| Change Class | Bypass Line Limit | Bypass Module Limit | Use Case |
-|-------------|-------------------|--------------------|----|
-| `normal` | ❌ | ❌ | Default — PR thông thường |
-| `spec_sync` | ✅ | ✅ | Đồng bộ code với spec mới (architectural refactor) |
-| `infra_change` | ✅ | ❌ | Thay đổi CI scripts, cấu hình infrastructure |
-| `emergency_override` | ✅ | ✅ | Hotfix production, security patch khẩn cấp |
+## 2. Current Debug Packet Requirement
 
-**Authorization (Bắt buộc cho mọi non-normal CHANGE_CLASS):**
-- Phải có ít nhất 1 trong các tín hiệu:
-  1. PR label `approved-override` (machine-verifiable qua `PR_LABELS` env var)
-  2. `CHANGE_CLASS_APPROVED=true` (repo variable do Admin set)
-- `ALLOW_SPEC_MODIFICATION` là env nội bộ do workflow suy ra từ 1 hoặc 2; không được dùng như tín hiệu phê duyệt độc lập
-- `emergency_override` **bổ sung yêu cầu**: phải có ít nhất 1 APPROVED review
-- Nếu thiếu bất kỳ tín hiệu nào → CI **FAIL**
+Before implementing or reviewing any non-trivial fix, the AI must build a “Current Debug Packet”.
 
-**Context Binding (CHANGE_CLASS phải khớp nội dung PR):**
-- `emergency_override`: PR title **MUST** chứa `[emergency]`
-- `spec_sync`: Changed files **MUST** bao gồm `spec/`
-- `infra_change`: Changed files **MUST** bao gồm `ci/` hoặc `.github/`
-- Nếu mismatch → CI **FAIL**
+The packet must identify:
 
-**Audit Trail:**
-- Mọi override usage được log dạng structured JSON (`AUDIT_LOG: {...}`) trong CI output
-- Log bao gồm: `change_class`, `pr_title`, `pr_labels`, `authorization`, `context_binding`, `validation`
+```text
+- Task / Issue / PR being handled
+- User-reported symptom
+- Latest logs or diagnostics
+- Confirmed facts
+- Active hypotheses
+- Disproved hypotheses
+- Relevant code paths
+- Relevant blueprint/spec/contracts
+- Expected fix scope
+- Explicit out-of-scope areas
+```
 
-### 7. Spec Versioning System
+The packet does not need to be a separate file, but the AI’s reasoning, implementation plan, or review must clearly reflect it.
 
-Mỗi file trong `spec/` có phiên bản riêng theo format `MAJOR.MINOR`. Chi tiết tại [spec/VERSIONING.md](../spec/VERSIONING.md).
+For bot-debugging tasks, do not proceed with implementation or approval if the current debug packet is unclear.
 
-* **MAJOR bump** (breaking): Xóa/đổi tên function, thay đổi output type → CI fail → cần `CHANGE_CLASS=spec_sync`.
-* **MINOR bump** (additive): Thêm function mới, thêm optional param → CI phát hiện stub thiếu → Agent tự implement.
+---
 
-### 8. Contract Segmentation
+## 2.1 Debug Packet Template
 
-Hợp đồng giao diện (`spec/interface.md`) được tách thành 2 nhóm:
+Recommended format:
 
-* **`spec/core/`** — FSM (Finite State Machine): Các hàm quản lý trạng thái lõi.
-* **`spec/integration/`** — Watchdog, Billing, CDP: Các hàm tích hợp bên ngoài.
+```yaml
+task: "<issue/PR number or human request>"
+risk_classification: "<trivial|non-trivial|high-risk>"
 
-File `spec/interface.md` gốc vẫn được giữ lại như bản tổng hợp (aggregated) để tương thích ngược.
-CI `check_signature` tự động phát hiện và kiểm tra cả hai nhóm.
+symptom: "<one-line failure description>"
 
-**⚠️ DIVERGENCE GUARD:** CI `check_spec_consistency` đảm bảo `spec/interface.md` (aggregated) KHÔNG ĐƯỢC lệch khỏi các file segmented. Nếu lệch → CI FAIL. Khi cập nhật spec, phải cập nhật đồng thời cả segmented files VÀ aggregated file.
+latest_evidence:
+  - id: E1
+    source: "<log|screenshot|diagnostic|test|code>"
+    detail: "<evidence summary or exact relevant line>"
 
-### 9. CI Checks (Danh sách đầy đủ)
+confirmed_facts:
+  - fact: "<confirmed statement>"
+    evidence: ["E1"]
 
-| Check | Mô tả |
-|-------|-------|
-| `check_import_scope` | Đảm bảo không module nào import từ module khác |
-| `check_signature` | So sánh function signature trong code với spec (multi-file aware, cross-file duplicate detection) |
-| `check_pr_scope` | Kiểm tra scope PR: ≤200 dòng, ≤1 module, governance enforcement cho CHANGE_CLASS |
-| `check_spec_lock` | Đảm bảo không PR nào sửa file trong `/spec/` (trừ Architect) |
-| `check_spec_consistency` | Đảm bảo aggregated spec KHÔNG lệch khỏi segmented files |
-| `check_version_consistency` | Validate spec-version headers nhất quán với VERSIONING.md |
-| Unit tests | `python -m unittest discover tests` |
-**⚠️ Quy tắc chống phân kỳ (Divergence Guard):** CI `check_signature` tự động so sánh danh sách function giữa segmented files và aggregated file. Nếu phát hiện lệch, in WARNING vào CI log. Mọi thay đổi spec phải cập nhật cả hai nguồn đồng thời.
+active_hypotheses:
+  - id: H1
+    claim: "<hypothesis>"
+    supports: ["E1"]
+    contradicts: []
 
-Hệ thống vận hành theo kiến trúc 3 tầng bản địa, lấy Pull Request (PR) và Issue làm trung tâm điều phối. Tuyệt đối không sử dụng AI bên ngoài (Zero-External AI) để duy trì tính toàn vẹn của Copilot Memory.
+disproved_hypotheses:
+  - id: H0
+    claim: "<old hypothesis>"
+    disproved_by: ["E1"]
+    note: "<why it is no longer valid>"
 
-### 1. Tầng Định hướng (Human)
-* **Vai trò:** Supreme Commander (Chỉ huy tối cao).
-* **Nhiệm vụ:** Chỉ định Task qua Issue/PR, giao việc bằng tag `@github-copilot`, không tự viết Prompt kỹ thuật, ra quyết định `Merge` cuối cùng.
+relevant_code:
+  - "<path>"
+  - "<path#function-or-class>"
 
-### 2. Tầng Thiết kế & Kiểm duyệt (GitHub Web)
-* **Architect (Anthropic Claude Opus 4.6):** Kích hoạt qua comment trên giao diện Web. Đọc `AI_CONTEXT.md` từ Memory, phân tích Issue và vạch ra Spec (các bước thực thi chi tiết).
-* **Reviewer (OpenAI GPT-5.4):** Tự động kích hoạt qua Ruleset khi có PR. Sử dụng dữ liệu phân tích từ CodeQL, đối chiếu với Spec để cấp `APPROVED` hoặc `REJECTED`.
-* **Cross-Inspector (Google Gemini 3.1 Pro):** Kích hoạt thủ công trên Web khi có xung đột logic hoặc PR độ khó cao để thanh tra chéo (Cross-check) độc lập.
+relevant_tests:
+  - "<path>"
+  - "<test class/function>"
 
-### 3. Tầng Thực thi (IDE / Copilot Workspace)
-* **Developer (OpenAI GPT-5.2-Codex):** Kích hoạt bằng `@workspace` trong IDE. Nhận Spec từ Architect, tự động sinh code, refactor và đẩy (Push) thay đổi lên PR.
+relevant_blueprint_or_spec:
+  - "<path or contract id>"
 
-### 4. Giao thức Kết nối & Xử lý Ngoại lệ (Hard Rules)
-* **Rule 1 - Định danh tuyệt đối (Absolute Targeting):** Mọi lệnh giao việc cho Developer (Codex) trong IDE bắt buộc phải gắn kèm ID của Issue/PR. Cú pháp chuẩn: `@workspace Thực thi Spec từ Issue #[ID] do Architect đã chốt`.
-* **Rule 2 - Vòng lặp REJECT (Auto-Fix Loop):** Khi GPT-5.4 đánh `REJECTED`, Human tuyệt đối không copy lỗi thủ công. Human gõ lệnh vào IDE: `@workspace Đọc comment review mới nhất tại PR #[ID] và tự động sửa lỗi`.
-* **Rule 3 - Quy tắc quá tam ba bận (Rule of Three):** Nếu PR bị GPT-5.4 `REJECTED` quá 3 lần vì cùng một lỗi, quy trình tự động dừng. Human triệu hồi **Gemini 3.1 Pro** vào PR đó để phân xử, tìm nguyên nhân gốc rễ và đưa ra mã code chốt hạ.
+proposed_fix_scope: |
+  <one paragraph describing minimal intended fix>
+
+out_of_scope:
+  - "<explicitly excluded area>"
+  - "<explicitly excluded issue>"
+```
+
+Two independent reviewers should be able to compare their Debug Packets and identify the exact point of agreement or disagreement.
+
+---
+
+## 3. Critical Thinking Rule
+
+AI agents must distinguish:
+
+```text
+Symptom:
+  What failed.
+
+Observation:
+  What logs, screenshots, diagnostics, or tests show.
+
+Hypothesis:
+  Possible explanation, not yet proven.
+
+Confirmed fact:
+  Proven by logs, tests, code, or diagnostics.
+
+Inferred risk:
+  A plausible risk that needs test or diagnostic confirmation.
+
+Fix:
+  Minimal change that addresses confirmed or strongly supported cause.
+
+Verification:
+  Test, CI, smoke, or diagnostic proving the fix.
+```
+
+Agents must not treat a hypothesis as a confirmed fact.
+
+If new diagnostics disprove an old hypothesis, stop fixing the old hypothesis and update the plan.
+
+---
+
+## 4. Parallel AI Debug Protocol
+
+For high-risk bot-debugging work, especially browser automation, checkout, payment, session, anti-detect, or timing behavior, review/debugging should use two independent AI reviewer roles:
+
+```text
+Reviewer A: Primary reasoning model
+Reviewer B: Independent secondary reasoning model
+```
+
+The human operator is responsible for invoking both reviewers.
+
+This protocol is advisory and process-level. It is not automatically enforced by CI unless a future workflow explicitly implements it.
+
+Both reviewers must independently inspect:
+
+```text
+- latest human request
+- issue body
+- logs / diagnostics
+- relevant code path
+- related tests
+- blueprint/spec/contracts
+- possible regressions
+- implementation scope
+```
+
+Decision rules:
+
+```text
+APPROVED:
+  Both reviewers agree there is no blocker.
+
+REQUEST_CHANGES:
+  Either reviewer identifies a valid blocker.
+
+NEEDS_HUMAN_DECISION:
+  Reviewers disagree on a material architectural, runtime, security, payment, anti-detect, or blueprint issue.
+```
+
+No high-risk PR should be merged while a material reviewer disagreement remains unresolved.
+
+---
+
+## 4.1 Disagreement Report Format
+
+When reviewers disagree, use this format:
+
+```yaml
+disagreement_type: "<architecture|runtime|security|payment|spec|pii|delay|other>"
+
+reviewer_a_position:
+  claim: "<position>"
+  evidence:
+    - "<code/log/spec/test evidence>"
+
+reviewer_b_position:
+  claim: "<position>"
+  evidence:
+    - "<code/log/spec/test evidence>"
+
+crux: "<one sentence describing what fact would resolve the disagreement>"
+
+recommended_diagnostic:
+  - "<log/test/experiment/code inspection needed>"
+
+recommended_decision: "<merge|hold|split-pr|request-changes|escalate-to-human>"
+```
+
+The final response must include:
+
+```text
+- both positions
+- exact disagreement
+- evidence
+- recommended decision
+```
+
+---
+
+## 5. No-Lazy-Review Rule
+
+AI reviewers must not approve a PR by reading only the diff.
+
+For any non-trivial PR, the reviewer must inspect the “review cone”:
+
+```text
+1. Linked Issue and acceptance criteria
+2. PR description
+3. All changed files
+4. Surrounding code around changed functions/classes
+5. Callers and callees of changed functions
+6. Related tests
+7. Related blueprint/spec/contracts
+8. Related runtime/orchestrator paths
+9. CI/check status
+10. Latest smoke logs or diagnostics.
+    If none are available for a bot-debugging PR, the reviewer must explicitly
+    request them or declare the review incomplete for smoke-level confidence.
+```
+
+For high-risk bot-debugging PRs, the reviewer must also perform repository-wide searches for relevant:
+
+```text
+- selectors
+- env vars
+- exception classes
+- config names
+- helper functions
+- contracts/invariants
+- related tests
+```
+
+The reviewer must explicitly state if any relevant area was not checked and why.
+
+A review that only says:
+
+```text
+diff looks good
+```
+
+without verifying runtime flow, tests, and blueprint/spec alignment is incomplete.
+
+---
+
+## 6. Blueprint-First Fixing Rule
+
+All fixes must stay aligned with:
+
+```text
+- blueprint behavior
+- spec/contracts
+- GitHub Issue acceptance criteria
+- runtime safety
+- PII policy
+- CI rules
+- orchestrator/error compatibility
+```
+
+Agents must not implement quick fixes that make smoke pass while violating architecture.
+
+### 6.1 Absolutely forbidden
+
+The following are never allowed:
+
+```text
+- logging raw PII
+- logging raw cookie/storage values
+- committing secrets, credentials, API keys, or real browser profile IDs
+```
+
+No PR description justification can override this. See Section 7.
+
+### 6.2 Controlled exceptions requiring explicit PR justification
+
+The following patterns require explicit justification in the PR description:
+
+```text
+- synthetic JS input/change/blur events to bypass validators
+- raw Selenium send_keys on production hot paths
+- raw Selenium click fallback in strict CDP paths
+- resetting DelayEngine accumulator to bypass MAX_STEP_DELAY
+- increasing global timeouts without scoped env/config
+- changing payment/card submission behavior inside unrelated pre-card issues
+- broad refactors unrelated to the issue
+```
+
+For any controlled exception above, the PR must explain:
+
+```text
+1. why the standard path failed
+2. why the alternative is the minimum-risk option
+3. which test covers the regression risk
+4. why the change does not violate blueprint/spec/contracts
+```
+
+If a requested fix conflicts with blueprint constraints, the agent must stop and report the conflict.
+
+---
+
+## 7. PII Safety
+
+Never log raw:
+
+```text
+- card number
+- CVV
+- email
+- name
+- address
+- phone
+- cookie values
+- localStorage/sessionStorage values
+- raw page text that may contain user data
+- raw validation messages that may contain user data
+```
+
+Allowed diagnostics:
+
+```text
+- booleans
+- counts
+- lengths
+- selector symbolic names
+- CSS display/visibility/pointer-events
+- rect width/height
+- validity flags
+- error categories
+```
+
+Examples:
+
+```text
+OK:
+  value_len=24
+  cookie_count=5
+  validationMessage_len=18
+  selector=SEL_RECIPIENT_EMAIL
+
+NOT OK:
+  recipient@example.com
+  Jane Doe
+  raw cookie/session token
+```
+
+PII safety applies to:
+
+```text
+- app logs
+- tests
+- diagnostics
+- screenshots
+- PR comments
+- issue comments
+- AI review output
+```
+
+---
+
+## 8. Native Browser Interaction Rule
+
+For browser/form automation, prefer native or CDP-style interactions matching real user behavior.
+
+Allowed patterns:
+
+```text
+- CDP key events
+- CDP mouse events
+- native focus via click
+- natural blur via Tab or safe non-interactive click
+- DOM reads for diagnostics
+```
+
+Controlled exceptions require explicit PR justification under Section 6.
+
+Forbidden by default:
+
+```text
+- JS dispatchEvent("input")
+- JS dispatchEvent("change")
+- JS dispatchEvent("blur")
+- synthetic form submission shortcuts
+- JS mutation of user-entered field values to bypass UI flow
+```
+
+Diagnostics may read DOM state but must not mutate user-visible form state unless the issue explicitly asks for it.
+
+---
+
+## 9. Delay and Human-Behavior Constraints
+
+When adding delay, pacing, scroll, typing, blur, click, or human-like behavior, agents must respect existing delay architecture.
+
+New behavioral delays should use or create a shared helper such as:
+
+```text
+_engine_aware_sleep(low, high, reason)
+```
+
+Required behavior:
+
+```text
+- uses persona RNG when available
+- checks engine.is_delay_permitted()
+- uses engine.accumulate_delay()
+- scales down when remaining MAX_STEP_DELAY headroom is low
+- returns actual slept delay
+- logs only symbolic reason and numeric delay
+- does not reset delay accumulator casually
+- does not inject delay in critical/VBV/POST_ACTION states
+```
+
+Do not scatter raw `time.sleep(...)` calls unless the issue explicitly allows it or the sleep is non-behavioral and safe.
+
+---
+
+## 10. Error Semantics Rule
+
+Errors must describe the real failure state.
+
+Do not report:
+
+```text
+selector not found
+```
+
+when diagnostics show:
+
+```text
+selector present but disabled
+selector present but hidden
+selector present but zero-size
+selector present but blocked by overlay
+selector present but pointer-events none
+```
+
+For UI readiness failures, distinguish:
+
+```text
+- absent
+- present but hidden
+- present but disabled
+- present but zero-size
+- present but pointer-events none
+- present but click failed
+```
+
+If adding new exception classes, preserve existing catch hierarchy and orchestrator compatibility.
+
+Do not break:
+
+```text
+- SessionFlaggedError flow
+- SelectorTimeoutError compatibility
+- alerting classification
+- retry/failure accounting
+```
+
+---
+
+## 11. Diagnostics Design Rule
+
+Diagnostics must answer the next root-cause question.
+
+Good diagnostics help decide:
+
+```text
+- Is the element present?
+- Is it visible?
+- Is it disabled?
+- Did storage/cookies survive?
+- Did form validity pass?
+- Did cart/readiness state update?
+- Was the failure caused by selector miss, disabled state, overlay, timeout, or click dispatch?
+```
+
+Diagnostics must be:
+
+```text
+- PII-safe
+- structured enough for logs
+- stable across runs
+- minimal but decisive
+```
+
+Prefer logging:
+
+```text
+present
+disabled
+aria_disabled
+display
+visibility
+pointer_events
+rect_w
+rect_h
+text_len
+class_len
+value_len
+validity flags
+counts
+```
+
+Do not log raw values.
+
+---
+
+## 12. Smoke Log Reasoning Rule
+
+When smoke logs are provided, AI agents must parse and cite the decisive log lines.
+
+For each failure, identify:
+
+```text
+- last successful step
+- first failing step
+- exact error
+- relevant diagnostics
+- hypothesis confirmed or disproved
+- next minimal fix
+```
+
+Agents must not skip log analysis and jump directly to a fix.
+
+If logs are insufficient, state what diagnostic is missing.
+
+---
+
+## 13. Testing Expectations
+
+Every non-trivial PR must include or update tests.
+
+Tests should cover:
+
+```text
+- new behavior
+- failure mode that motivated the issue
+- PII safety when diagnostics/logging are added
+- error semantics when exceptions/messages change
+- compatibility with orchestrator/runtime handling
+- relevant blueprint/spec invariants
+```
+
+When a PR changes timing, scroll, click, blur, or form behavior, tests should cover:
+
+```text
+- DelayEngine budget behavior
+- critical-section delay gating
+- no synthetic form events
+- strict CDP path compatibility
+- absent vs present-but-disabled semantics when relevant
+```
+
+---
+
+## 14. PR Scope Rule
+
+Each PR must:
+
+```text
+- target one issue
+- keep scope tight
+- include tests
+- avoid unrelated cleanup
+- preserve PII safety
+- respect blueprint/spec/contracts
+- avoid changing unrelated runtime paths
+```
+
+If a proposed fix requires touching multiple domains, the agent should recommend splitting into multiple PRs unless the issue explicitly authorizes a larger change.
+
+---
+
+## 15. Review Output Requirements
+
+Every AI PR review must report:
+
+```text
+- Issue scope coverage
+- Runtime flow impact
+- Blueprint/spec alignment
+- PII safety
+- Delay budget impact if relevant
+- Error semantics compatibility if relevant
+- Tests added/updated
+- CI/check status
+- Merge readiness
+- Blockers or non-blocking suggestions
+```
+
+For bot-debugging PRs, the review must also state:
+
+```text
+- root cause being addressed
+- whether latest logs support the fix
+- whether old disproven hypotheses are avoided
+- whether diagnostics are sufficient for the next smoke
+```
+
+---
+
+## 16. Staleness and Context Hygiene
+
+AI agents must not assume old context is still true.
+
+Before using prior context, verify:
+
+```text
+- Is the issue still open?
+- Has a newer PR merged?
+- Has a newer smoke log contradicted the prior hypothesis?
+- Has the human provided newer instructions?
+- Does the current issue body supersede older context?
+```
+
+If context appears stale, say so and rely on the latest issue/PR/log evidence.
+
+This file intentionally avoids permanently hard-coding one active issue as the repository-wide truth.
+
+---
+
+## 17. Task Type Routing
+
+For each new human request, agents must classify the task and apply the relevant sections.
+
+```text
+Analyze logs:
+  Required: Sections 2, 3, 7, 11, 12, 16
+
+Review issue:
+  Required: Sections 1, 2, 3, 5, 6, 16
+
+Review PR:
+  Required: Sections 2, 3, 5, 6, 10, 11, 13, 15, 16
+
+Create PR / implement fix:
+  Required: Sections 1, 2, 3, 6, 7, 8, 9, 13, 14, 16
+
+Modify issue:
+  Required: Sections 1, 2, 3, 16
+
+Explain code:
+  Required: Sections 1, 3, 5 as applicable
+  Must remain read-only unless the human explicitly asks for a change.
+
+Update AI_CONTEXT.md:
+  Required: Sections 18, 19, 21
+  Must be explicitly requested by the human.
+```
+
+Do not assume the task is related to a previous bug unless the user, issue, PR, or logs clearly connect it.
+
+---
+
+## 18. Human-in-the-Loop Rule
+
+The human operator may provide:
+
+```text
+- smoke logs
+- screenshots
+- visual observations
+- issue priorities
+- approval to create PRs
+- approval to update issues
+- approval to update this file
+```
+
+AI agents must incorporate human observations as evidence, but still validate them against code, logs, and blueprint.
+
+If human observation and logs disagree, report the discrepancy and ask for clarification or propose a diagnostic.
+
+---
+
+## 19. Self-Modification Rule
+
+AI agents must not modify this file (`.github/AI_CONTEXT.md`), blueprint files, or spec/contracts files unless the human explicitly requests a docs-only PR for that specific file or scope.
+
+Rationale:
+
+```text
+This file is the repository AI operating protocol.
+An AI that can silently rewrite its own operating protocol can lower its own standards.
+```
+
+If this file is changed, the PR must be docs-only unless the human explicitly authorizes a combined change.
+
+Changes to blueprint/spec/contracts require explicit human authorization and must follow repository governance.
+
+---
+
+## 20. Position Stability Rule
+
+When an AI reviewer changes position between rounds on the same issue or PR, the reviewer must state:
+
+```text
+- what new evidence caused the change
+- which prior claim is now retracted
+- whether the new position contradicts a previous approval or request-changes review
+- what remains uncertain
+```
+
+Silent flip-flopping is not acceptable.
+
+Changing position is allowed when new evidence justifies it, but the change must be explicit.
+
+---
+
+## 21. Out of Scope for This File
+
+This file must not become a bug log, model registry, or secrets/config dump.
+
+This file does not contain:
+
+```text
+- current bug status as permanent truth
+- per-issue acceptance criteria
+- blueprint behavior details that belong in blueprint/spec files
+- secrets or credentials
+- vendor-specific model settings
+- CI workflow configuration
+- temporary smoke results as standing truth
+```
+
+Temporary incident context belongs in:
+
+```text
+- GitHub Issue body/comments
+- PR description
+- smoke log comments
+- release notes
+```
+
+Anything matching the out-of-scope list should be removed from this file during review.
+
+---
+
+## 22. Anti-Laziness Checklist Before Approval
+
+Before approving a non-trivial or high-risk PR, the reviewer must be able to answer “yes” to all applicable items:
+
+```text
+[ ] I read the linked issue body and acceptance criteria.
+[ ] I classified the PR risk level.
+[ ] I built or updated a Debug Packet (Section 2.1) for high-risk PRs.
+[ ] I reviewed all changed files.
+[ ] I inspected relevant surrounding code, not only the diff.
+[ ] I checked callers/callees of changed functions where relevant.
+[ ] I checked related tests.
+[ ] I checked blueprint/spec constraints.
+[ ] I checked PII logging.
+[ ] I checked delay/critical-section behavior if timing changed.
+[ ] I checked error compatibility if exceptions/messages changed.
+[ ] I checked whether the PR touches unrelated scope.
+[ ] I checked CI/check status or noted if unavailable.
+[ ] I considered latest smoke logs if available.
+[ ] I stated any area I did not check and why.
+```
+
+If any applicable item is “no”, the review must say what was not checked and why.
