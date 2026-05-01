@@ -399,7 +399,9 @@ class TestAddToCartAndCheckout(unittest.TestCase):
 
         with patch("time.sleep"), \
              patch.object(gd, "bounding_box_click"), \
-             patch.object(gd, "_wait_for_interactable", return_value=False), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
+             patch.object(gd, "_is_closest_control_ready", return_value=True), \
+             patch.object(gd, "_wait_for_review_checkout_enabled", return_value=(False, False)), \
              patch.object(gd, "_capture_failure_screenshot"), \
              self.assertLogs("modules.cdp.driver", level="ERROR") as logs:
             with self.assertRaises(SelectorTimeoutError):
