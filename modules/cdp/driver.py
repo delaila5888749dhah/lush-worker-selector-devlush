@@ -2623,11 +2623,16 @@ class GivexDriver:
                     const btn = document.querySelector(arguments[0]);
                     if (!btn) return {present:false, enabled:false};
                     const style = window.getComputedStyle(btn);
+                    const rect = btn.getBoundingClientRect();
                     return {
                         present: true,
                         enabled: !btn.disabled
                             && btn.getAttribute("aria-disabled") !== "true"
                             && style.pointerEvents !== "none"
+                            && style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && rect.width > 0
+                            && rect.height > 0
                     };
                     """,
                     SEL_REVIEW_CHECKOUT,

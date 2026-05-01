@@ -99,8 +99,8 @@ class HumanScrollToTests(unittest.TestCase):
         ]
         self.assertEqual(len(wheel_payloads), 10)
         for payload in wheel_payloads:
-            self.assertGreaterEqual(abs(payload["deltaY"]), 70)
-            self.assertLessEqual(abs(payload["deltaY"]), 120)
+            self.assertGreaterEqual(abs(payload["deltaY"]), drv._SCROLL_DELTA_PER_TICK_MIN)
+            self.assertLessEqual(abs(payload["deltaY"]), drv._SCROLL_DELTA_PER_TICK_MAX)
 
 
 class EngineAwareSleepTests(unittest.TestCase):
