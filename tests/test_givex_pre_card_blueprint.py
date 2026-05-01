@@ -7,7 +7,6 @@ from selenium.common.exceptions import WebDriverException
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
     GivexDriver,
-    SEL_ADD_TO_CART,
     SEL_AMOUNT_INPUT,
     SEL_CONFIRM_RECIPIENT_EMAIL,
     SEL_GREETING_MSG,
@@ -63,6 +62,7 @@ class HumanScrollToTests(unittest.TestCase):
              self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
             gd._human_scroll_to(SEL_GREETING_MSG, max_steps=1)
         self.assertIn("falling back to JS scrollIntoView", "\n".join(logs.output))
+        self.assertIn("stage=wheel_dispatch", "\n".join(logs.output))
         scripts = [c.args[0] for c in selenium.execute_script.call_args_list]
         self.assertTrue(any("scrollIntoView" in s for s in scripts))
 
@@ -119,6 +119,17 @@ class FieldLengthVerificationTests(unittest.TestCase):
         with self.assertRaisesRegex(SessionFlaggedError, "SEL_RECIPIENT_EMAIL"):
             self._run_type(SEL_RECIPIENT_EMAIL, "secret@example.com", 0)
 
+    def test_unreadable_value_raises_distinct_failure(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium, strict=False)
+        with patch.object(gd, "_field_value_length", return_value=-1), \
+             patch.object(gd, "_capture_failure_screenshot") as shot:
+            with self.assertRaisesRegex(SessionFlaggedError, "unreadable") as ctx:
+                gd._verify_field_value_length(SEL_RECIPIENT_EMAIL, 18, "SEL_RECIPIENT_EMAIL")
+        shot.assert_called_once_with("type_field_unreadable_SEL_RECIPIENT_EMAIL")
+        self.assertNotIn("empty", str(ctx.exception))
+        self.assertNotIn("short", str(ctx.exception))
+
     def test_amount_field_allows_auto_format_extension(self):
         self._run_type(SEL_AMOUNT_INPUT, "25", 5)
 
@@ -161,6 +172,7 @@ class FillEgiftFormFinalValidationTests(unittest.TestCase):
         with patch.object(gd, "_smooth_scroll_to"), \
              patch.object(gd, "_realistic_type_field"), \
              patch.object(gd, "_field_value_length", return_value=10) as mock_len, \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch.object(drv, "_random_greeting", return_value="Hi"):
             gd.fill_egift_form(_make_task(), _make_billing())
         mock_len.assert_has_calls([call(sel) for sel in self.fields])
@@ -172,28 +184,60 @@ class FillEgiftFormFinalValidationTests(unittest.TestCase):
              patch.object(gd, "_realistic_type_field"), \
              patch.object(gd, "_field_value_length", side_effect=lens), \
              patch.object(gd, "_capture_failure_screenshot") as shot, \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch.object(drv, "_random_greeting", return_value="Hi"):
             with self.assertRaises(SessionFlaggedError):
                 gd.fill_egift_form(_make_task(), _make_billing())
         shot.assert_called_once_with("final_check_empty_SEL_SENDER_NAME")
 
-    def test_final_pass_validates_email_lengths_match(self):
+    def test_final_pass_raises_when_field_unreadable(self):
         gd = GivexDriver(_make_driver(), strict=False)
-        lens = [10, 2, 8, 20, 18, 8]
+        lens = [10, 2, 8, -1, 20, 8]
         with patch.object(gd, "_smooth_scroll_to"), \
              patch.object(gd, "_realistic_type_field"), \
              patch.object(gd, "_field_value_length", side_effect=lens), \
              patch.object(gd, "_capture_failure_screenshot") as shot, \
              patch.object(drv, "_random_greeting", return_value="Hi"):
+            with self.assertRaisesRegex(SessionFlaggedError, "unreadable"):
+                gd.fill_egift_form(_make_task(), _make_billing())
+        shot.assert_called_once_with("final_check_unreadable_SEL_RECIPIENT_EMAIL")
+
+    def test_final_pass_validates_email_values_match(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        lens = [10, 2, 8, 7, 7, 8]
+        with patch.object(gd, "_smooth_scroll_to"), \
+             patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_field_value_length", side_effect=lens), \
+             patch.object(gd, "_field_value", side_effect=["a@b.com", "c@d.com"]), \
+             patch.object(gd, "_capture_failure_screenshot") as shot, \
+             patch.object(drv, "_random_greeting", return_value="Hi"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             with self.assertRaises(SessionFlaggedError):
                 gd.fill_egift_form(_make_task(), _make_billing())
         shot.assert_called_once_with("final_check_email_mismatch")
+        text = "\n".join(logs.output)
+        self.assertNotIn("a@b.com", text)
+        self.assertNotIn("c@d.com", text)
+
+    def test_final_pass_raises_when_email_value_unreadable(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        lens = [10, 2, 8, 7, 7, 8]
+        with patch.object(gd, "_smooth_scroll_to"), \
+             patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_field_value_length", side_effect=lens), \
+             patch.object(gd, "_field_value", side_effect=[None, "a@b.com"]), \
+             patch.object(gd, "_capture_failure_screenshot") as shot, \
+             patch.object(drv, "_random_greeting", return_value="Hi"):
+            with self.assertRaisesRegex(SessionFlaggedError, "unreadable"):
+                gd.fill_egift_form(_make_task(), _make_billing())
+        shot.assert_called_once_with("final_check_email_unreadable")
 
     def test_no_pii_in_final_pass_logs(self):
         gd = GivexDriver(_make_driver(), strict=False)
         with patch.object(gd, "_smooth_scroll_to"), \
              patch.object(gd, "_realistic_type_field"), \
              patch.object(gd, "_field_value_length", return_value=20), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd.fill_egift_form(_make_task(), _make_billing())
@@ -231,6 +275,14 @@ class WaitForInteractableTests(unittest.TestCase):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script.return_value = True
         self.assertTrue(gd._is_interactable(self._make_interactable_element()))
+
+    def test_wait_for_interactable_accepts_later_matching_element(self):
+        hidden = self._make_interactable_element()
+        visible = self._make_interactable_element()
+        gd = GivexDriver(_make_driver(), strict=False)
+        with patch.object(gd, "find_elements", return_value=[hidden, visible]), \
+             patch.object(gd, "_is_interactable", side_effect=[False, True]):
+            self.assertTrue(gd._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=1))
 
     def test_diagnose_returns_sanitized_state_on_failure(self):
         gd = GivexDriver(_make_driver(), strict=False)
@@ -285,6 +337,18 @@ class AtcBlueprintWaitTests(unittest.TestCase):
         diag.assert_called_once_with(SEL_REVIEW_CHECKOUT)
         self.assertIn("display", "\n".join(logs.output))
         self.assertNotIn("@example.com", "\n".join(logs.output))
+
+    def test_atc_timeout_includes_blueprint_wait(self):
+        gd = GivexDriver(_make_driver(), strict=False)
+        with patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_get_rng", return_value=LowBoundRng()), \
+             patch.object(gd, "_wait_for_interactable", return_value=False), \
+             patch.object(gd, "_diagnose_non_interactable", return_value={}), \
+             patch.object(gd, "_capture_failure_screenshot"), \
+             patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(SelectorTimeoutError) as ctx:
+                gd.add_to_cart_and_checkout()
+        self.assertEqual(ctx.exception.timeout, 13)
 
 
 class ClickHumanizationTests(unittest.TestCase):

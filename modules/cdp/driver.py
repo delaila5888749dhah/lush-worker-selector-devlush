@@ -1923,8 +1923,12 @@ class GivexDriver:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             elements = self.find_elements(selector)
-            if elements and self._is_interactable(elements[0]):
-                return True
+            for elem in elements:
+                try:
+                    if self._is_interactable(elem):
+                        return True
+                except Exception:  # pylint: disable=broad-except
+                    pass
             time.sleep(0.5)
         return False
 
@@ -1947,13 +1951,32 @@ class GivexDriver:
         except Exception:  # pylint: disable=broad-except
             return -1
 
+    def _field_value(self, selector: str) -> str | None:
+        """Read element value via JS. Callers must never log the returned value."""
+        try:
+            value = self._driver.execute_script(
+                "const el=document.querySelector(arguments[0]);"
+                "return el&&typeof el.value==='string'?el.value:null;",
+                selector,
+            )
+            return value if isinstance(value, str) else None
+        except Exception:  # pylint: disable=broad-except
+            return None
+
     def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
         actual_len = self._field_value_length(sel)
         _log.info("_realistic_type_field: field=%s expected_len=%d actual_len=%d", selector_name, expected_len, actual_len)
+        if actual_len < 0:
+            self._capture_failure_screenshot(f"type_field_unreadable_{selector_name}")
+            raise SessionFlaggedError(
+                f"Field {selector_name} value unreadable (JS read failed); expected_len={expected_len}"
+            )
+        if expected_len <= 0:
+            return
         if sel == SEL_AMOUNT_INPUT:
-            failed, label = actual_len <= 0 and expected_len > 0, "empty"
+            failed, label = actual_len <= 0, "empty"
         else:
-            failed, label = actual_len < max(1, int(expected_len * 0.7)) and expected_len > 0, "short"
+            failed, label = actual_len < max(1, int(expected_len * 0.7)), "short"
         if failed:
             self._capture_failure_screenshot(f"type_field_value_{label}_{selector_name}")
             raise SessionFlaggedError(f"Field {selector_name} did not receive typed value (expected_len={expected_len} actual_len={actual_len})")
@@ -2102,6 +2125,9 @@ class GivexDriver:
         if not els: raise SelectorTimeoutError(sel, 0)  # noqa: E701
         selector_name = _selector_name(sel)
         expected_len = len(str(val))
+        # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
+        # add the selector + symbolic name to _SELECTOR_NAMES above. Fields not in the
+        # registry are typed without focus/verify (legacy behavior preserved).
         verify_value = sel in _SELECTOR_NAMES
         if verify_value:
             self._human_scroll_to(sel)
@@ -2259,15 +2285,19 @@ class GivexDriver:
         if not elements:
             return
         rnd = self._get_rng()
+        stage = "init"
         try:
             for _ in range(max_steps):
+                stage = "rect_read"
                 rect = self._driver.execute_script("const r=arguments[0].getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};", elements[0])
+                stage = "viewport_read"
                 viewport_h = self._driver.execute_script("return window.innerHeight") or 720
                 center = rect["top"] + rect["height"] / 2
                 delta = center - viewport_h * rnd.uniform(0.45, 0.65)
                 if abs(delta) < 80:
                     break
                 dy = max(-420, min(420, delta * rnd.uniform(0.45, 0.75)))
+                stage = "wheel_dispatch"
                 if self._cursor is not None and hasattr(self._cursor, "scroll_wheel"):
                     self._cursor.scroll_wheel(dy, steps=rnd.randint(3, 6))
                 else:
@@ -2278,7 +2308,11 @@ class GivexDriver:
                 time.sleep(rnd.uniform(0.18, 0.55))
             time.sleep(rnd.uniform(0.35, 0.9))
         except Exception as exc:  # pylint: disable=broad-except
-            _log.warning("CDP wheel scroll unavailable (%s); falling back to JS scrollIntoView", _sanitize_error(str(exc)))
+            _log.warning(
+                "CDP wheel scroll failed at stage=%s (%s); falling back to JS scrollIntoView",
+                stage,
+                _sanitize_error(str(exc)),
+            )
             try:
                 self._driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", elements[0])
             except Exception:  # pylint: disable=broad-except
@@ -2735,13 +2769,22 @@ class GivexDriver:
         final_lens = {sel: self._field_value_length(sel) for sel in fields}
         for sel, ln in final_lens.items():
             _log.info("fill_egift_form: final_check field=%s value_len=%d", _selector_name(sel), ln)
-            if ln <= 0:
+            if ln < 0:
+                self._capture_failure_screenshot(f"final_check_unreadable_{_selector_name(sel)}")
+                raise SessionFlaggedError(
+                    f"Final validation: field {_selector_name(sel)} unreadable (JS read error, not auto-clear)"
+                )
+            if ln == 0:
                 self._capture_failure_screenshot(f"final_check_empty_{_selector_name(sel)}")
                 raise SessionFlaggedError(f"Final validation: field {_selector_name(sel)} is empty after fill_egift_form completed (Givex auto-clear suspected)")
-        rcp_len, cnf_len = final_lens[SEL_RECIPIENT_EMAIL], final_lens[SEL_CONFIRM_RECIPIENT_EMAIL]
-        if rcp_len != cnf_len:
+        recipient = self._field_value(SEL_RECIPIENT_EMAIL)
+        confirm = self._field_value(SEL_CONFIRM_RECIPIENT_EMAIL)
+        if recipient is None or confirm is None:
+            self._capture_failure_screenshot("final_check_email_unreadable")
+            raise SessionFlaggedError("Final validation: recipient/confirm email unreadable")
+        if recipient != confirm:
             self._capture_failure_screenshot("final_check_email_mismatch")
-            raise SessionFlaggedError(f"Final validation: recipient_email_len={rcp_len} != confirm_email_len={cnf_len}")
+            raise SessionFlaggedError("Final validation: recipient email and confirm email values differ")
         _log.info("fill_egift_form: completed (final validation passed)")
 
     def add_to_cart_and_checkout(self) -> None:
@@ -2759,15 +2802,18 @@ class GivexDriver:
         )
         time.sleep(delay)
         _log.info("add_to_cart_and_checkout: settled, waiting Review-Checkout interactable")
-        found = self._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=10)
+        interactable_timeout = 10
+        found = self._wait_for_interactable(SEL_REVIEW_CHECKOUT, timeout=interactable_timeout)
         if not found:
             state = self._diagnose_non_interactable(SEL_REVIEW_CHECKOUT)
             _log.error(
-                "add_to_cart_and_checkout: Review-Checkout NOT interactable; state=%s",
+                "add_to_cart_and_checkout: Review-Checkout NOT interactable after %.2fs blueprint wait + %ds poll; state=%s",
+                delay,
+                interactable_timeout,
                 state,
             )
             self._capture_failure_screenshot("review_checkout_not_interactable")
-            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, 10)
+            raise SelectorTimeoutError(SEL_REVIEW_CHECKOUT, int(delay) + interactable_timeout)
         _log.info("add_to_cart_and_checkout: Review-Checkout interactable")
         self.bounding_box_click(SEL_REVIEW_CHECKOUT)
         _log.info("add_to_cart_and_checkout: Review-Checkout clicked")

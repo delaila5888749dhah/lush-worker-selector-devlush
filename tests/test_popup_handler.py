@@ -671,7 +671,11 @@ class TestPopupXPathCloseFallback(unittest.TestCase):
             event_types, ["mouseMoved", "mousePressed", "mouseReleased"]
         )
         for c in cdp_calls:
-            self.assertEqual(c[0][1]["button"], "left")
+            params = c[0][1]
+            self.assertEqual(
+                params["button"],
+                "none" if params["type"] == "mouseMoved" else "left",
+            )
         wrapper.clear_card_fields_cdp.assert_called_once_with()
 
     def test_css_miss_with_no_xpath_match_returns_close_failed(self):

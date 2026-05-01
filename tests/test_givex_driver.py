@@ -230,7 +230,8 @@ class TestFillEgiftForm(unittest.TestCase):
 
         with patch.object(drv, "_random_greeting", return_value="Test greeting"), \
              patch.object(gd, "_realistic_type_field") as mock_type, \
-             patch.object(gd, "_field_value_length", return_value=10):
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value=task.recipient_email):
             gd.fill_egift_form(task, billing)
 
         expected_calls = [
@@ -254,7 +255,8 @@ class TestFillEgiftForm(unittest.TestCase):
 
         with patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch.object(gd, "_realistic_type_field") as mock_type, \
-             patch.object(gd, "_field_value_length", return_value=10):
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value=task.recipient_email):
             gd.fill_egift_form(task, billing)
 
         email_calls = [
@@ -271,7 +273,8 @@ class TestFillEgiftForm(unittest.TestCase):
         gd = GivexDriver(selenium)
         with patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch.object(gd, "_realistic_type_field") as mock_type, \
-             patch.object(gd, "_field_value_length", return_value=10):
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value=task.recipient_email):
             gd.fill_egift_form(task, billing)
         sender_calls = [c for c in mock_type.call_args_list if c.args[0] == SEL_SENDER_NAME]
         self.assertEqual(len(sender_calls), 1)
@@ -288,6 +291,7 @@ class TestFillEgiftForm(unittest.TestCase):
              patch.object(gd, "_human_scroll_to"), \
              patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_field_value_length", return_value=100), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 1, "typos_injected": 0,
@@ -1616,6 +1620,7 @@ class TestSmoothScrollTo(unittest.TestCase):
         with patch.object(givex_driver, "_smooth_scroll_to") as mock_scroll, \
              patch.object(givex_driver, "_realistic_type_field"), \
              patch.object(givex_driver, "_field_value_length", return_value=10), \
+             patch.object(givex_driver, "_field_value", return_value="recipient@example.com"), \
              patch("modules.cdp.driver._random_greeting", return_value="Hi"), \
              patch("time.sleep"):
             givex_driver.fill_egift_form(_make_task(), _make_billing())
@@ -2115,6 +2120,7 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
         with patch.object(gd, "_smooth_scroll_to", side_effect=lambda s: call_log.append(("scroll", s))), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch("time.sleep"):
             def tracking_type(sel, _val, **_kw):  # pylint: disable=unused-argument
                 """Spy that records selector to call_log."""
@@ -2136,6 +2142,7 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
         with patch.object(gd._sm, "transition") as mock_transition, \
              patch.object(gd, "_realistic_type_field"), \
              patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch("time.sleep"):
             gd.fill_egift_form(_make_task(), _make_billing())

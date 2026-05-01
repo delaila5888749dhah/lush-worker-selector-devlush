@@ -20,7 +20,8 @@ class TestBoundingBoxOffset(unittest.TestCase):
         gd._rnd = random.Random(5)
 
         offsets = []
-        with patch.object(gd, "_ghost_move_to"):
+        with patch.object(gd, "_ghost_move_to"), \
+             patch("modules.cdp.driver.time.sleep"):
             for _ in range(100):
                 driver.execute_cdp_cmd.reset_mock()
                 gd.bounding_box_click("#btn")
@@ -42,7 +43,8 @@ class TestBoundingBoxOffset(unittest.TestCase):
         gd._rnd = random.Random(8)
 
         offsets = []
-        with patch.object(gd, "_ghost_move_to"):
+        with patch.object(gd, "_ghost_move_to"), \
+             patch("modules.cdp.driver.time.sleep"):
             for _ in range(100):
                 driver.execute_cdp_cmd.reset_mock()
                 gd.bounding_box_click("#btn")
