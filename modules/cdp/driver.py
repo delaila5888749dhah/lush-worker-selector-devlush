@@ -85,6 +85,8 @@ _SCROLL_PIXELS_PER_TICK_MIN = 70
 _SCROLL_PIXELS_PER_TICK_MAX = 115
 _SCROLL_DELTA_PER_TICK_MIN = 70
 _SCROLL_DELTA_PER_TICK_MAX = 120
+_SCROLL_ALIGNMENT_THRESHOLD_PX = 80
+_ADD_TO_CART_TIMEOUT_S = 8
 _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 
 _log = logging.getLogger(__name__)
@@ -2665,7 +2667,7 @@ class GivexDriver:
             viewport_h = self._driver.execute_script("return window.innerHeight") or 720
             center = rect["top"] + rect["height"] / 2
             delta = center - viewport_h * rnd.uniform(0.45, 0.65)
-            if abs(delta) >= 80:
+            if abs(delta) >= _SCROLL_ALIGNMENT_THRESHOLD_PX:
                 pixels_per_tick = rnd.uniform(_SCROLL_PIXELS_PER_TICK_MIN, _SCROLL_PIXELS_PER_TICK_MAX)
                 ticks = max(1, math.ceil(abs(delta) / pixels_per_tick))
                 direction = 1 if delta > 0 else -1
@@ -3172,12 +3174,12 @@ class GivexDriver:
         the cart page (``URL_CART``) before returning.
         """
         _log.info("add_to_cart_and_checkout: started")
-        if not self._wait_for_interactable(SEL_ADD_TO_CART, timeout=8):
-            raise SelectorTimeoutError(SEL_ADD_TO_CART, 8)
-        atc_deadline = time.monotonic() + 8
+        if not self._wait_for_interactable(SEL_ADD_TO_CART, timeout=_ADD_TO_CART_TIMEOUT_S):
+            raise SelectorTimeoutError(SEL_ADD_TO_CART, _ADD_TO_CART_TIMEOUT_S)
+        atc_deadline = time.monotonic() + _ADD_TO_CART_TIMEOUT_S
         while not self._is_closest_control_ready(SEL_ADD_TO_CART):
             if time.monotonic() >= atc_deadline:
-                raise SelectorTimeoutError(SEL_ADD_TO_CART, 8, reason="present but disabled")
+                raise SelectorTimeoutError(SEL_ADD_TO_CART, _ADD_TO_CART_TIMEOUT_S, reason="present but disabled")
             time.sleep(0.25)
         self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
         self.bounding_box_click(SEL_ADD_TO_CART)

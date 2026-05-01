@@ -20,7 +20,7 @@ class SelectorTimeoutError(SessionFlaggedError):
     Inherits from SessionFlaggedError so the runtime's existing exception
     handler treats it as a flagged session (exits cycle gracefully).
 
-        Attributes:
+    Attributes:
         selector: The CSS selector or locator that timed out.
         timeout: The timeout in seconds that was exceeded.
         reason: Optional timeout flavor, e.g. "present but disabled".
