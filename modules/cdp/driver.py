@@ -1927,7 +1927,7 @@ class GivexDriver:
                 try:
                     if self._is_interactable(elem):
                         return True
-                except (StaleElementReferenceException, NoSuchElementException, WebDriverException) as exc:
+                except (StaleElementReferenceException, NoSuchElementException) as exc:
                     _log.debug(
                         "_wait_for_interactable: ignored transient interactability error for %s: %s",
                         _selector_name(selector),
@@ -1956,7 +1956,7 @@ class GivexDriver:
             return -1
 
     def _field_value(self, selector: str) -> str | None:
-        """Read element value via JS. Callers must never log the returned value."""
+        """Read element value via JS. Callers must never log this PII-bearing value."""
         try:
             value = self._driver.execute_script(
                 "const el=document.querySelector(arguments[0]);"
@@ -2131,7 +2131,8 @@ class GivexDriver:
         expected_len = len(str(val))
         # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
         # add its selector + symbolic name to the module-level _SELECTOR_NAMES registry
-        # near the selector constants. Unregistered fields keep legacy no-verify typing.
+        # defined immediately after SEL_GUEST_EMAIL. Unregistered fields keep legacy
+        # no-verify typing.
         verify_value = sel in _SELECTOR_NAMES
         if verify_value:
             self._human_scroll_to(sel)
