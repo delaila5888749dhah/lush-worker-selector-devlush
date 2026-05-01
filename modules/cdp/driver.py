@@ -3338,10 +3338,12 @@ class GivexDriver:
             return
 
         if not any(isinstance(c, dict) and c.get("id") for c in raw):
-            # Container may be loading — poll briefly.
+            # Container may be loading — poll briefly (up to ~3 s, 10 retries).
             _pick_deadline = time.monotonic() + 3.0
-            while True:
+            _pick_retries = 0
+            while _pick_retries < 10:
                 time.sleep(0.3)
+                _pick_retries += 1
                 try:
                     raw = self._driver.execute_script(detect_js)
                 except Exception:  # pylint: disable=broad-except

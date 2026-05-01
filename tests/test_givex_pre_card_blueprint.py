@@ -1311,11 +1311,12 @@ class Round4DetectionTests(unittest.TestCase):
         selenium = _make_driver()
         selenium.execute_script.return_value = None
         gd = GivexDriver(selenium, strict=False)
-        with self.assertLogs("modules.cdp.driver", level="INFO"):
+        with self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             try:
                 gd._select_card_design_if_required()
             except Exception as exc:  # pylint: disable=broad-except
                 self.fail(f"_select_card_design_if_required raised unexpectedly: {exc}")
+        self.assertIn("no_picker_detected", "\n".join(logs.output))
 
     def test_non_numeric_labels_excluded_from_candidates(self):
         """Labels like cws_lbl_gcMsg must NOT be treated as card design picks."""
