@@ -302,8 +302,8 @@ class ClickHumanizationTests(unittest.TestCase):
             drv._dispatch_cdp_click_sequence(driver, 100, 200, rng=random.Random(2), jitter=True)
         press = driver.execute_cdp_cmd.call_args_list[1].args[1]
         release = driver.execute_cdp_cmd.call_args_list[2].args[1]
-        self.assertLessEqual(abs(press["x"] - release["x"]), 0.6)
-        self.assertLessEqual(abs(press["y"] - release["y"]), 0.6)
+        self.assertEqual(press["x"], release["x"])
+        self.assertEqual(press["y"], release["y"])
 
     def test_press_hold_between_50_and_160_ms(self):
         driver = MagicMock()

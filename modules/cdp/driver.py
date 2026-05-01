@@ -2222,6 +2222,8 @@ class GivexDriver:
             selector_name, expected_len, actual_len,
         )
         if sel == SEL_AMOUNT_INPUT:
+            # Givex can auto-format amount text (for example "25" -> "25.00"),
+            # so this field only needs to prove that trusted typing landed.
             if actual_len <= 0 and expected_len > 0:
                 self._capture_failure_screenshot(f"type_field_value_empty_{selector_name}")
                 raise SessionFlaggedError(
@@ -2846,6 +2848,9 @@ class GivexDriver:
 
         rcp_len = final_lens[SEL_RECIPIENT_EMAIL]
         cnf_len = final_lens[SEL_CONFIRM_RECIPIENT_EMAIL]
+        # The confirmation rule must end with the same logical email length.
+        # This stricter cross-field check catches post-blur auto-clears or
+        # partial confirm-email fills that per-field minimums would not.
         if rcp_len != cnf_len:
             self._capture_failure_screenshot("final_check_email_mismatch")
             raise SessionFlaggedError(
