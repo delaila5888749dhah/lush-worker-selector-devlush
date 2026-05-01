@@ -216,6 +216,7 @@ class FillEgiftFormFinalValidationTests(unittest.TestCase):
                 gd.fill_egift_form(_make_task(), _make_billing())
         shot.assert_called_once_with("final_check_email_mismatch")
         text = "\n".join(logs.output)
+        self.assertIn("mismatch detected", text)
         self.assertNotIn("a@b.com", text)
         self.assertNotIn("c@d.com", text)
 

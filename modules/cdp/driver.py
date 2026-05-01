@@ -1927,8 +1927,12 @@ class GivexDriver:
                 try:
                     if self._is_interactable(elem):
                         return True
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as exc:  # pylint: disable=broad-except
+                    _log.debug(
+                        "_wait_for_interactable: ignored transient interactability error for %s: %s",
+                        _selector_name(selector),
+                        _sanitize_error(str(exc)),
+                    )
             time.sleep(0.5)
         return False
 
@@ -2780,9 +2784,11 @@ class GivexDriver:
         recipient = self._field_value(SEL_RECIPIENT_EMAIL)
         confirm = self._field_value(SEL_CONFIRM_RECIPIENT_EMAIL)
         if recipient is None or confirm is None:
+            _log.warning("fill_egift_form: final_check recipient/confirm email unreadable")
             self._capture_failure_screenshot("final_check_email_unreadable")
             raise SessionFlaggedError("Final validation: recipient/confirm email unreadable")
         if recipient != confirm:
+            _log.warning("fill_egift_form: final_check recipient/confirm email mismatch detected")
             self._capture_failure_screenshot("final_check_email_mismatch")
             raise SessionFlaggedError("Final validation: recipient email and confirm email values differ")
         _log.info("fill_egift_form: completed (final validation passed)")
