@@ -1333,6 +1333,18 @@ class Round4DetectionTests(unittest.TestCase):
         self.assertGreaterEqual(gd._driver.execute_script.call_count, 2)
         mock_click.assert_called_once()
 
+    def test_poll_stops_when_retry_returns_none(self):
+        """A later None sentinel means the picker disappeared; stop polling."""
+        gd = self._make_gd([[], None])
+        with patch.object(gd, "cdp_click_absolute") as mock_click, \
+             patch("modules.cdp.driver.time.sleep") as mock_sleep, \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        mock_sleep.assert_called_once()
+        self.assertEqual(gd._driver.execute_script.call_count, 2)
+        mock_click.assert_not_called()
+        self.assertIn("no_picker_detected", "\n".join(logs.output))
+
     def test_no_picker_detected_does_not_raise(self):
         """no_picker_detected path must return gracefully (no exception)."""
         selenium = _make_driver()
