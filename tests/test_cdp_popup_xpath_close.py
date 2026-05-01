@@ -49,11 +49,8 @@ class TestPopupXPathClickCloseUsesCDP(unittest.TestCase):
         self.assertEqual(types, ["mouseMoved", "mousePressed", "mouseReleased"])
         for c in cdp_calls:
             params = c[0][1]
-            if params["type"] == "mouseMoved":
-                self.assertEqual(params["button"], "none")
-            else:
-                self.assertEqual(params["button"], "left")
-                self.assertEqual(params["clickCount"], 1)
+            self.assertEqual(params["button"], "left")
+            self.assertEqual(params["clickCount"], 1)
             # Each event coord should land inside the bounding rect (with a
             # tiny ±0.5px sub-pixel jitter tolerance applied per event).
             self.assertGreaterEqual(params["x"], rect["left"] - 0.5)
