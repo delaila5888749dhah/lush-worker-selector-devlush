@@ -461,6 +461,7 @@ class WaitForInteractableTests(unittest.TestCase):
              patch("modules.cdp.driver.time.sleep"):
             gd.add_to_cart_and_checkout()
         scripts = [c.args[0] for c in gd._driver.execute_script.call_args_list]
+        self.assertTrue(any("closest('button,a,[role=\"button\"],.btn,#cws_btn_gcBuyAdd')" in s for s in scripts))
         self.assertTrue(any("#cws_btn_gcBuyAdd" in s for s in scripts))
 
     def test_review_checkout_ready_requires_visible_nonzero_button(self):

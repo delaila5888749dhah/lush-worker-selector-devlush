@@ -2012,7 +2012,7 @@ class GivexDriver:
                 const describe = (el) => {
                     if (!el) {
                         return {
-                            present: false, enabled: null, disabled: null, aria_disabled: null,
+                            present: false, enabled: false, disabled: null, aria_disabled: null,
                             pointer_events: null, display: null, visibility: null,
                             rect_w: 0, rect_h: 0, text_len: 0, class_len: 0
                         };
@@ -2718,6 +2718,7 @@ class GivexDriver:
     def _click_closest_control_for(self, span_selector: str) -> None:
         """Click the nearest clickable control for a span locator."""
         try:
+            # Include the known parent id because Givex uses that div as the live control.
             rects = self._driver.execute_script(
                 "const s=document.querySelector(arguments[0]);"
                 "if(!s)return null;"
@@ -3207,11 +3208,13 @@ class GivexDriver:
             time.sleep(0.25)
         self._engine_aware_sleep(0.8, 1.8, "atc_ready_before_click")
         cart_baseline = self._review_checkout_diagnostics()
+        atc_clicked_start = time.monotonic()
         self._click_closest_control_for(SEL_ADD_TO_CART)
         delay = 3.0 + self._get_rng().uniform(0.1, 0.8)
         _log.info(
-            "add_to_cart_and_checkout: ATC clicked t+0.0s baseline=%s; "
+            "add_to_cart_and_checkout: ATC clicked t+%.1fs baseline=%s; "
             "waiting %.2fs per blueprint",
+            time.monotonic() - atc_clicked_start,
             self._cart_log_snapshot(cart_baseline),
             delay,
         )
