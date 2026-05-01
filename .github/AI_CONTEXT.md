@@ -4,7 +4,6 @@ This file is the standing operating protocol for AI agents (Copilot Coding Agent
 
 ## 1. TL;DR — Critical Rules (read first, always apply)
 
-```text
 1. NEVER log raw PII, cookies, storage values, secrets, credentials, API keys, or real browser profile IDs. No justification overrides this.
 2. NEVER modify this file, blueprint, or spec/contracts unless the human explicitly requests a docs-only PR for that scope.
 3. ALWAYS classify task risk (trivial / non-trivial / high-risk) before choosing review depth.
@@ -13,37 +12,29 @@ This file is the standing operating protocol for AI agents (Copilot Coding Agent
 6. NEVER approve a PR by reading only the diff. Inspect the review cone (issue, callers, tests, spec, logs).
 7. Controlled exceptions (synthetic JS events, raw send_keys, raw click fallback, delay accumulator reset, global timeout bumps, cross-domain payment edits, broad refactors) require explicit PR justification under §5.
 8. For high-risk debugging, two independent AI reviewers (currently GPT-5.5 + Claude Opus 4.7) review in parallel and cross-critique each other before the human decides. See §9.
-```
 
 ## 2. Risk Classification
 
-```text
 TRIVIAL:      docs-only, comments, typos, tests not changing production assertions.
 NON-TRIVIAL:  any production code / config / env / CI / diagnostics / logging / exception change. Default if uncertain.
 HIGH-RISK:    browser automation, CDP, selectors, checkout, payment, CVV, VBV, 3DS, session, cookie, fingerprint, anti-detect, DelayEngine, timing, orchestrator, retry, exception hierarchy, PII handling, billing/proxy pool, BitBrowser profiles, blueprint/spec/contracts.
-```
 
 ## 3. Context Precedence
 
-```text
 1) Latest human instruction → 2) Issue body/comments → 3) PR description/reviews → 4) Latest smoke logs/screenshots/diagnostics → 5) Current code → 6) Blueprint/spec/contracts → 7) This file.
-```
 
 Blueprint/spec/contracts are binding. If a request conflicts with them, report the conflict instead of silently violating design. This file must not override a newer issue, PR, instruction, or log.
 
 ## 4. Absolutely Forbidden (no exception, no override)
 
-```text
 - logging raw PII (card, CVV, email, name, address, phone, raw page text, raw validation messages)
 - logging raw cookie / localStorage / sessionStorage values
 - committing secrets, credentials, API keys, real browser profile IDs
 - AI self-editing this file, blueprint, or spec/contracts without explicit human authorization
 - bypassing PII or self-modification rules via any "controlled exception"
-```
 
 ## 5. Controlled Exceptions (require explicit PR justification)
 
-```text
 - synthetic JS input/change/blur events to bypass validators
 - raw Selenium send_keys on production hot paths
 - raw Selenium click fallback in strict CDP paths
@@ -51,13 +42,12 @@ Blueprint/spec/contracts are binding. If a request conflicts with them, report t
 - increasing global timeouts without scoped env/config
 - changing payment/card submission inside an unrelated pre-card issue
 - broad refactors unrelated to the linked issue
-```
+
 
 PR description must answer all four: (a) why standard path failed, (b) why this is minimum-risk option, (c) which test covers regression risk, (d) why it does not violate blueprint/spec.
 
 ## 6. Critical Thinking Rule
 
-```text
 Symptom        = what failed.
 Observation    = what logs / screenshots / diagnostics / tests show.
 Hypothesis     = possible explanation, not yet proven.
@@ -65,7 +55,6 @@ Confirmed fact = proven by logs, tests, code, or diagnostics.
 Inferred risk  = plausible risk needing test/diagnostic confirmation.
 Fix            = minimal change for confirmed or strongly-supported cause.
 Verification   = test, CI, smoke, or diagnostic proving the fix.
-```
 
 If new evidence disproves an old hypothesis, stop fixing the old hypothesis and update the plan. Silent flip-flopping between rounds is not allowed; state new evidence, retracted claim, and remaining uncertainty.
 
@@ -81,7 +70,6 @@ For any non-trivial PR, inspect: linked issue + acceptance criteria, PR descript
 
 For high-risk debugging, two independent AI reviewers analyze the same evidence in parallel, then **cross-critique each other's output** before the human decides. Current setup: **Reviewer A = GPT-5.5**, **Reviewer B = Claude Opus 4.7** (model names are illustrative; replace as the human chooses). Workflow:
 
-```text
 Round 1 — Parallel independent review:
   Human gives identical inputs (issue, logs, code refs, spec) to A and B.
   Each produces its own Debug Packet (§A) and recommendation, blind to the other.
@@ -98,7 +86,6 @@ Round 3 — Convergence or escalation:
   REQUEST_CHANGES:        either still finds a valid blocker.
   NEEDS_HUMAN_DECISION:   material unresolved disagreement (architecture, runtime,
                           security, payment, anti-detect, PII, delay, spec).
-```
 
 This protocol is advisory and human-driven; it is not CI-enforced. No high-risk PR merges while a material disagreement is unresolved. Disagreement YAML format in `AI_CONTEXT_DETAIL.md §B`. Full cross-review workflow detail in `AI_CONTEXT_DETAIL.md §G`.
 
@@ -126,3 +113,5 @@ Each PR: one issue, tight scope, includes/updates tests, no unrelated cleanup, p
 
 When smoke logs are provided, cite decisive lines: last successful step, first failing step, exact error, relevant diagnostics, hypothesis confirmed/disproved, next minimal fix. If insufficient, state which diagnostic is missing — do not jump to a fix. Before reusing prior context, verify the issue is still open, no newer PR/log contradicts it, and the human has not given newer instructions. This file does not contain: current bug status as permanent truth, per-issue acceptance criteria, blueprint details, secrets, vendor model settings, CI configuration, or temporary smoke results. Such content belongs in Issues / PRs / smoke comments / release notes.
 For smoke log analysis, follow .github/skills/analyze-smoke-logs.md.
+For smoke log analysis, follow .github/skills/analyze-smoke-logs.md.
+For task-specific skills and trigger phrases, see .github/skills/README.md.
