@@ -81,6 +81,11 @@ except ImportError:
     _get_current_sm = None  # type: ignore[assignment]
 
 _MAX_STEP_DELAY = 7.0
+_SCROLL_PIXELS_PER_TICK_MIN = 70
+_SCROLL_PIXELS_PER_TICK_MAX = 115
+_SCROLL_DELTA_PER_TICK_MIN = 70
+_SCROLL_DELTA_PER_TICK_MAX = 120
+_GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 
 _log = logging.getLogger(__name__)
 
@@ -2656,11 +2661,11 @@ class GivexDriver:
             center = rect["top"] + rect["height"] / 2
             delta = center - viewport_h * rnd.uniform(0.45, 0.65)
             if abs(delta) >= 80:
-                divisor = rnd.uniform(70, 115)
-                ticks = max(1, math.ceil(abs(delta) / divisor))
+                pixels_per_tick = rnd.uniform(_SCROLL_PIXELS_PER_TICK_MIN, _SCROLL_PIXELS_PER_TICK_MAX)
+                ticks = max(1, math.ceil(abs(delta) / pixels_per_tick))
                 direction = 1 if delta > 0 else -1
-                for _ in range(ticks):
-                    dy = direction * rnd.uniform(70, 120)
+                for _tick_index in range(ticks):
+                    dy = direction * rnd.uniform(_SCROLL_DELTA_PER_TICK_MIN, _SCROLL_DELTA_PER_TICK_MAX)
                     stage = "wheel_dispatch"
                     if self._cursor is not None and hasattr(self._cursor, "scroll_wheel"):
                         self._cursor.scroll_wheel(dy, steps=1)
@@ -3179,9 +3184,12 @@ class GivexDriver:
         time.sleep(delay)
         _log.info("add_to_cart_and_checkout: settled, waiting Review-Checkout interactable")
         try:
-            interactable_timeout = float(os.environ.get("GIVEX_REVIEW_CHECKOUT_POLL_S", "18"))
+            interactable_timeout = float(os.environ.get(
+                "GIVEX_REVIEW_CHECKOUT_POLL_S",
+                str(_GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S),
+            ))
         except ValueError:
-            interactable_timeout = 18.0
+            interactable_timeout = _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S
         found, present = self._wait_for_review_checkout_enabled(timeout=interactable_timeout)
         if not found:
             flavor = "present but disabled" if present else "not found"
