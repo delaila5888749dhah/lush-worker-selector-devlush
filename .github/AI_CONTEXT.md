@@ -125,4 +125,6 @@ Each PR: one issue, tight scope, includes/updates tests, no unrelated cleanup, p
 ## 15. Smoke Logs, Staleness, Out-of-Scope
 
 When smoke logs are provided, cite decisive lines: last successful step, first failing step, exact error, relevant diagnostics, hypothesis confirmed/disproved, next minimal fix. If insufficient, state which diagnostic is missing — do not jump to a fix. Before reusing prior context, verify the issue is still open, no newer PR/log contradicts it, and the human has not given newer instructions. This file does not contain: current bug status as permanent truth, per-issue acceptance criteria, blueprint details, secrets, vendor model settings, CI configuration, or temporary smoke results. Such content belongs in Issues / PRs / smoke comments / release notes.
+
 For smoke log analysis, follow .github/skills/analyze-smoke-logs.md.
+For task-specific skills and trigger phrases, see .github/skills/README.md.
