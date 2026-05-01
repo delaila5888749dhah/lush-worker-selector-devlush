@@ -229,7 +229,8 @@ class TestFillEgiftForm(unittest.TestCase):
         gd = GivexDriver(selenium)
 
         with patch.object(drv, "_random_greeting", return_value="Test greeting"), \
-             patch.object(gd, "_realistic_type_field") as mock_type:
+             patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_field_value_length", return_value=10):
             gd.fill_egift_form(task, billing)
 
         expected_calls = [
@@ -252,7 +253,8 @@ class TestFillEgiftForm(unittest.TestCase):
         gd = GivexDriver(selenium)
 
         with patch.object(drv, "_random_greeting", return_value="Hi"), \
-             patch.object(gd, "_realistic_type_field") as mock_type:
+             patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_field_value_length", return_value=10):
             gd.fill_egift_form(task, billing)
 
         email_calls = [
@@ -268,7 +270,8 @@ class TestFillEgiftForm(unittest.TestCase):
         billing = _make_billing()
         gd = GivexDriver(selenium)
         with patch.object(drv, "_random_greeting", return_value="Hi"), \
-             patch.object(gd, "_realistic_type_field") as mock_type:
+             patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_field_value_length", return_value=10):
             gd.fill_egift_form(task, billing)
         sender_calls = [c for c in mock_type.call_args_list if c.args[0] == SEL_SENDER_NAME]
         self.assertEqual(len(sender_calls), 1)
@@ -282,6 +285,9 @@ class TestFillEgiftForm(unittest.TestCase):
         gd = GivexDriver(selenium)
 
         with patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=100), \
              patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 1, "typos_injected": 0,
@@ -365,7 +371,9 @@ class TestSelectGuestCheckout(unittest.TestCase):
         selenium.find_elements.side_effect = side_effect
         gd = GivexDriver(selenium, strict=False)
 
-        with patch("time.sleep"), patch.object(gd, "_wait_for_url"):
+        with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_url"), \
+             patch.object(gd, "_field_value_length", return_value=len("guest@example.com")):
             gd.select_guest_checkout("guest@example.com")
 
         begin_el.click.assert_called_once()
@@ -1547,19 +1555,26 @@ def _make_persona(seed: int = 42):
 
 
 class TestSmoothScrollTo(unittest.TestCase):
-    """_smooth_scroll_to scrolls into view and uses persona delay."""
+    """_smooth_scroll_to delegates to the CDP wheel scroll path."""
 
-    def test_smooth_scroll_to_calls_execute_script_with_scrollIntoView(self):
+    def test_smooth_scroll_to_uses_cdp_wheel_primary_path(self):
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
+        def execute_script(script, *_args):
+            if "getBoundingClientRect" in script:
+                return {"top": 1000, "bottom": 1040, "height": 40}
+            if "window.innerHeight" in script:
+                return 720
+            return None
+        selenium.execute_script.side_effect = execute_script
         gd = GivexDriver(selenium)
         with patch("time.sleep"):
             gd._smooth_scroll_to(SEL_GREETING_MSG)
-        self.assertGreaterEqual(selenium.execute_script.call_count, 1)
-        first_script = selenium.execute_script.call_args_list[0][0][0]
-        self.assertIn("scrollIntoView", first_script)
-        self.assertIn("behavior: 'smooth'", first_script)
+        payloads = [c[0][1] for c in selenium.execute_cdp_cmd.call_args_list]
+        self.assertTrue(any(p.get("type") == "mouseWheel" for p in payloads))
+        scripts = [c[0][0] for c in selenium.execute_script.call_args_list]
+        self.assertFalse(any("scrollIntoView" in s for s in scripts))
 
     def test_smooth_scroll_to_noop_when_element_missing(self):
         selenium = _make_driver()
@@ -1568,46 +1583,43 @@ class TestSmoothScrollTo(unittest.TestCase):
         gd._smooth_scroll_to(SEL_GREETING_MSG)
         selenium.execute_script.assert_not_called()
 
-    def test_smooth_scroll_to_uses_persona_click_delay(self):
+    def test_smooth_scroll_to_delegates_to_human_scroll_to(self):
         selenium = _make_driver()
-        element = MagicMock()
-        selenium.find_elements.return_value = [element]
-        persona = _make_persona(42)
-        persona.get_click_delay = MagicMock(return_value=0.12345)
-        gd = GivexDriver(selenium, persona=persona)
-        sleep_calls = []
-        with patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
-            gd._smooth_scroll_to(SEL_GREETING_MSG)
-        self.assertTrue(sleep_calls)
-        self.assertAlmostEqual(sleep_calls[-1], 0.12345)
-
-    def test_smooth_scroll_to_uses_default_delay_without_persona(self):
-        selenium = _make_driver()
-        element = MagicMock()
-        selenium.find_elements.return_value = [element]
         gd = GivexDriver(selenium)
-        sleep_calls = []
-        with patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
+        with patch.object(gd, "_human_scroll_to") as mock_scroll:
             gd._smooth_scroll_to(SEL_GREETING_MSG)
-        self.assertTrue(sleep_calls)
-        self.assertAlmostEqual(sleep_calls[-1], 0.15)
+        mock_scroll.assert_called_once_with(SEL_GREETING_MSG)
 
-    def test_smooth_scroll_to_includes_correction_step(self):
-        """fill_egift_form triggers a scrollBy correction via _smooth_scroll_to."""
+    def test_smooth_scroll_to_falls_back_to_js_when_wheel_unavailable(self):
+        selenium = _make_driver()
+        element = MagicMock()
+        selenium.find_elements.return_value = [element]
+        def execute_script(script, *_args):
+            if "getBoundingClientRect" in script:
+                return {"top": 1000, "bottom": 1040, "height": 40}
+            if "window.innerHeight" in script:
+                return 720
+            return None
+        selenium.execute_script.side_effect = execute_script
+        selenium.execute_cdp_cmd.side_effect = RuntimeError("wheel unavailable")
+        gd = GivexDriver(selenium)
+        with patch("time.sleep"):
+            gd._smooth_scroll_to(SEL_GREETING_MSG)
+        scripts = [c[0][0] for c in selenium.execute_script.call_args_list]
+        self.assertTrue(any("scrollIntoView" in s for s in scripts))
+
+    def test_fill_egift_form_uses_smooth_scroll_before_typing(self):
         selenium = _make_driver()
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         givex_driver = GivexDriver(selenium)
-        with patch.object(givex_driver, "_cdp_type_field"), \
+        with patch.object(givex_driver, "_smooth_scroll_to") as mock_scroll, \
+             patch.object(givex_driver, "_realistic_type_field"), \
+             patch.object(givex_driver, "_field_value_length", return_value=10), \
              patch("modules.cdp.driver._random_greeting", return_value="Hi"), \
              patch("time.sleep"):
             givex_driver.fill_egift_form(_make_task(), _make_billing())
-        all_scripts = [c[0][0] for c in selenium.execute_script.call_args_list]
-        scrollby_scripts = [s for s in all_scripts if "scrollBy" in s]
-        self.assertGreaterEqual(
-            len(scrollby_scripts), 1,
-            "expected at least one scrollBy correction call",
-        )
+        mock_scroll.assert_called_once_with(SEL_GREETING_MSG)
 
 
 # ── TestBoundingBoxClickCoordinates ─────────────────────────────────────────
@@ -1628,12 +1640,7 @@ class TestBoundingBoxClickCoordinates(unittest.TestCase):
         gd = GivexDriver(selenium, persona=persona)
         with patch("time.sleep"):
             gd.bounding_box_click("#some-el")
-        # GhostCursor emits mouseMoved (button=none); the click path emits
-        # mouseMoved + mousePressed + mouseReleased (button=left).
-        click_calls = [
-            c for c in selenium.execute_cdp_cmd.call_args_list
-            if c[0][1].get("button") == "left"
-        ]
+        click_calls = selenium.execute_cdp_cmd.call_args_list[-3:]
         self.assertEqual(len(click_calls), 3)
         event_types = [c[0][1]["type"] for c in click_calls]
         self.assertEqual(event_types, ["mouseMoved", "mousePressed", "mouseReleased"])
@@ -2107,6 +2114,7 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
 
         with patch.object(gd, "_smooth_scroll_to", side_effect=lambda s: call_log.append(("scroll", s))), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch.object(gd, "_field_value_length", return_value=10), \
              patch("time.sleep"):
             def tracking_type(sel, _val, **_kw):  # pylint: disable=unused-argument
                 """Spy that records selector to call_log."""
@@ -2126,6 +2134,8 @@ class TestFillEgiftFormScrolls(unittest.TestCase):
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
         with patch.object(gd._sm, "transition") as mock_transition, \
+             patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_field_value_length", return_value=10), \
              patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch("time.sleep"):
             gd.fill_egift_form(_make_task(), _make_billing())
@@ -2261,7 +2271,10 @@ class TestRealisticTypeField(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
-        with patch("modules.cdp.driver._type_value") as mock_tv, \
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=4), \
+             patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 4, "typos_injected": 0,
                                     "corrections_made": 0, "mode": "cdp_key"}
@@ -2279,7 +2292,10 @@ class TestRealisticTypeField(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         gd = GivexDriver(selenium)
         with patch("modules.cdp.driver._type_value", None):
-            with patch.object(gd, "_send_keys_fallback") as mock_fallback:
+            with patch.object(gd, "_human_scroll_to"), \
+                 patch.object(gd, "bounding_box_click"), \
+                 patch.object(gd, "_field_value_length", return_value=5), \
+                 patch.object(gd, "_send_keys_fallback") as mock_fallback:
                 gd._realistic_type_field("#field", "value")
         mock_fallback.assert_called_once_with("#field", "value")
 
@@ -2297,7 +2313,10 @@ class TestRealisticTypeField(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
-        with patch("modules.cdp.driver._type_value") as mock_tv, \
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=3), \
+             patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 3, "typos_injected": 0,
                                     "corrections_made": 0, "mode": "cdp_key"}
@@ -2311,7 +2330,10 @@ class TestRealisticTypeField(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
-        with patch("modules.cdp.driver._type_value") as mock_tv, \
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=16), \
+             patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 16, "typos_injected": 0,
                                     "corrections_made": 0, "mode": "cdp_key"}
@@ -2333,7 +2355,10 @@ class TestRealisticTypeField(unittest.TestCase):
         def capture_tv(drv, el, val, rnd, **kw):
             received_typo_rate.append(kw.get("typo_rate", 0.0))
             return {"typed_chars": 1, "typos_injected": 0, "corrections_made": 0, "mode": "cdp_key"}
-        with patch("modules.cdp.driver._type_value", side_effect=capture_tv), \
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=1), \
+             patch("modules.cdp.driver._type_value", side_effect=capture_tv), \
              patch.object(gd._temporal, "get_night_typo_increase", return_value=0.015), \
              patch("time.sleep"):
             gd._realistic_type_field("#f", "x")
@@ -2352,7 +2377,10 @@ class TestRealisticTypeField(unittest.TestCase):
         }
         temporal = driver._temporal  # pylint: disable=protected-access
         typo_patcher = patch.object(temporal, "get_night_typo_increase", return_value=0.01)
-        with patch("modules.cdp.driver._type_value", return_value=tv_result), \
+        with patch.object(driver, "_human_scroll_to"), \
+             patch.object(driver, "bounding_box_click"), \
+             patch.object(driver, "_field_value_length", return_value=1), \
+             patch("modules.cdp.driver._type_value", return_value=tv_result), \
              typo_patcher as mock_typo, \
              patch("time.sleep"):
             driver._realistic_type_field("#f", "x")  # pylint: disable=protected-access
@@ -2413,7 +2441,10 @@ class TestRealisticTypeFieldPassesEngine(unittest.TestCase):
         selenium.find_elements.return_value = [element]
         persona = _make_persona(42)
         gd = GivexDriver(selenium, persona=persona)
-        with patch("modules.cdp.driver._type_value") as mock_tv, \
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=3), \
+             patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 3, "typos_injected": 0,
                                     "corrections_made": 0, "mode": "cdp_key"}
@@ -2428,7 +2459,10 @@ class TestRealisticTypeFieldPassesEngine(unittest.TestCase):
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         gd = GivexDriver(selenium)
-        with patch("modules.cdp.driver._type_value") as mock_tv, \
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_value_length", return_value=3), \
+             patch("modules.cdp.driver._type_value") as mock_tv, \
              patch("time.sleep"):
             mock_tv.return_value = {"typed_chars": 3, "typos_injected": 0,
                                     "corrections_made": 0, "mode": "cdp_key"}
