@@ -1,3 +1,4 @@
+import re as _re
 import random
 import unittest
 from unittest.mock import MagicMock, call, patch
@@ -743,7 +744,10 @@ _CANONICAL_AUDIT = {
     "alert_visible_count": 0,
 }
 
-import re as _re  # noqa: E402  (inline import for test-only use)
+_FORBIDDEN_PII_PATTERN = _re.compile(
+    r"innerText|outerHTML|innerHTML(?!\.length)|placeholder|cookie|storage|email|sender|recipient|card|password",
+    _re.I,
+)
 
 
 class CartDomAuditTests(unittest.TestCase):
@@ -789,7 +793,7 @@ class CartDomAuditTests(unittest.TestCase):
             self.assertIsInstance(sid, str)
         self.assertNotIn("?", audit["current_url_path"])
         self.assertNotIn("#", audit["current_url_path"])
-        forbidden = _re.compile(r"(?i)(innerText|outerHTML|innerHTML(?!\.length)|placeholder|cookie|storage|email|sender|recipient|card|password)", _re.I)
+        forbidden = _FORBIDDEN_PII_PATTERN
         for k in audit:
             self.assertIsNone(forbidden.search(k), f"Forbidden key found: {k}")
         self.assertNotRegex(repr(audit), r"@\.")
@@ -841,9 +845,8 @@ class CartDomAuditTests(unittest.TestCase):
         gd = GivexDriver(_make_driver(), strict=False)
         gd._driver.execute_script = MagicMock(return_value=_CANONICAL_AUDIT)
         audit = gd._cart_dom_audit()
-        forbidden = _re.compile(r"(?i)(innerText|outerHTML|innerHTML(?!\.length)|placeholder|cookie|storage|email|sender|recipient|card|password)")
         for k in audit:
-            self.assertIsNone(forbidden.search(k), f"Forbidden key found in audit result: {k}")
+            self.assertIsNone(_FORBIDDEN_PII_PATTERN.search(k), f"Forbidden key found in audit result: {k}")
 
 
 if __name__ == "__main__":
