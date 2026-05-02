@@ -1260,7 +1260,11 @@ return selectors.map(function(sel) {
                     _validated_notify_total(worker_id, float(parsed))
                     return
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
-        _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
+        _logger.warning(
+            "[trace=%s] DOM total read failed: %s",
+            _get_trace_id(),
+            _canonical_sanitize_error(exc),
+        )
 
 
 def _dom_only_fallback_enabled() -> bool:
