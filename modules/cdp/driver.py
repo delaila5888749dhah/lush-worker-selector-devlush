@@ -469,6 +469,10 @@ SEL_ORDER_TOTAL_DISPLAY = (
 )
 # Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
+_MAX_CARDHOLDER_NAME_LENGTH = 60
+_MIN_EXPIRY_YEAR = 2000
+_EXPIRY_YEAR_WINDOW_YEARS = 20
+_OPTION_DIAGNOSTIC_LIMIT = 24
 
 _MONTH_NAMES = (
     ("january", "jan"),
@@ -488,10 +492,11 @@ _MONTH_NAMES = (
 
 def _looks_like_cardholder_name(s: str) -> bool:
     s = (s or "").strip()
-    if len(s) < 2 or len(s) > 60:
+    if len(s) < 2 or len(s) > _MAX_CARDHOLDER_NAME_LENGTH:
         return False
     digit_chars = sum(1 for c in s if c.isdigit())
-    if digit_chars >= max(1, len(s) // 2):
+    card_number_pollution_threshold = max(1, len(s) // 2)
+    if digit_chars >= card_number_pollution_threshold:
         return False
     if not any(c.isalpha() for c in s):
         return False
@@ -535,7 +540,7 @@ def _month_option_key(value: str) -> int | None:
 
 def _expand_two_digit_year(value: int, current_year: int) -> int | None:
     matches = [
-        year for year in range(current_year, current_year + 21)
+        year for year in range(current_year, current_year + _EXPIRY_YEAR_WINDOW_YEARS + 1)
         if year % 100 == value
     ]
     return matches[0] if len(matches) == 1 else None
@@ -549,7 +554,7 @@ def _year_option_key(value: str, current_year: int) -> int | None:
         return _expand_two_digit_year(int(text), current_year)
     if len(text) == 4:
         year = int(text)
-        if 2000 <= year <= current_year + 20:
+        if _MIN_EXPIRY_YEAR <= year <= current_year + _EXPIRY_YEAR_WINDOW_YEARS:
             return year
     return None
 
@@ -559,12 +564,14 @@ def _raise_option_not_found(selector: str, requested: str, options) -> None:
     if _is_expiry_month_selector(selector) or _is_expiry_year_selector(selector):
         raise ValueError(
             f"Option value={requested!r} not found in {selector}. "
-            f"Available values={list(values)[:24]}, texts={list(texts)[:24]}"
+            f"Available values={list(values)[:_OPTION_DIAGNOSTIC_LIMIT]}, "
+            f"texts={list(texts)[:_OPTION_DIAGNOSTIC_LIMIT]}"
         )
     raise ValueError(
         f"Option value={requested!r} not found in {selector}. "
-        f"option_count={len(options)}, value_lengths={[len(v) for v in values][:24]}, "
-        f"text_lengths={[len(t) for t in texts][:24]}"
+        f"option_count={len(options)}, "
+        f"value_lengths={[len(v) for v in values][:_OPTION_DIAGNOSTIC_LIMIT]}, "
+        f"text_lengths={[len(t) for t in texts][:_OPTION_DIAGNOSTIC_LIMIT]}"
     )
 
 

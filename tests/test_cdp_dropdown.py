@@ -249,7 +249,7 @@ class TestFlexibleOptionMatching(unittest.TestCase):
         )
         self.assertEqual(idx, 0)
 
-    def test_year_two_digit_rejects_pre_2000_past_year(self):
+    def test_year_two_digit_does_not_match_pre_2000_year(self):
         with self.assertRaises(ValueError):
             drv._find_matching_option_index(
                 drv.SEL_CARD_EXPIRY_YEAR,
