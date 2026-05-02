@@ -388,7 +388,7 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
             _notify_total_from_dom(driver, "dom-worker")
         driver.execute_script.assert_called_once()
         script = driver.execute_script.call_args.args[0]
-        self.assertIn('var text = el.innerText || "";', script)
+        self.assertRegex(script, r'var\s+text\s*=\s*el\.innerText\s*\|\|\s*"";')
         self.assertNotIn("textContent", script)
         # New implementation passes selectors as the second positional argument.
         call_args = driver.execute_script.call_args
