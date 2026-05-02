@@ -2511,6 +2511,10 @@ class GivexDriver:
     ) -> None:
         """Poll until a dynamic ``select`` has at least ``min_options``.
 
+        The default ``min_options=2`` expects one placeholder plus at least
+        one real selectable option, which matches dynamically loaded billing
+        province/state dropdowns.
+
         Args:
             selector: CSS selector for the dropdown to inspect.
             min_options: Minimum option count required before returning.
@@ -2533,8 +2537,14 @@ class GivexDriver:
                 last_count = count
                 if count >= min_options:
                     return
-            except Exception:
+            except (WebDriverException, TypeError, ValueError):
                 pass
+            except Exception as exc:  # pylint: disable=broad-except
+                _log.debug(
+                    "_wait_for_select_options: poll failed selector=%s error_type=%s",
+                    _selector_name(selector),
+                    type(exc).__name__,
+                )
             time.sleep(0.25)
 
         raise SelectorTimeoutError(

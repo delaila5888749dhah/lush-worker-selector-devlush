@@ -660,7 +660,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
 class TestFillPaymentAndBilling(unittest.TestCase):
     """fill_payment_and_billing fills all card and billing fields."""
 
-    def test_payment_and_billing_text_selectors_are_registered_for_focus_verification(self):
+    def test_payment_billing_selectors_registered_for_focus(self):
         for selector in (
             SEL_CARD_NAME,
             SEL_CARD_NUMBER,
@@ -853,7 +853,7 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         self.assertEqual(len(country_calls), 1)
         self.assertEqual(country_calls[0].args[1], "US")
 
-    def test_fill_payment_and_billing_waits_before_dynamic_selects(self):
+    def test_fill_payment_billing_waits_before_dynamic_selects(self):
         selenium = _make_driver()
         gd = GivexDriver(selenium)
         events = []
@@ -945,7 +945,7 @@ class TestFillBilling(unittest.TestCase):
         self.assertGreaterEqual(len(state_calls), 1)
         self.assertEqual(state_calls[0].args[1], billing.state)
 
-    def test_fill_billing_waits_for_state_options_after_country(self):
+    def test_fill_billing_enforces_wait_between_country_and_state_selection(self):
         selenium = _make_driver()
         gd = GivexDriver(selenium)
         events = []

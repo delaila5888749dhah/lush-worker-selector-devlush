@@ -144,6 +144,7 @@ class TestCdpSelectOption(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("option_count=1", message)
         self.assertIn("Available values=['1']", message)
+        self.assertNotIn("value_lengths=", message)
         self.assertIn("texts=['January']", message)
         self.assertIn("selectedIndex=0", message)
         self.assertIn("current_value='1'", message)
