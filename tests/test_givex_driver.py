@@ -853,7 +853,7 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         self.assertEqual(len(country_calls), 1)
         self.assertEqual(country_calls[0].args[1], "US")
 
-    def test_fill_payment_billing_waits_before_dynamic_selects(self):
+    def test_fill_payment_billing_waits_only_for_state_dynamic_select(self):
         selenium = _make_driver()
         gd = GivexDriver(selenium)
         events = []
@@ -869,14 +869,10 @@ class TestFillPaymentAndBilling(unittest.TestCase):
              patch.object(gd, "_cdp_select_option", side_effect=select_spy):
             gd.fill_payment_and_billing(_make_task().primary_card, _make_billing())
 
-        self.assertLess(
-            events.index(("wait", SEL_CARD_EXPIRY_MONTH)),
-            events.index(("select", SEL_CARD_EXPIRY_MONTH, "12")),
-        )
-        self.assertLess(
-            events.index(("wait", SEL_CARD_EXPIRY_YEAR)),
-            events.index(("select", SEL_CARD_EXPIRY_YEAR, "2027")),
-        )
+        self.assertNotIn(("wait", SEL_CARD_EXPIRY_MONTH), events)
+        self.assertNotIn(("wait", SEL_CARD_EXPIRY_YEAR), events)
+        self.assertIn(("select", SEL_CARD_EXPIRY_MONTH, "12"), events)
+        self.assertIn(("select", SEL_CARD_EXPIRY_YEAR, "2027"), events)
         country_idx = events.index(("select", SEL_BILLING_COUNTRY, "US"))
         state_wait_idx = events.index(("wait", SEL_BILLING_STATE))
         state_select_idx = events.index(("select", SEL_BILLING_STATE, "OR"))

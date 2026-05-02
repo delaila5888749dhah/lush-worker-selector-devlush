@@ -526,12 +526,35 @@ def _numeric_option_key(value: str) -> int | None:
 def _month_option_key(value: str) -> int | None:
     if (numeric := _numeric_option_key(value)) is not None and 1 <= numeric <= 12:
         return numeric
+    if (named := _month_name_option_key(value)) is not None:
+        return named
+    return _month_token_option_key(value)
+
+
+def _month_name_option_key(value: str) -> int | None:
     text = (value or "").strip().lower()
     for token in re.findall(r"[a-z]+", text):
         for idx, (full_name, abbrev) in enumerate(_MONTH_NAMES, start=1):
             if token == full_name or token == abbrev:
                 return idx
     return None
+
+
+def _month_token_option_key(value: str) -> int | None:
+    text = (value or "").strip().lower()
+    for token in re.split(r"[_\-/\s]+", text):
+        if re.fullmatch(r"\d{1,2}", token):
+            month = int(token)
+            if 1 <= month <= 12:
+                return month
+    return None
+
+
+def _month_name_disagrees(value: str, text: str, requested_month: int) -> bool:
+    return any(
+        (named := _month_name_option_key(part)) is not None and named != requested_month
+        for part in (value, text)
+    )
 
 
 def _expand_two_digit_year(value: int, current_year: int) -> int | None:
@@ -610,6 +633,8 @@ def _find_matching_option_index(
     if _is_expiry_month_selector(selector):
         if (requested_month := _month_option_key(requested_text)) is not None:
             for idx, (value, text) in enumerate(option_pairs):
+                if _month_name_disagrees(value, text, requested_month):
+                    continue
                 if requested_month in (_month_option_key(value), _month_option_key(text)):
                     return idx
 
@@ -3975,9 +4000,7 @@ class GivexDriver:
         )
         self._realistic_type_field(SEL_CARD_NAME, card_name, field_kind="name")
         self._realistic_type_field(SEL_CARD_NUMBER, card_info.card_number, use_burst=True, field_kind="card_number")
-        self._wait_for_select_options(SEL_CARD_EXPIRY_MONTH, min_options=2, timeout=8.0)
         self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
-        self._wait_for_select_options(SEL_CARD_EXPIRY_YEAR, min_options=2, timeout=8.0)
         self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
         self._realistic_type_field(SEL_CARD_CVV, card_info.cvv, field_kind="cvv")
         if billing_profile is None:

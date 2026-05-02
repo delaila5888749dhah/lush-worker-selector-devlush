@@ -331,6 +331,58 @@ class TestFlexibleOptionMatching(unittest.TestCase):
         )
         self.assertEqual(idx, 0)
 
+    def test_month_four_matches_static_givex_option_formats(self):
+        cases = [
+            {"value": "4", "text": "April"},
+            {"value": "04", "text": "April"},
+            {"value": "ccExpMon_4", "text": "April"},
+            {"value": "ccExpMon_04", "text": "April"},
+            {"value": "month_04", "text": "Month 04"},
+            {"value": "", "text": "04 - April"},
+            {"value": "", "text": "Apr"},
+        ]
+        for option in cases:
+            with self.subTest(option=option):
+                idx = drv._find_matching_option_index(
+                    drv.SEL_CARD_EXPIRY_MONTH,
+                    "04",
+                    [option],
+                )
+                self.assertEqual(idx, 0)
+
+    def test_month_four_does_not_match_placeholders(self):
+        for option in (
+            {"value": "", "text": "Month"},
+            {"value": "", "text": "Select Month"},
+            {"value": "", "text": "--"},
+        ):
+            with self.subTest(option=option):
+                with self.assertRaises(ValueError):
+                    drv._find_matching_option_index(
+                        drv.SEL_CARD_EXPIRY_MONTH,
+                        "04",
+                        [option],
+                    )
+
+    def test_month_four_does_not_match_wrong_months(self):
+        with self.assertRaises(ValueError):
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "04",
+                [
+                    {"value": "01", "text": "January"},
+                    {"value": "02", "text": "February"},
+                ],
+            )
+
+    def test_month_numeric_token_does_not_override_disagreeing_name(self):
+        with self.assertRaises(ValueError):
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "04",
+                [{"value": "", "text": "May 04"}],
+            )
+
     def test_year_full_matches_two_digit_value(self):
         idx = drv._find_matching_option_index(
             drv.SEL_CARD_EXPIRY_YEAR,
