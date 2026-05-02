@@ -2509,6 +2509,17 @@ class GivexDriver:
         min_options: int = 2,
         timeout: float = 8.0,
     ) -> None:
+        """Poll until a dynamic ``select`` has at least ``min_options``.
+
+        Args:
+            selector: CSS selector for the dropdown to inspect.
+            min_options: Minimum option count required before returning.
+            timeout: Maximum seconds to poll before failing.
+
+        Raises:
+            SelectorTimeoutError: If the dropdown option count never reaches
+                ``min_options``; the reason includes the last observed count.
+        """
         deadline = time.monotonic() + timeout
         last_count = -1
 

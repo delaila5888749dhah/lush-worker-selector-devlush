@@ -118,6 +118,12 @@ def _make_billing() -> BillingProfile:
 
 @contextmanager
 def _patched_focus_verification(gd: GivexDriver):
+    """Isolate tests from registered-field focus and length verification.
+
+    Payment/billing fields now scroll, click-focus, and verify DOM value
+    length before/after CDP typing. Tests using this helper assert unrelated
+    typing or selection behavior without depending on scroll/click geometry.
+    """
     with patch.object(gd, "_human_scroll_to"), \
          patch.object(gd, "_wait_scroll_stable"), \
          patch.object(gd, "bounding_box_click"), \
