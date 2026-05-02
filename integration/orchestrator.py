@@ -89,7 +89,8 @@ _WATCHDOG_TIMEOUT_PAYMENT = _load_payment_watchdog_timeout()
 # second, last-resort wrapper/subtotal fallbacks last.
 # Givex /guest/payment.html renders the order total server-side; the CDP
 # Network listener is structurally silent on this page.  DOM read is the
-# ONLY path that can satisfy Phase A for that URL (see PR #384 / Round 5).
+# ONLY path that can satisfy Phase A for that URL (Round 5 selector-priority
+# fix after PR #384).
 _DOM_TOTAL_SELECTORS: tuple[str, ...] = (
     "#orderTotal",          # Givex payment page — actual total span
     "#headingTotal",        # Givex payment page — total summary heading
