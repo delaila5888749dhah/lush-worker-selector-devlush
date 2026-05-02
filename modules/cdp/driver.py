@@ -532,6 +532,11 @@ def _month_option_key(value: str) -> int | None:
 
 
 def _month_name_option_key(value: str) -> int | None:
+    """Return the 1-based month index for a named month token in ``value``.
+
+    Alphabetic tokens are compared against full month names and their common
+    abbreviations; ``None`` means no month name was present.
+    """
     text = (value or "").strip().lower()
     for token in re.findall(r"[a-z]+", text):
         for idx, (full_name, abbrev) in enumerate(_MONTH_NAMES, start=1):
@@ -541,6 +546,12 @@ def _month_name_option_key(value: str) -> int | None:
 
 
 def _month_token_option_key(value: str) -> int | None:
+    """Extract a delimited numeric month token from ``value``.
+
+    Splits on common Givex-style delimiters and returns ``None`` when no
+    in-range token exists or multiple valid month tokens make the value
+    ambiguous.
+    """
     text = (value or "").strip().lower()
     matches = []
     for token in re.split(r"[_/\s-]+", text):
@@ -552,6 +563,11 @@ def _month_token_option_key(value: str) -> int | None:
 
 
 def _has_conflicting_month_name(value: str, text: str, requested_month: int) -> bool:
+    """Return whether option ``value`` or ``text`` names a different month.
+
+    This prevents a numeric token from matching the requested month when a
+    nearby month name clearly identifies the option as another month.
+    """
     return any(
         (named := _month_name_option_key(part)) is not None and named != requested_month
         for part in (value, text)
