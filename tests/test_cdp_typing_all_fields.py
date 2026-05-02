@@ -95,7 +95,7 @@ class BillingFieldsRouteThroughCDP(unittest.TestCase):
     def _run_fill(self, gd):
         with patch.object(gd, "_cdp_select_option"), \
              patch.object(gd, "_wait_for_select_options"), \
-             patch.object(gd, "_verify_field_value_length"), \
+             patch.object(gd, "_field_value_length", return_value=32), \
              patch.object(gd, "_sm"), \
              patch("time.sleep"):
             gd.fill_payment_and_billing(_make_card(), _make_billing())
@@ -160,7 +160,7 @@ class AllSection5FieldsAvoidSendKeys(unittest.TestCase):
              patch.object(gd, "_wait_for_select_options"), \
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "bounding_box_click"), \
-             patch.object(gd, "_verify_field_value_length"), \
+             patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
              patch.object(gd, "_sm"), \
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")

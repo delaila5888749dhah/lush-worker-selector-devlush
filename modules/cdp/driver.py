@@ -2558,7 +2558,7 @@ class GivexDriver:
             "if (!sel) return [-1, -1];"
             "const opts = Array.from(sel.options);"
             "const currentIdx = sel.selectedIndex;"
-            "return [currentIdx, opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')})),"
+            "return [currentIdx, opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')})), "
             "{value: sel.value, disabled: !!sel.disabled}];"
         )
         result = self._driver.execute_script(js, selector)
