@@ -15,7 +15,11 @@ class Test4x4PatternWired(unittest.TestCase):
         bio.generate_burst_pattern.return_value = [0.2]
         setattr(gd, "_bio", bio)
 
-        with patch("modules.cdp.driver._type_value") as mock_type:
+        with patch("modules.cdp.driver._type_value") as mock_type, \
+             patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_verify_field_value_length"):
             gd._realistic_type_field(
                 SEL_CARD_NUMBER,
                 "4111111111111111",
