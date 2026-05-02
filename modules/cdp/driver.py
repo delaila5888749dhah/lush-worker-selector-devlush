@@ -27,6 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
+from typing import NoReturn
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -469,6 +470,133 @@ SEL_ORDER_TOTAL_DISPLAY = (
 )
 # Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
+# Reject pasted card/address payloads but allow long legal names.
+_MAX_CARDHOLDER_NAME_LENGTH = 60
+# Bound two-digit year expansion to current_year .. current_year + window.
+_MIN_EXPIRY_YEAR = 2000
+_EXPIRY_YEAR_WINDOW_YEARS = 20
+# Cap diagnostic option list so logs stay concise.
+_OPTION_DIAGNOSTIC_LIMIT = 24
+_MONTH_NAMES = (
+    ("january", "jan"), ("february", "feb"), ("march", "mar"), ("april", "apr"),
+    ("may", "may"), ("june", "jun"), ("july", "jul"), ("august", "aug"),
+    ("september", "sep"), ("october", "oct"), ("november", "nov"), ("december", "dec"),
+)
+
+
+def _looks_like_cardholder_name(s: str) -> bool:
+    s = (s or "").strip()
+    if len(s) < 2 or len(s) > _MAX_CARDHOLDER_NAME_LENGTH:
+        return False
+    digit_chars = sum(1 for c in s if c.isdigit())
+    # Names can include a few digits, but half-or-more digits is a strong
+    # signal that a card number or other numeric payload polluted the field.
+    return digit_chars * 2 < len(s) and any(c.isalpha() for c in s)
+
+
+def _is_expiry_month_selector(selector: str) -> bool:
+    return selector == SEL_CARD_EXPIRY_MONTH or "ccExpMon" in str(selector)
+
+
+def _is_expiry_year_selector(selector: str) -> bool:
+    return selector == SEL_CARD_EXPIRY_YEAR or "ccExpYr" in str(selector)
+
+
+def _option_value_text(option) -> tuple[str, str]:
+    if not isinstance(option, dict):
+        return "", ""
+    value, text = option.get("value", ""), option.get("text", "")
+    return ("" if value is None else str(value), "" if text is None else str(text))
+
+
+def _numeric_option_key(value: str) -> int | None:
+    text = (value or "").strip()
+    return int(text) if re.fullmatch(r"\d+", text) else None
+
+
+def _month_option_key(value: str) -> int | None:
+    if (numeric := _numeric_option_key(value)) is not None and 1 <= numeric <= 12:
+        return numeric
+    text = (value or "").strip().lower()
+    for token in re.findall(r"[a-z]+", text):
+        for idx, (full_name, abbrev) in enumerate(_MONTH_NAMES, start=1):
+            if token == full_name or token == abbrev:
+                return idx
+    return None
+
+
+def _expand_two_digit_year(value: int, current_year: int) -> int | None:
+    matches = [
+        year for year in range(current_year, current_year + _EXPIRY_YEAR_WINDOW_YEARS + 1)
+        if year % 100 == value
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _year_option_key(value: str, current_year: int) -> int | None:
+    text = (value or "").strip()
+    if not re.fullmatch(r"\d+", text):
+        return None
+    if len(text) == 2:
+        return _expand_two_digit_year(int(text), current_year)
+    if len(text) == 4:
+        if _MIN_EXPIRY_YEAR <= (year := int(text)) <= current_year + _EXPIRY_YEAR_WINDOW_YEARS:
+            return year
+    return None
+
+
+def _raise_option_not_found(selector: str, requested: str, options) -> NoReturn:
+    option_pairs = [_option_value_text(option) for option in options]
+    values = [value for value, _text in option_pairs]
+    texts = [text for _value, text in option_pairs]
+    if _is_expiry_month_selector(selector) or _is_expiry_year_selector(selector):
+        raise ValueError(
+            f"Option value={requested!r} not found in {selector}. "
+            f"Available values={values[:_OPTION_DIAGNOSTIC_LIMIT]}, "
+            f"texts={texts[:_OPTION_DIAGNOSTIC_LIMIT]}"
+        )
+    raise ValueError(
+        f"Option value={requested!r} not found in {selector}. "
+        f"option_count={len(options)}, "
+        f"value_lengths={[len(v) for v in values][:_OPTION_DIAGNOSTIC_LIMIT]}, "
+        f"text_lengths={[len(t) for t in texts][:_OPTION_DIAGNOSTIC_LIMIT]}"
+    )
+
+
+def _find_matching_option_index(
+    selector: str,
+    requested,
+    options,
+    *,
+    current_year: int | None = None,
+) -> int:
+    requested_text = "" if requested is None else str(requested)
+    option_pairs = [_option_value_text(option) for option in options]
+
+    for idx, (value, text) in enumerate(option_pairs):
+        if value == requested_text or text.strip() == requested_text:
+            return idx
+
+    if (requested_numeric := _numeric_option_key(requested_text)) is not None:
+        for idx, (value, text) in enumerate(option_pairs):
+            if requested_numeric in (_numeric_option_key(value), _numeric_option_key(text)):
+                return idx
+
+    if _is_expiry_month_selector(selector):
+        if (requested_month := _month_option_key(requested_text)) is not None:
+            for idx, (value, text) in enumerate(option_pairs):
+                if requested_month in (_month_option_key(value), _month_option_key(text)):
+                    return idx
+
+    if _is_expiry_year_selector(selector):
+        year = current_year if current_year is not None else datetime.datetime.now().year
+        if (requested_year := _year_option_key(requested_text, year)) is not None:
+            for idx, (value, text) in enumerate(option_pairs):
+                if requested_year in (_year_option_key(value, year), _year_option_key(text, year)):
+                    return idx
+
+    _raise_option_not_found(selector, requested_text, options)
+    raise AssertionError("unreachable: _raise_option_not_found should always raise")
 
 
 def _parse_money_text(raw):
@@ -2344,30 +2472,7 @@ class GivexDriver:
             self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
-        """Select the option matching *value* in a ``<select>`` element.
-
-        Implementation strategy (audit finding [G2]):
-          1. ``bounding_box_click`` opens/focuses the dropdown — produces an
-             ``isTrusted=True`` mouse event indistinguishable from a user.
-          2. A read-only ``execute_script`` query locates the target option
-             index relative to the currently-selected one.
-          3. ``ArrowDown`` / ``ArrowUp`` named-key events advance the
-             highlight via CDP (``Input.dispatchKeyEvent`` with proper DOM
-             ``code`` / virtual-key code → ``isTrusted=True``).
-          4. ``Enter`` confirms the selection.
-
-        This deliberately avoids ``Select.select_by_value`` (Selenium
-        helper) because its ``change`` event fires with ``isTrusted=False``
-        — a fingerprint that anti-fraud heuristics flag.
-
-        Args:
-            selector: CSS selector for the ``<select>`` element.
-            value: The option ``value`` attribute to select.
-
-        Raises:
-            SelectorTimeoutError: if no matching element is found.
-            ValueError: if no option with *value* exists in the select.
-        """
+        """CDP-keynav to exact value/text or normalized numeric/month/year option."""
         elements = self.find_elements(selector)
         if not elements:
             raise SelectorTimeoutError(selector, 0)
@@ -2375,27 +2480,30 @@ class GivexDriver:
         # Step 1 — open/focus the dropdown via a real CDP mouse click.
         self.bounding_box_click(selector)
 
-        # Step 2 — locate target index relative to currently-selected option.
+        # Step 2 — read option metadata, then locate the target index in Python.
         js = (
             "const sel = document.querySelector(arguments[0]);"
             "if (!sel) return [-1, -1];"
             "const opts = Array.from(sel.options);"
             "const currentIdx = sel.selectedIndex;"
-            "const targetIdx = opts.findIndex(o => o.value === arguments[1]);"
-            "return [currentIdx, targetIdx];"
+            "return [currentIdx, opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')}))];"
         )
-        result = self._driver.execute_script(js, selector, value)
+        result = self._driver.execute_script(js, selector)
         try:
-            current_idx, target_idx = int(result[0]), int(result[1])
+            current_idx = int(result[0])
+            options = result[1]
+            if not isinstance(options, list):
+                raise TypeError("option metadata is not a list")
         except (TypeError, ValueError, IndexError) as exc:
+            result_len = len(result) if isinstance(result, (list, tuple)) else None
+            result_items = result[:2] if isinstance(result, (list, tuple)) else ()
+            item_types = [type(item).__name__ for item in result_items]
             raise ValueError(
-                f"_cdp_select_option: unexpected option-index result "
-                f"{result!r} for selector {selector!r}"
+                f"_cdp_select_option: unexpected option metadata result "
+                f"type={type(result).__name__} len={result_len} "
+                f"item_types={item_types} selector={selector!r}"
             ) from exc
-        if target_idx < 0:
-            raise ValueError(
-                f"Option value={value!r} not found in {selector}"
-            )
+        target_idx = _find_matching_option_index(selector, value, options)
 
         # Step 3 — keyboard-navigate from current to target.
         from modules.cdp.keyboard import dispatch_key  # local import: avoid cycle
@@ -3751,7 +3859,27 @@ class GivexDriver:
         """Fill card (and, if given, billing) fields on the shared payment page."""
         if self._sm is not None:
             self._sm.transition("PAYMENT")
-        self._realistic_type_field(SEL_CARD_NAME, card_info.card_name, field_kind="name")
+        card_name_source = "card_info"
+        card_name = (card_info.card_name or "").strip()
+        if not _looks_like_cardholder_name(card_name):
+            if billing_profile is None:
+                raise ValueError(
+                    "Invalid cardholder name and no billing profile available; "
+                    "refusing to type card number to avoid form pollution"
+                )
+            card_name = f"{billing_profile.first_name} {billing_profile.last_name}".strip()
+            card_name_source = "billing_profile"
+            if not _looks_like_cardholder_name(card_name):
+                raise ValueError(
+                    "Invalid cardholder name and invalid billing profile name; "
+                    "refusing to type card number to avoid form pollution"
+                )
+        _log.info(
+            "fill_payment_and_billing: field=SEL_CARD_NAME source=%s len=%d",
+            card_name_source,
+            len(card_name),
+        )
+        self._realistic_type_field(SEL_CARD_NAME, card_name, field_kind="name")
         self._realistic_type_field(SEL_CARD_NUMBER, card_info.card_number, use_burst=True, field_kind="card_number")
         self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
         self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)

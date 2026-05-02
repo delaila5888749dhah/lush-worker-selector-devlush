@@ -25,6 +25,10 @@ def _make_driver():
     return d
 
 
+def _option_result(current_idx, values):
+    return [current_idx, [{"value": value, "text": value} for value in values]]
+
+
 class TestCdpSelectOption(unittest.TestCase):
     """_cdp_select_option uses CDP click + key navigation, not Select.select_by_value."""
 
@@ -34,7 +38,7 @@ class TestCdpSelectOption(unittest.TestCase):
         element = MagicMock()
         selenium.find_elements.return_value = [element]
         # current_idx=0, target_idx=2 (delta=+2 → 2× ArrowDown + Enter)
-        selenium.execute_script.return_value = [0, 2]
+        selenium.execute_script.return_value = _option_result(0, ["01", "02", "03"])
 
         gd = GivexDriver(selenium, strict=False)
 
@@ -54,7 +58,9 @@ class TestCdpSelectOption(unittest.TestCase):
         """Negative delta → ArrowUp."""
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = [5, 2]  # delta=-3
+        selenium.execute_script.return_value = _option_result(
+            5, ["2022", "2023", "2024", "2025", "2026", "2027"]
+        )  # delta=-3
 
         gd = GivexDriver(selenium, strict=False)
         with patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
@@ -70,7 +76,7 @@ class TestCdpSelectOption(unittest.TestCase):
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
         # No current selection → current_idx=-1, target_idx=0 → 1 ArrowDown
-        selenium.execute_script.return_value = [-1, 0]
+        selenium.execute_script.return_value = _option_result(-1, ["US", "CA"])
 
         gd = GivexDriver(selenium, strict=False)
         with patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
@@ -85,7 +91,7 @@ class TestCdpSelectOption(unittest.TestCase):
         """Option value not present → ValueError."""
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = [0, -1]  # not found
+        selenium.execute_script.return_value = _option_result(0, ["US", "CA"])
 
         gd = GivexDriver(selenium, strict=False)
         with patch("modules.cdp.keyboard.dispatch_key"), \
@@ -93,6 +99,26 @@ class TestCdpSelectOption(unittest.TestCase):
                 patch("modules.cdp.driver.time.sleep"):
             with self.assertRaises(ValueError):
                 gd._cdp_select_option("#country", "ZZ")
+
+    def test_dropdown_unexpected_metadata_message_includes_safe_shape_summary(self):
+        """Malformed JS result diagnostics should explain the result shape."""
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [-1, -1]
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
+                patch.object(gd, "bounding_box_click"), \
+                patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(ValueError) as ctx:
+                gd._cdp_select_option("#country", "US")
+
+        message = str(ctx.exception)
+        self.assertIn("type=list", message)
+        self.assertIn("len=2", message)
+        self.assertIn("item_types=['int', 'int']", message)
+        self.assertIn("selector='#country'", message)
+        mock_dispatch.assert_not_called()
 
     def test_dropdown_missing_element_raises_selector_timeout(self):
         """Empty find_elements → SelectorTimeoutError."""
@@ -119,7 +145,7 @@ class TestCdpSelectOption(unittest.TestCase):
         """
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = [0, 2]  # need 2× ArrowDown + Enter
+        selenium.execute_script.return_value = _option_result(0, ["01", "02", "03"])
 
         gd = GivexDriver(selenium, strict=False)
         with patch(
@@ -138,7 +164,7 @@ class TestCdpSelectOption(unittest.TestCase):
         """Audit [F1]: a failed confirming Enter must also surface."""
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = [2, 2]  # already-selected → 0 arrows
+        selenium.execute_script.return_value = _option_result(2, ["01", "02", "03"])
 
         gd = GivexDriver(selenium, strict=False)
         with patch(
@@ -155,7 +181,7 @@ class TestCdpSelectOption(unittest.TestCase):
         """Audit [F2]: when the option is missing, no key event should fire."""
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = [0, -1]  # not found
+        selenium.execute_script.return_value = _option_result(0, ["US", "CA"])
 
         gd = GivexDriver(selenium, strict=False)
         with patch(
@@ -173,7 +199,7 @@ class TestCdpSelectOption(unittest.TestCase):
         """
         selenium = _make_driver()
         selenium.find_elements.return_value = [MagicMock()]
-        selenium.execute_script.return_value = [-1, 3]
+        selenium.execute_script.return_value = _option_result(-1, ["US", "CA", "MX", "FR"])
 
         gd = GivexDriver(selenium, strict=False)
         with patch(
@@ -185,6 +211,89 @@ class TestCdpSelectOption(unittest.TestCase):
 
         keys = [c.args[1] for c in mock_dispatch.call_args_list]
         self.assertEqual(keys, ["ArrowDown"] * 4 + ["Enter"])
+
+
+class TestFlexibleOptionMatching(unittest.TestCase):
+    """Expiry dropdown helper accepts site-specific value/text variants."""
+
+    def test_month_numeric_matches_unpadded_value_with_name_text(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "06",
+            [{"value": "6", "text": "June"}],
+        )
+        self.assertEqual(idx, 0)
+
+    def test_month_exact_value_wins_before_normalized_match(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "06",
+            [
+                {"value": "6", "text": "June"},
+                {"value": "06", "text": "June"},
+            ],
+        )
+        self.assertEqual(idx, 1)
+
+    def test_month_numeric_matches_abbrev_value(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "06",
+            [{"value": "jun", "text": "June"}],
+        )
+        self.assertEqual(idx, 0)
+
+    def test_month_name_matches_numeric_value(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "June",
+            [{"value": "6", "text": "6"}],
+        )
+        self.assertEqual(idx, 0)
+
+    def test_year_full_matches_two_digit_value(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_YEAR,
+            "2028",
+            [{"value": "28", "text": "28"}],
+            current_year=2026,
+        )
+        self.assertEqual(idx, 0)
+
+    def test_year_two_digit_matches_full_year_in_window(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_YEAR,
+            "28",
+            [{"value": "2028", "text": "2028"}],
+            current_year=2026,
+        )
+        self.assertEqual(idx, 0)
+
+    def test_year_two_digit_does_not_match_pre_2000_year(self):
+        with self.assertRaises(ValueError) as ctx:
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_YEAR,
+                "28",
+                [{"value": "1928", "text": "1928"}],
+                current_year=2026,
+            )
+        message = str(ctx.exception)
+        self.assertIn("Available values=['1928']", message)
+        self.assertIn("texts=['1928']", message)
+
+    def test_month_no_match_lists_expiry_values_and_texts(self):
+        with self.assertRaises(ValueError) as ctx:
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "06",
+                [
+                    {"value": "01", "text": "January"},
+                    {"value": "02", "text": "February"},
+                ],
+            )
+        message = str(ctx.exception)
+        self.assertIn("Available values=['01', '02']", message)
+        self.assertIn("texts=['January', 'February']", message)
 
 
 class TestDispatchKey(unittest.TestCase):

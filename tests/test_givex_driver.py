@@ -644,6 +644,19 @@ class TestSelectGuestCheckout(unittest.TestCase):
 class TestFillPaymentAndBilling(unittest.TestCase):
     """fill_payment_and_billing fills all card and billing fields."""
 
+    def _card_with_name(self, card_name: str) -> CardInfo:
+        return CardInfo(
+            card_number="4111111111111111",
+            exp_month="12",
+            exp_year="2027",
+            cvv="123",
+            card_name=card_name,
+        )
+
+    def test_cardholder_name_digit_ratio_validation(self):
+        self.assertTrue(drv._looks_like_cardholder_name("Jr3"))
+        self.assertFalse(drv._looks_like_cardholder_name("J12"))
+
     def test_fill_payment_and_billing_fills_all_fields(self):
         selenium = _make_driver()
         element = MagicMock()
@@ -700,6 +713,87 @@ class TestFillPaymentAndBilling(unittest.TestCase):
             if len(c[0]) >= 2 and isinstance(c[0][1], dict) and c[0][1].get("type") == "keyDown"
         )
         self.assertIn("Jane Doe", cdp_chars)
+
+    def test_fill_payment_and_billing_prefers_valid_card_info_name(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        billing = _make_billing()
+        card = self._card_with_name("Jane Doe")
+
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_cdp_select_option"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd.fill_payment_and_billing(card, billing)
+
+        self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
+        joined = "\n".join(logs.output)
+        self.assertIn("source=card_info", joined)
+        self.assertIn("len=8", joined)
+        self.assertNotIn("Jane Doe", joined)
+
+    def test_fill_payment_and_billing_blank_card_name_falls_back_to_billing(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        billing = _make_billing()
+        card = self._card_with_name("")
+
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_cdp_select_option"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd.fill_payment_and_billing(card, billing)
+
+        self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
+        joined = "\n".join(logs.output)
+        self.assertIn("source=billing_profile", joined)
+        self.assertIn("len=8", joined)
+        self.assertNotIn("Jane Doe", joined)
+
+    def test_fill_payment_and_billing_numeric_card_name_falls_back_to_billing(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        billing = _make_billing()
+        card = self._card_with_name("4474370703270993")
+
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_cdp_select_option"):
+            gd.fill_payment_and_billing(card, billing)
+
+        self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
+
+    def test_fill_payment_and_billing_non_alpha_card_name_falls_back_to_billing(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        billing = _make_billing()
+        card = self._card_with_name(" - ")
+
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_cdp_select_option"):
+            gd.fill_payment_and_billing(card, billing)
+
+        self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
+
+    def test_fill_payment_and_billing_invalid_card_name_without_billing_raises_before_card_number(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        card = self._card_with_name("")
+
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_cdp_select_option"):
+            with self.assertRaises(ValueError):
+                gd.fill_payment_and_billing(card, billing_profile=None)
+
+        mock_type.assert_not_called()
+
+    def test_fill_payment_and_billing_valid_card_name_without_billing_succeeds(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        card = self._card_with_name("Jane Doe")
+
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_cdp_select_option"):
+            gd.fill_payment_and_billing(card, billing_profile=None)
+
+        self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
 
     def test_fill_payment_and_billing_selects_country(self):
         """Verify _cdp_select_option is called with SEL_BILLING_COUNTRY and billing_profile.country."""
