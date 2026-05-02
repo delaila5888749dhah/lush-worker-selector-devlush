@@ -250,13 +250,16 @@ class TestFlexibleOptionMatching(unittest.TestCase):
         self.assertEqual(idx, 0)
 
     def test_year_two_digit_does_not_match_pre_2000_year(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as ctx:
             drv._find_matching_option_index(
                 drv.SEL_CARD_EXPIRY_YEAR,
                 "28",
                 [{"value": "1928", "text": "1928"}],
                 current_year=2026,
             )
+        message = str(ctx.exception)
+        self.assertIn("Available values=['1928']", message)
+        self.assertIn("texts=['1928']", message)
 
     def test_month_no_match_lists_expiry_values_and_texts(self):
         with self.assertRaises(ValueError) as ctx:

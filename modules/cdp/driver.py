@@ -469,8 +469,8 @@ SEL_ORDER_TOTAL_DISPLAY = (
 )
 # Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
-# Card networks commonly allow 2-26 chars, but site forms vary; 60 accepts
-# normal full names while rejecting accidental pasted card/address payloads.
+# Card networks commonly allow 2-26 chars, but site forms vary and may accept
+# longer legal names; 60 keeps that tolerance while rejecting pasted payloads.
 _MAX_CARDHOLDER_NAME_LENGTH = 60
 # Expiry dropdowns should never need historical years or unusually far-future
 # values; this keeps two-digit year expansion bounded and unambiguous.
@@ -501,6 +501,8 @@ def _looks_like_cardholder_name(s: str) -> bool:
     if len(s) < 2 or len(s) > _MAX_CARDHOLDER_NAME_LENGTH:
         return False
     digit_chars = sum(1 for c in s if c.isdigit())
+    # Names can include a few digits, but half-or-more digits is a strong
+    # signal that a card number or other numeric payload polluted the field.
     digit_threshold = max(1, len(s) // 2)
     if digit_chars >= digit_threshold:
         return False
