@@ -2558,13 +2558,11 @@ class GivexDriver:
             self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
 
     def _select_options_signature(self, selector: str) -> Optional[str]:
-        """Return a small fingerprint of a ``select`` option list.
+        """Fingerprint of a ``select`` option list (count + value/text pairs).
 
-        Used by callers of :meth:`_wait_for_select_options` to capture the
-        pre-mutation state of a dynamic dropdown so the wait can tell
-        "stale options from previous country" from "fresh options arrived".
-        Returns ``None`` when the snapshot fails — callers treat that as
-        "no baseline" and fall back to plain count-based waiting.
+        Used by :meth:`_wait_for_select_options` to tell stale options from
+        a previous country apart from a fresh repopulation. Returns ``None``
+        on snapshot failure so callers fall back to plain count-only waits.
         """
         try:
             sig = self._driver.execute_script(
@@ -2595,24 +2593,24 @@ class GivexDriver:
         timeout: float = 8.0,
         baseline_signature: Optional[str] = None,
     ) -> None:
-        """Poll until a dynamic ``select`` has at least ``min_options``.
+        """Poll until a dynamic ``select`` has ``>= min_options``.
 
-        Default ``min_options=2`` expects placeholder + at least one real
-        option, matching dynamically loaded billing province/state lists.
-
+        Default ``min_options=2`` expects placeholder + ≥1 real option.
         When ``baseline_signature`` is supplied (captured via
         :meth:`_select_options_signature` before mutating the upstream
         control), the wait additionally requires the live option list to
-        differ from that baseline. This prevents premature returns when
-        stale options from a previous country still satisfy the count.
+        differ from that baseline — preventing premature returns when stale
+        options from a previous country still satisfy the count.
 
         Raises:
             SelectorTimeoutError: If the count never reaches ``min_options``
-                (or the signature never changes when a baseline was
-                supplied); the reason includes the last observed state.
+                (or the signature never changes when a baseline was given).
         """
         deadline = time.monotonic() + timeout
         last_count = -1
+        # When no baseline is provided we have no way to detect a stale
+        # repopulation, so treat the signature as "already changed" and
+        # fall back to the original count-only wait semantics.
         signature_changed = baseline_signature is None
 
         while time.monotonic() < deadline:
