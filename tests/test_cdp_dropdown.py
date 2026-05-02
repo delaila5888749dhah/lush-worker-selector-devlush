@@ -100,6 +100,55 @@ class TestCdpSelectOption(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gd._cdp_select_option("#country", "ZZ")
 
+    def test_dropdown_missing_value_includes_safe_select_state_diagnostics(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [
+            0,
+            [{"value": "", "text": "Select one"}],
+            {"value": "", "disabled": True},
+        ]
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
+             patch.object(gd, "bounding_box_click"), \
+             patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(ValueError) as ctx:
+                gd._cdp_select_option("#province", "CA")
+
+        message = str(ctx.exception)
+        self.assertIn("option_count=1", message)
+        self.assertIn("value_lengths=[0]", message)
+        self.assertIn("text_lengths=[10]", message)
+        self.assertIn("selectedIndex=0", message)
+        self.assertIn("current_value_len=0", message)
+        self.assertIn("disabled=True", message)
+        mock_dispatch.assert_not_called()
+
+    def test_expiry_missing_value_includes_option_state_diagnostics(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [
+            0,
+            [{"value": "1", "text": "January"}],
+            {"value": "1", "disabled": False},
+        ]
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch("modules.cdp.keyboard.dispatch_key"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(ValueError) as ctx:
+                gd._cdp_select_option(drv.SEL_CARD_EXPIRY_MONTH, "04")
+
+        message = str(ctx.exception)
+        self.assertIn("option_count=1", message)
+        self.assertIn("Available values=['1']", message)
+        self.assertIn("texts=['January']", message)
+        self.assertIn("selectedIndex=0", message)
+        self.assertIn("current_value='1'", message)
+        self.assertIn("disabled=False", message)
+
     def test_dropdown_unexpected_metadata_message_includes_safe_shape_summary(self):
         """Malformed JS result diagnostics should explain the result shape."""
         selenium = _make_driver()
@@ -137,6 +186,36 @@ class TestCdpSelectOption(unittest.TestCase):
         """
         self.assertFalse(hasattr(drv, "Select"),
                          "Select must not be imported in modules.cdp.driver")
+
+    def test_wait_for_select_options_succeeds_after_options_reach_minimum(self):
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = [1, 2]
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("modules.cdp.driver.time.sleep"):
+            gd._wait_for_select_options("#province", min_options=2, timeout=1.0)
+
+        self.assertEqual(selenium.execute_script.call_count, 2)
+
+    def test_wait_for_select_options_timeout_raises(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = 1
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(SelectorTimeoutError):
+                gd._wait_for_select_options("#province", min_options=2, timeout=0.01)
+
+    def test_wait_for_select_options_timeout_reason_includes_last_count(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = 1
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(SelectorTimeoutError) as ctx:
+                gd._wait_for_select_options("#province", min_options=2, timeout=0.01)
+
+        self.assertIn("last_count=1", str(ctx.exception))
 
     def test_dropdown_aborts_when_arrow_dispatch_fails(self):
         """Audit [F1]: a failed ``dispatch_key`` MUST stop the navigation

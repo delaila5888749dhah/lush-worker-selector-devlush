@@ -460,6 +460,15 @@ SEL_BILLING_CITY    = "#cws_txt_billingCity"
 SEL_BILLING_ZIP     = "#cws_txt_billingPostal"
 SEL_BILLING_PHONE   = "#cws_txt_billingPhone"
 SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
+_SELECTOR_NAMES.update({
+    SEL_CARD_NAME: "SEL_CARD_NAME",
+    SEL_CARD_NUMBER: "SEL_CARD_NUMBER",
+    SEL_CARD_CVV: "SEL_CARD_CVV",
+    SEL_BILLING_ADDRESS: "SEL_BILLING_ADDRESS",
+    SEL_BILLING_CITY: "SEL_BILLING_CITY",
+    SEL_BILLING_ZIP: "SEL_BILLING_ZIP",
+    SEL_BILLING_PHONE: "SEL_BILLING_PHONE",
+})
 # Visible Order Total element verified against the captured watchdog/preflight
 # total in :meth:`GivexDriver.submit_purchase` right before clicking COMPLETE
 # PURCHASE so a mid-cycle cart mutation cannot reach the irreversible click
@@ -545,21 +554,34 @@ def _year_option_key(value: str, current_year: int) -> int | None:
     return None
 
 
-def _raise_option_not_found(selector: str, requested: str, options) -> NoReturn:
+def _raise_option_not_found(
+    selector: str,
+    requested: str,
+    options,
+    *,
+    selected_index: int | None = None,
+    current_value: str | None = None,
+    disabled: bool | None = None,
+) -> NoReturn:
     option_pairs = [_option_value_text(option) for option in options]
     values = [value for value, _text in option_pairs]
     texts = [text for _value, text in option_pairs]
     if _is_expiry_month_selector(selector) or _is_expiry_year_selector(selector):
         raise ValueError(
             f"Option value={requested!r} not found in {selector}. "
+            f"option_count={len(options)}, "
             f"Available values={values[:_OPTION_DIAGNOSTIC_LIMIT]}, "
-            f"texts={texts[:_OPTION_DIAGNOSTIC_LIMIT]}"
+            f"texts={texts[:_OPTION_DIAGNOSTIC_LIMIT]}, "
+            f"selectedIndex={selected_index}, current_value={current_value!r}, "
+            f"disabled={disabled}"
         )
     raise ValueError(
         f"Option value={requested!r} not found in {selector}. "
         f"option_count={len(options)}, "
         f"value_lengths={[len(v) for v in values][:_OPTION_DIAGNOSTIC_LIMIT]}, "
-        f"text_lengths={[len(t) for t in texts][:_OPTION_DIAGNOSTIC_LIMIT]}"
+        f"text_lengths={[len(t) for t in texts][:_OPTION_DIAGNOSTIC_LIMIT]}, "
+        f"selectedIndex={selected_index}, "
+        f"current_value_len={len(current_value or '')}, disabled={disabled}"
     )
 
 
@@ -569,6 +591,9 @@ def _find_matching_option_index(
     options,
     *,
     current_year: int | None = None,
+    selected_index: int | None = None,
+    current_value: str | None = None,
+    disabled: bool | None = None,
 ) -> int:
     requested_text = "" if requested is None else str(requested)
     option_pairs = [_option_value_text(option) for option in options]
@@ -595,7 +620,14 @@ def _find_matching_option_index(
                 if requested_year in (_year_option_key(value, year), _year_option_key(text, year)):
                     return idx
 
-    _raise_option_not_found(selector, requested_text, options)
+    _raise_option_not_found(
+        selector,
+        requested_text,
+        options,
+        selected_index=selected_index,
+        current_value=current_value,
+        disabled=disabled,
+    )
     raise AssertionError("unreachable: _raise_option_not_found should always raise")
 
 
@@ -2471,6 +2503,35 @@ class GivexDriver:
             self._verify_field_value_length(sel, expected_len, selector_name)
             self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
 
+    def _wait_for_select_options(
+        self,
+        selector: str,
+        min_options: int = 2,
+        timeout: float = 8.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        last_count = -1
+
+        while time.monotonic() < deadline:
+            try:
+                count = int(self._driver.execute_script(
+                    "const el=document.querySelector(arguments[0]);"
+                    "return el && el.options ? el.options.length : 0;",
+                    selector,
+                ) or 0)
+                last_count = count
+                if count >= min_options:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.25)
+
+        raise SelectorTimeoutError(
+            selector,
+            int(timeout),
+            reason=f"select options did not reach {min_options}; last_count={last_count}",
+        )
+
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """CDP-keynav to exact value/text or normalized numeric/month/year option."""
         elements = self.find_elements(selector)
@@ -2486,7 +2547,8 @@ class GivexDriver:
             "if (!sel) return [-1, -1];"
             "const opts = Array.from(sel.options);"
             "const currentIdx = sel.selectedIndex;"
-            "return [currentIdx, opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')}))];"
+            "return [currentIdx, opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')})),"
+            "{value: sel.value, disabled: !!sel.disabled}];"
         )
         result = self._driver.execute_script(js, selector)
         try:
@@ -2494,6 +2556,10 @@ class GivexDriver:
             options = result[1]
             if not isinstance(options, list):
                 raise TypeError("option metadata is not a list")
+            select_state = result[2] if len(result) > 2 and isinstance(result[2], dict) else {}
+            current_value = select_state.get("value")
+            current_value = "" if current_value is None else str(current_value)
+            disabled = bool(select_state.get("disabled")) if "disabled" in select_state else None
         except (TypeError, ValueError, IndexError) as exc:
             result_len = len(result) if isinstance(result, (list, tuple)) else None
             result_items = result[:2] if isinstance(result, (list, tuple)) else ()
@@ -2503,7 +2569,14 @@ class GivexDriver:
                 f"type={type(result).__name__} len={result_len} "
                 f"item_types={item_types} selector={selector!r}"
             ) from exc
-        target_idx = _find_matching_option_index(selector, value, options)
+        target_idx = _find_matching_option_index(
+            selector,
+            value,
+            options,
+            selected_index=current_idx,
+            current_value=current_value,
+            disabled=disabled,
+        )
 
         # Step 3 — keyboard-navigate from current to target.
         from modules.cdp.keyboard import dispatch_key  # local import: avoid cycle
@@ -3881,7 +3954,9 @@ class GivexDriver:
         )
         self._realistic_type_field(SEL_CARD_NAME, card_name, field_kind="name")
         self._realistic_type_field(SEL_CARD_NUMBER, card_info.card_number, use_burst=True, field_kind="card_number")
+        self._wait_for_select_options(SEL_CARD_EXPIRY_MONTH, min_options=2, timeout=8.0)
         self._cdp_select_option(SEL_CARD_EXPIRY_MONTH, card_info.exp_month)
+        self._wait_for_select_options(SEL_CARD_EXPIRY_YEAR, min_options=2, timeout=8.0)
         self._cdp_select_option(SEL_CARD_EXPIRY_YEAR, card_info.exp_year)
         self._realistic_type_field(SEL_CARD_CVV, card_info.cvv, field_kind="cvv")
         if billing_profile is None:
@@ -3890,6 +3965,7 @@ class GivexDriver:
         # via _realistic_type_field (Phase 3A Task 1, INV-PAYMENT-01 anti-detect).
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
+        self._wait_for_select_options(SEL_BILLING_STATE, min_options=2, timeout=8.0)
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
         self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
         self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
@@ -3919,6 +3995,7 @@ class GivexDriver:
         """
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
+        self._wait_for_select_options(SEL_BILLING_STATE, min_options=2, timeout=8.0)
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
         self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
         self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
