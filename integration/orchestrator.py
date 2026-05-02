@@ -1263,7 +1263,7 @@ return selectors.map(function(sel) {
         _logger.warning(
             "[trace=%s] DOM total read failed: %s",
             _get_trace_id(),
-            _canonical_sanitize_error(exc),
+            _sanitize_error(exc),
         )
 
 
