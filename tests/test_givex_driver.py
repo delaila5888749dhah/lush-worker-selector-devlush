@@ -653,7 +653,7 @@ class TestFillPaymentAndBilling(unittest.TestCase):
             card_name=card_name,
         )
 
-    def test_short_name_with_one_digit_passes_name_shape_check(self):
+    def test_cardholder_name_digit_ratio_validation(self):
         self.assertTrue(drv._looks_like_cardholder_name("Jr3"))
         self.assertFalse(drv._looks_like_cardholder_name("J12"))
 

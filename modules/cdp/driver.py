@@ -504,7 +504,8 @@ def _looks_like_cardholder_name(s: str) -> bool:
     digit_chars = sum(1 for c in s if c.isdigit())
     # Names can include a few digits, but half-or-more digits is a strong
     # signal that a card number or other numeric payload polluted the field.
-    if digit_chars * 2 >= len(s):
+    digits_are_half_or_more = digit_chars * 2 >= len(s)
+    if digits_are_half_or_more:
         return False
     if not any(c.isalpha() for c in s):
         return False
