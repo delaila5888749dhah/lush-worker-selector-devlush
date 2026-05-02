@@ -543,7 +543,7 @@ def _month_name_option_key(value: str) -> int | None:
 def _month_token_option_key(value: str) -> int | None:
     text = (value or "").strip().lower()
     matches = []
-    for token in re.split(r"[_\-/\s]+", text):
+    for token in re.split(r"[_/\s-]+", text):
         if re.fullmatch(r"\d{1,2}", token):
             month = int(token)
             if 1 <= month <= 12:

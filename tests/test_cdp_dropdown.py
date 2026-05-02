@@ -391,7 +391,7 @@ class TestFlexibleOptionMatching(unittest.TestCase):
                 [{"value": "day_04_month_12", "text": "Month"}],
             )
 
-    def test_month_numeric_token_rejects_out_of_range_tokens(self):
+    def test_month_option_key_returns_none_for_out_of_range_tokens(self):
         self.assertIsNone(drv._month_option_key("month_00"))
         self.assertIsNone(drv._month_option_key("month_13"))
 
