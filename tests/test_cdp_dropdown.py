@@ -218,6 +218,49 @@ class TestCdpSelectOption(unittest.TestCase):
 
         self.assertIn("last_count=1", str(ctx.exception))
 
+    def test_wait_for_select_options_baseline_blocks_stale_options(self):
+        """With a baseline, returning options must differ from baseline before success."""
+        selenium = _make_driver()
+        # Sequence: count=5 (stale, matches baseline), sig=baseline,
+        #           count=5 (still stale), sig=baseline,
+        #           count=2 (refreshed), sig=new
+        selenium.execute_script.side_effect = [
+            5, "BASE_SIG",
+            5, "BASE_SIG",
+            2, "NEW_SIG",
+        ]
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("modules.cdp.driver.time.sleep"):
+            gd._wait_for_select_options(
+                "#province",
+                min_options=2,
+                timeout=1.0,
+                baseline_signature="BASE_SIG",
+            )
+
+        # Three count probes + three signature probes before success.
+        self.assertEqual(selenium.execute_script.call_count, 6)
+
+    def test_wait_for_select_options_baseline_timeout_includes_signature_state(self):
+        selenium = _make_driver()
+        # Count is satisfied but signature never changes from baseline.
+        selenium.execute_script.side_effect = lambda *a, **k: (
+            5 if "options.length" in a[0] else "BASE_SIG"
+        )
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(SelectorTimeoutError) as ctx:
+                gd._wait_for_select_options(
+                    "#province",
+                    min_options=2,
+                    timeout=0.01,
+                    baseline_signature="BASE_SIG",
+                )
+
+        self.assertIn("signature_changed=False", str(ctx.exception))
+
     def test_dropdown_aborts_when_arrow_dispatch_fails(self):
         """Audit [F1]: a failed ``dispatch_key`` MUST stop the navigation
         loop and surface the error — silently continuing then sending

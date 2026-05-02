@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -468,6 +468,8 @@ _SELECTOR_NAMES.update({
     SEL_BILLING_CITY: "SEL_BILLING_CITY",
     SEL_BILLING_ZIP: "SEL_BILLING_ZIP",
     SEL_BILLING_PHONE: "SEL_BILLING_PHONE",
+    SEL_BILLING_COUNTRY: "SEL_BILLING_COUNTRY",
+    SEL_BILLING_STATE: "SEL_BILLING_STATE",
 })
 # Visible Order Total element verified against the captured watchdog/preflight
 # total in :meth:`GivexDriver.submit_purchase` right before clicking COMPLETE
@@ -2555,29 +2557,63 @@ class GivexDriver:
             self._verify_field_value_length(sel, expected_len, selector_name)
             self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
 
+    def _select_options_signature(self, selector: str) -> Optional[str]:
+        """Return a small fingerprint of a ``select`` option list.
+
+        Used by callers of :meth:`_wait_for_select_options` to capture the
+        pre-mutation state of a dynamic dropdown so the wait can tell
+        "stale options from previous country" from "fresh options arrived".
+        Returns ``None`` when the snapshot fails — callers treat that as
+        "no baseline" and fall back to plain count-based waiting.
+        """
+        try:
+            sig = self._driver.execute_script(
+                "const el=document.querySelector(arguments[0]);"
+                "if(!el || !el.options) return null;"
+                "const parts=[el.options.length];"
+                "for(let i=0;i<el.options.length;i++){"
+                "  const o=el.options[i];"
+                "  parts.push((o && o.value!=null?String(o.value):'')+'|'+"
+                "             (o && o.text!=null?String(o.text):''));"
+                "}"
+                "return parts.join('\u0001');",
+                selector,
+            )
+        except (WebDriverException, TypeError, ValueError) as exc:
+            _log.debug(
+                "_select_options_signature: snapshot failed selector=%s error_type=%s",
+                _selector_name(selector),
+                type(exc).__name__,
+            )
+            return None
+        return sig if isinstance(sig, str) else None
+
     def _wait_for_select_options(
         self,
         selector: str,
         min_options: int = 2,
         timeout: float = 8.0,
+        baseline_signature: Optional[str] = None,
     ) -> None:
         """Poll until a dynamic ``select`` has at least ``min_options``.
 
-        The default ``min_options=2`` expects one placeholder plus at least
-        one real selectable option, which matches dynamically loaded billing
-        province/state dropdowns.
+        Default ``min_options=2`` expects placeholder + at least one real
+        option, matching dynamically loaded billing province/state lists.
 
-        Args:
-            selector: CSS selector for the dropdown to inspect.
-            min_options: Minimum option count required before returning.
-            timeout: Maximum seconds to poll before failing.
+        When ``baseline_signature`` is supplied (captured via
+        :meth:`_select_options_signature` before mutating the upstream
+        control), the wait additionally requires the live option list to
+        differ from that baseline. This prevents premature returns when
+        stale options from a previous country still satisfy the count.
 
         Raises:
-            SelectorTimeoutError: If the dropdown option count never reaches
-                ``min_options``; the reason includes the last observed count.
+            SelectorTimeoutError: If the count never reaches ``min_options``
+                (or the signature never changes when a baseline was
+                supplied); the reason includes the last observed state.
         """
         deadline = time.monotonic() + timeout
         last_count = -1
+        signature_changed = baseline_signature is None
 
         while time.monotonic() < deadline:
             try:
@@ -2587,7 +2623,11 @@ class GivexDriver:
                     selector,
                 ) or 0)
                 last_count = count
-                if count >= min_options:
+                if not signature_changed:
+                    current_signature = self._select_options_signature(selector)
+                    if current_signature is not None and current_signature != baseline_signature:
+                        signature_changed = True
+                if count >= min_options and signature_changed:
                     return
             except (WebDriverException, TypeError, ValueError) as exc:
                 # Transient polling failures (element not yet attached, JS race).
@@ -2609,7 +2649,10 @@ class GivexDriver:
         raise SelectorTimeoutError(
             selector,
             int(timeout),
-            reason=f"select options did not reach {min_options}; last_count={last_count}",
+            reason=(
+                f"select options did not reach {min_options}; "
+                f"last_count={last_count}; signature_changed={signature_changed}"
+            ),
         )
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
@@ -4042,8 +4085,14 @@ class GivexDriver:
         # Billing section — all text fields routed through CDP Input.dispatchKeyEvent
         # via _realistic_type_field (Phase 3A Task 1, INV-PAYMENT-01 anti-detect).
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
+        billing_state_baseline = self._select_options_signature(SEL_BILLING_STATE)
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
-        self._wait_for_select_options(SEL_BILLING_STATE, min_options=2, timeout=8.0)
+        self._wait_for_select_options(
+            SEL_BILLING_STATE,
+            min_options=2,
+            timeout=8.0,
+            baseline_signature=billing_state_baseline,
+        )
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
         self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
         self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
@@ -4072,8 +4121,14 @@ class GivexDriver:
             Use ``fill_payment_and_billing(card_info, billing_profile)`` instead.
         """
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
+        billing_state_baseline = self._select_options_signature(SEL_BILLING_STATE)
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
-        self._wait_for_select_options(SEL_BILLING_STATE, min_options=2, timeout=8.0)
+        self._wait_for_select_options(
+            SEL_BILLING_STATE,
+            min_options=2,
+            timeout=8.0,
+            baseline_signature=billing_state_baseline,
+        )
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
         self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
         self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
