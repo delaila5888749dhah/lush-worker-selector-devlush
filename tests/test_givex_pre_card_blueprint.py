@@ -1378,9 +1378,11 @@ class Round4DetectionTests(unittest.TestCase):
         with self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd._select_card_design_if_required()
         combined = "\n".join(logs.output)
-        self.assertIn("card_design detect_error reason=", combined)
+        self.assertIn("card_design detect_error reason_type=RuntimeError", combined)
+        self.assertIn("reason_len=", combined)
         self.assertIn("skipping", combined)
         self.assertNotIn("secret@example.com", combined)
+        self.assertNotIn("<script>", combined)
 
 
 class Round4VerificationTests(unittest.TestCase):
@@ -1641,6 +1643,15 @@ class Round4BeginCheckoutHittabilityTests(unittest.TestCase):
              patch("modules.cdp.driver.time.sleep"), \
              self.assertLogs("modules.cdp.driver", level="INFO"):
             gd._verify_begin_checkout_hittable()
+        mock_shot.assert_not_called()
+
+    def test_begin_checkout_hittest_inconclusive_proceeds_without_screenshot(self):
+        gd = self._make_gd(scroll_ret=None, hittest_ret=None)
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
+            gd._verify_begin_checkout_hittable()
+        self.assertIn("Begin Checkout hittability check inconclusive", "\n".join(logs.output))
         mock_shot.assert_not_called()
 
     def test_verify_begin_checkout_js_contains_expected_selector(self):

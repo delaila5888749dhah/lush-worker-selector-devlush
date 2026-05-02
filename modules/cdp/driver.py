@@ -3289,8 +3289,9 @@ class GivexDriver:
             raw = self._driver.execute_script(detect_js)
         except Exception as exc:  # pylint: disable=broad-except
             _log.info(
-                "fill_egift_form: card_design detect_error reason=%s, skipping",
-                _sanitize_error(str(exc)),
+                "fill_egift_form: card_design detect_error reason_type=%s reason_len=%d, skipping",
+                type(exc).__name__,
+                len(str(exc)),
             )
             return
 
@@ -3643,7 +3644,10 @@ class GivexDriver:
             ``"guest_email"`` when the guest email field is visible inline.
         """
         deadline = time.monotonic() + timeout
-        last_url = ""
+        last_url = last_non_empty_url = ""
+        transitions = 0
+        expected_short = _short_url(URL_CHECKOUT)
+        started = time.monotonic()
         while time.monotonic() < deadline:
             current = ""
             try:
@@ -3655,7 +3659,18 @@ class GivexDriver:
                     "Checkout/guest inline wait URL read failed: %s",
                     _sanitize_error(str(exc)),
                 )
-            if current:
+            if current != last_url:
+                if current:
+                    transitions += 1
+                    _log.info(
+                        "_wait_for_checkout_or_guest_inline[expecting=%s or_guest_inline]: "
+                        "URL transitioned to %s (transition #%d, t+%.1fs)",
+                        expected_short,
+                        _sanitize_url_for_log(current),
+                        transitions,
+                        time.monotonic() - started,
+                    )
+                    last_non_empty_url = current
                 last_url = current
             if URL_CHECKOUT in current:
                 return "url"
@@ -3667,8 +3682,9 @@ class GivexDriver:
         self._capture_failure_screenshot("url_checkout_not_reached")
         raise PageStateError(
             "url_wait expected="
-            f"{_short_url(URL_CHECKOUT)} or_guest_inline "
-            f"last_seen={_sanitize_url_for_log(last_url)}"
+            f"{expected_short} or_guest_inline "
+            f"last_seen={_sanitize_url_for_log(last_non_empty_url)} "
+            f"transitions={transitions}"
         )
 
     def select_guest_checkout(self, guest_email: str) -> None:
@@ -3692,10 +3708,10 @@ class GivexDriver:
             PageStateError: if a required page URL is not reached.
         """
         _log.info("select_guest_checkout: started")
-        found = self._wait_for_element(SEL_BEGIN_CHECKOUT, timeout=10)
+        found = self._wait_for_interactable(SEL_BEGIN_CHECKOUT, timeout=10)
         if not found:
             raise SelectorTimeoutError(SEL_BEGIN_CHECKOUT, 10)
-        _log.info("select_guest_checkout: Begin-Checkout visible")
+        _log.info("select_guest_checkout: Begin-Checkout interactable")
         self._verify_begin_checkout_hittable()
         self.bounding_box_click(SEL_BEGIN_CHECKOUT)
         _log.info("select_guest_checkout: Begin-Checkout clicked")

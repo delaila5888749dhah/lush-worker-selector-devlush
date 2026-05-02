@@ -20,7 +20,7 @@ import types
 import datetime
 import decimal
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, PropertyMock, call, patch
 
 from modules.cdp import driver as drv
 from modules.cdp.driver import (
@@ -457,6 +457,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
         gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="url"), \
              patch.object(gd, "_wait_for_url_or_capture"), \
@@ -475,7 +476,8 @@ class TestSelectGuestCheckout(unittest.TestCase):
         selenium = _make_driver()
         selenium.find_elements.return_value = []
         gd = GivexDriver(selenium)
-        with patch("time.sleep"):
+        with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_interactable", return_value=False):
             with self.assertRaises(SelectorTimeoutError):
                 gd.select_guest_checkout("guest@example.com")
 
@@ -492,6 +494,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
         selenium.find_elements.side_effect = side_effect
         gd = GivexDriver(selenium, strict=False)
         with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="url"):
             with self.assertRaises(SelectorTimeoutError):
@@ -513,6 +516,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
         selenium.find_elements.side_effect = side_effect
         gd = GivexDriver(selenium, strict=False)
         with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="url"):
             with self.assertRaises(SelectorTimeoutError):
@@ -538,6 +542,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
         gd = GivexDriver(selenium, strict=False)
 
         with patch("time.sleep"), \
+             patch.object(gd, "_wait_for_interactable", return_value=True), \
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="guest_email"), \
              patch.object(gd, "_is_selector_present_visible", side_effect=lambda sel: sel == SEL_GUEST_EMAIL), \
@@ -578,6 +583,23 @@ class TestSelectGuestCheckout(unittest.TestCase):
         self.assertIn("url_wait expected=", msg)
         self.assertIn("or_guest_inline", msg)
         self.assertIn("last_seen=", msg)
+        self.assertIn("transitions=", msg)
+
+    def test_wait_for_checkout_or_guest_inline_logs_url_transitions(self):
+        selenium = _make_driver(current_url=URL_CART)
+        gd = GivexDriver(selenium, strict=False)
+        urls = [URL_CART, f"{URL_CART}?step=guest", URL_CHECKOUT]
+        with patch.object(type(selenium), "current_url", new_callable=PropertyMock, create=True) as mock_url, \
+             patch.object(gd, "_is_selector_present_visible", return_value=False), \
+             patch("time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            mock_url.side_effect = urls
+            self.assertEqual(gd._wait_for_checkout_or_guest_inline(timeout=1), "url")
+        combined = "\n".join(logs.output)
+        self.assertIn("_wait_for_checkout_or_guest_inline[expecting=", combined)
+        self.assertIn("URL transitioned to", combined)
+        self.assertIn("transition #1", combined)
+        self.assertIn("transition #2", combined)
 
     def test_verify_begin_checkout_called_before_click(self):
         selenium = _make_driver(current_url=URL_CART)
@@ -606,7 +628,8 @@ class TestSelectGuestCheckout(unittest.TestCase):
             elif selector == SEL_GUEST_CONTINUE:
                 continue_el.click()
 
-        with patch.object(gd, "_verify_begin_checkout_hittable", side_effect=lambda: order.append("verify")), \
+        with patch.object(gd, "_wait_for_interactable", side_effect=lambda *_a, **_kw: order.append("wait") or True), \
+             patch.object(gd, "_verify_begin_checkout_hittable", side_effect=lambda: order.append("verify")), \
              patch.object(gd, "bounding_box_click", side_effect=click), \
              patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="guest_email"), \
              patch.object(gd, "_is_selector_present_visible", side_effect=lambda sel: sel == SEL_GUEST_EMAIL), \
@@ -615,7 +638,7 @@ class TestSelectGuestCheckout(unittest.TestCase):
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")
 
-        self.assertEqual(order, ["verify", f"click:{SEL_BEGIN_CHECKOUT}", f"click:{SEL_GUEST_CONTINUE}"])
+        self.assertEqual(order, ["wait", "verify", f"click:{SEL_BEGIN_CHECKOUT}", f"click:{SEL_GUEST_CONTINUE}"])
 
 
 class TestFillPaymentAndBilling(unittest.TestCase):
