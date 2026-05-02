@@ -2547,11 +2547,12 @@ class GivexDriver:
                 raise TypeError("option metadata is not a list")
         except (TypeError, ValueError, IndexError) as exc:
             result_len = len(result) if isinstance(result, (list, tuple)) else None
-            item_types = (
-                [type(item).__name__ for item in result[:2]]
-                if isinstance(result, (list, tuple))
-                else []
-            )
+            item_types = []
+            if isinstance(result, (list, tuple)):
+                for idx, item in enumerate(result):
+                    if idx >= 2:
+                        break
+                    item_types.append(type(item).__name__)
             raise ValueError(
                 f"_cdp_select_option: unexpected option metadata result "
                 f"type={type(result).__name__} len={result_len} "
