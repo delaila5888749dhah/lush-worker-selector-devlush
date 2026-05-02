@@ -84,6 +84,25 @@ def _load_payment_watchdog_timeout() -> float:
 
 _WATCHDOG_TIMEOUT_PAYMENT = _load_payment_watchdog_timeout()
 
+# DOM total selector priority list used by _notify_total_from_dom().
+# Preference order: true payment-page totals first, legacy/compat selectors
+# second, last-resort wrapper/subtotal fallbacks last.
+# Givex /guest/payment.html renders the order total server-side; the CDP
+# Network listener is structurally silent on this page.  DOM read is the
+# ONLY path that can satisfy Phase A for that URL (Round 5 selector-priority
+# fix after PR #384).
+_DOM_TOTAL_SELECTORS: tuple[str, ...] = (
+    "#orderTotal",          # Givex payment page — actual total span
+    "#headingTotal",        # Givex payment page — total summary heading
+    "#cws_lbl_orderTotal",  # Legacy Givex selector (other deployments)
+    ".order-total",         # Generic compat
+    ".checkout-total",      # Generic compat
+    "[data-total]",         # Generic compat
+    "#orderTotalLine",      # Last-resort: order-total-line wrapper
+    "#orderSubtotal",       # Last-resort: subtotal
+    "#totalsContent",       # Last-resort: full totals container
+)
+
 # P0-2 — Retry loop feature flag.
 # Set ENABLE_RETRY_LOOP=0 to fall back to the original single-shot behaviour.
 # Default is enabled (any value other than "0", "false", or "no").
@@ -1178,13 +1197,37 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
     First-notify-wins: if a total has already been notified for *worker_id* in
     the current cycle, subsequent calls are silently skipped under
     ``_network_listener_lock`` to prevent value overwrite races.
+
+    Selector evaluation uses :data:`_DOM_TOTAL_SELECTORS` in priority order.
+    The JS returns a list of candidate metadata objects; Python iterates them
+    and notifies the watchdog on the first parseable result.  Backward
+    compatibility is preserved for int/float/str return values (legacy path).
+    Raw text values are NEVER logged.
     """
     raw_driver = _unwrap_raw_driver(driver_obj)
     try:
+        from modules.cdp.driver import _parse_money_text  # noqa: PLC0415
         result = raw_driver.execute_script(
-            "var el = document.querySelector('#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]');"
-            "return el ? el.innerText : null;"
+            """
+var selectors = arguments[0];
+return selectors.map(function(sel) {
+    var el = document.querySelector(sel);
+    if (!el) return {selector: sel, present: false, visible: false, text: "", text_len: 0};
+    var s = getComputedStyle(el);
+    var r = el.getBoundingClientRect();
+    var text = el.innerText || "";
+    return {
+        selector: sel,
+        present: true,
+        visible: r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden",
+        text: text,
+        text_len: text.length
+    };
+});
+""",
+            list(_DOM_TOTAL_SELECTORS),
         )
+        # ── Backward-compat: legacy callers / mocks returning scalar/string ──
         if isinstance(result, (int, float)):
             _validated_notify_total(worker_id, float(result))
             return
@@ -1193,12 +1236,35 @@ def _notify_total_from_dom(driver_obj, worker_id: str) -> None:
             # so US ($1,234.56), European (1.234,56) and bare-decimal (49,99)
             # totals all decode consistently across the watchdog DOM-fallback
             # and submit-time cross-check paths (E3 audit).
-            from modules.cdp.driver import _parse_money_text  # noqa: PLC0415
             parsed = _parse_money_text(result)
             if parsed is not None:
                 _validated_notify_total(worker_id, float(parsed))
+            return
+        # ── New path: JS returned a list of candidate metadata objects ────────
+        if isinstance(result, list):
+            for candidate in result:
+                if not isinstance(candidate, dict):
+                    continue
+                if not candidate.get("present") or not candidate.get("visible"):
+                    continue
+                text = candidate.get("text") or ""
+                parsed = _parse_money_text(text)
+                if parsed is not None:
+                    _logger.debug(
+                        "[trace=%s] DOM total read selector=%s visible=%s text_len=%d",
+                        _get_trace_id(),
+                        candidate.get("selector", "?"),
+                        candidate.get("visible", False),
+                        candidate.get("text_len", 0),
+                    )
+                    _validated_notify_total(worker_id, float(parsed))
+                    return
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
-        _logger.warning("[trace=%s] DOM total read failed: %s", _get_trace_id(), exc)
+        _logger.warning(
+            "[trace=%s] DOM total read failed: %s",
+            _get_trace_id(),
+            _sanitize_error(exc),
+        )
 
 
 def _dom_only_fallback_enabled() -> bool:

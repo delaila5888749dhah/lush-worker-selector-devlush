@@ -464,7 +464,8 @@ SEL_COMPLETE_PURCHASE = "#cws_btn_checkoutPay"
 # PURCHASE so a mid-cycle cart mutation cannot reach the irreversible click
 # (Spec §5 line 287 — E3 audit).
 SEL_ORDER_TOTAL_DISPLAY = (
-    "#cws_lbl_orderTotal, .order-total, .checkout-total, [data-total]"
+    "#orderTotal, #headingTotal, #cws_lbl_orderTotal, .order-total, .checkout-total, [data-total],"
+    " #orderTotalLine, #orderSubtotal, #totalsContent"
 )
 # Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")

@@ -28,6 +28,7 @@ from modules.fsm.main import cleanup_worker, reset_registry
 from modules.watchdog.main import reset as _reset_watchdog
 
 from integration.orchestrator import (
+    _DOM_TOTAL_SELECTORS,
     _FileIdempotencyStore,
     _IDEMPOTENCY_STORE_PATH,
     _IDEMPOTENCY_TTL,
@@ -372,17 +373,186 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
         total only via ``#cws_lbl_orderTotal`` would let submit_purchase read
         the DOM total while Phase A's DOM-only/degraded fallback cannot
         capture the watchdog/preflight total from the same source.
+
+        Round 5: also asserts that Givex payment-page selectors (#orderTotal,
+        #headingTotal) and last-resort fallbacks are present in
+        _DOM_TOTAL_SELECTORS, and that _notify_total_from_dom passes the full
+        selector tuple as the first JS argument.
         """
         driver = MagicMock()
-        driver.execute_script.return_value = "49.99"
+        # Return a list so the new path is exercised; first element parseable.
+        driver.execute_script.return_value = [
+            {"selector": "#orderTotal", "present": True, "visible": True, "text": "$49.99", "text_len": 6},
+        ]
         with patch("integration.orchestrator.watchdog"):
             _notify_total_from_dom(driver, "dom-worker")
         driver.execute_script.assert_called_once()
         script = driver.execute_script.call_args.args[0]
-        self.assertIn("#cws_lbl_orderTotal", script)
-        self.assertIn(".order-total", script)
-        self.assertIn(".checkout-total", script)
-        self.assertIn("[data-total]", script)
+        self.assertIn("el.innerText", script)
+        self.assertNotIn("textContent", script)
+        # New implementation passes selectors as the second positional argument.
+        call_args = driver.execute_script.call_args
+        passed_selectors = call_args.args[1]
+        # All legacy selectors must still be present.
+        self.assertIn("#cws_lbl_orderTotal", passed_selectors)
+        self.assertIn(".order-total", passed_selectors)
+        self.assertIn(".checkout-total", passed_selectors)
+        self.assertIn("[data-total]", passed_selectors)
+        # New Givex payment-page selectors.
+        self.assertIn("#orderTotal", passed_selectors)
+        self.assertIn("#headingTotal", passed_selectors)
+        # Last-resort fallbacks.
+        self.assertIn("#orderTotalLine", passed_selectors)
+        self.assertIn("#orderSubtotal", passed_selectors)
+        self.assertIn("#totalsContent", passed_selectors)
+        # Module-level constant must also carry all selectors.
+        for sel in ("#orderTotal", "#headingTotal", "#cws_lbl_orderTotal",
+                    ".order-total", ".checkout-total", "[data-total]",
+                    "#orderTotalLine", "#orderSubtotal", "#totalsContent"):
+            self.assertIn(sel, _DOM_TOTAL_SELECTORS, f"Missing selector {sel!r} in _DOM_TOTAL_SELECTORS")
+
+
+class DOMListCandidateTests(unittest.TestCase):
+    """Round 5: _notify_total_from_dom list-return path (priority-order evaluation)."""
+
+    def setUp(self):
+        with _network_listener_lock:
+            _notified_workers_this_cycle.discard("dom-worker")
+
+    def tearDown(self):
+        with _network_listener_lock:
+            _notified_workers_this_cycle.discard("dom-worker")
+
+    def _call(self, candidates):
+        """Call _notify_total_from_dom with a list-return mock driver."""
+        driver = MagicMock()
+        driver.execute_script.return_value = candidates
+        with patch("integration.orchestrator.watchdog") as mock_wd:
+            _notify_total_from_dom(driver, "dom-worker")
+        with _network_listener_lock:
+            _notified_workers_this_cycle.discard("dom-worker")
+        return mock_wd
+
+    def _make_candidate(self, selector, text, present=True, visible=True):
+        return {
+            "selector": selector,
+            "present": present,
+            "visible": visible,
+            "text": text,
+            "text_len": len(text),
+        }
+
+    def test_first_parseable_candidate_notified(self):
+        """Watchdog is notified with the first parseable candidate's value."""
+        candidates = [
+            self._make_candidate("#orderTotal", "$25.00"),
+            self._make_candidate("#headingTotal", "$25.00"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 25.0)
+
+    def test_skips_absent_candidates(self):
+        """Absent elements (present=False) are skipped; next candidate used."""
+        candidates = [
+            self._make_candidate("#orderTotal", "", present=False),
+            self._make_candidate("#headingTotal", "$30.00"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 30.0)
+
+    def test_skips_invisible_candidate_falls_through_to_visible(self):
+        """Invisible parseable candidate is skipped; next visible parseable wins."""
+        candidates = [
+            self._make_candidate("#orderTotal", "$99.99", visible=False),
+            self._make_candidate("#headingTotal", "$25.00"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 25.0)
+
+    def test_all_candidates_invisible_does_not_notify(self):
+        """All-invisible candidates must not notify even if text parses."""
+        candidates = [
+            self._make_candidate("#orderTotal", "$99.99", visible=False),
+            self._make_candidate("#headingTotal", "$25.00", visible=False),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_not_called()
+
+    def test_skips_empty_text_candidates(self):
+        """Present elements with empty/unparseable text are skipped."""
+        candidates = [
+            self._make_candidate("#orderTotal", ""),
+            self._make_candidate("#cws_lbl_orderTotal", "N/A"),
+            self._make_candidate(".order-total", "$49.99"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 49.99)
+
+    def test_priority_order_respected(self):
+        """Lower-index candidate wins even if higher-index has larger value."""
+        candidates = [
+            self._make_candidate("#orderTotal", "$10.00"),
+            self._make_candidate("#headingTotal", "$99.99"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 10.0)
+
+    def test_empty_list_does_not_notify(self):
+        mock_wd = self._call([])
+        mock_wd.notify_total.assert_not_called()
+
+    def test_all_absent_does_not_notify(self):
+        candidates = [
+            self._make_candidate("#orderTotal", "", present=False),
+            self._make_candidate("#headingTotal", "", present=False),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_not_called()
+
+    def test_non_dict_entries_skipped(self):
+        """Non-dict entries in the list are gracefully skipped."""
+        candidates = [None, 42, self._make_candidate("#orderTotal", "$12.50")]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 12.50)
+
+    def test_givex_payment_page_selector_orderTotal(self):
+        """#orderTotal (Givex payment page) is parsed and notified correctly."""
+        candidates = [self._make_candidate("#orderTotal", "$25.00")]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 25.0)
+
+    def test_givex_payment_page_selector_headingTotal(self):
+        """#headingTotal (Givex payment page) is parsed as fallback."""
+        candidates = [
+            self._make_candidate("#orderTotal", "", present=False),
+            self._make_candidate("#headingTotal", "$25.00"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 25.0)
+
+    def test_last_resort_orderTotalLine(self):
+        """#orderTotalLine is used when higher-priority selectors are absent."""
+        candidates = [
+            self._make_candidate("#orderTotal", "", present=False),
+            self._make_candidate("#headingTotal", "", present=False),
+            self._make_candidate("#cws_lbl_orderTotal", "", present=False),
+            self._make_candidate(".order-total", "", present=False),
+            self._make_candidate(".checkout-total", "", present=False),
+            self._make_candidate("[data-total]", "", present=False),
+            self._make_candidate("#orderTotalLine", "Order Total $50.00"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 50.0)
+
+    def test_first_notify_wins_on_list_path(self):
+        """Second call is a no-op when first call already notified for the cycle."""
+        driver = MagicMock()
+        candidates = [self._make_candidate("#orderTotal", "$20.00")]
+        driver.execute_script.return_value = candidates
+        with patch("integration.orchestrator.watchdog") as mock_wd:
+            _notify_total_from_dom(driver, "dom-worker")
+            _notify_total_from_dom(driver, "dom-worker")
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 20.0)
 
 
 # ── Network Listener Callback Coverage ────────────────────────────────────────
