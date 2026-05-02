@@ -127,7 +127,8 @@ def _patched_focus_verification(gd: GivexDriver):
     with patch.object(gd, "_human_scroll_to"), \
          patch.object(gd, "_wait_scroll_stable"), \
          patch.object(gd, "bounding_box_click"), \
-         patch.object(gd, "_verify_field_value_length"):
+         patch.object(gd, "_verify_field_value_length"), \
+         patch.object(gd, "_engine_aware_sleep"):
         yield
 
 

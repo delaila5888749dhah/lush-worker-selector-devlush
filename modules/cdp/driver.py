@@ -643,8 +643,18 @@ def _find_matching_option_index(
             return idx
 
     if (requested_numeric := _numeric_option_key(requested_text)) is not None:
+        is_expiry_month = _is_expiry_month_selector(selector)
+        requested_month_for_conflict = (
+            _month_option_key(requested_text) if is_expiry_month else None
+        )
         for idx, (value, text) in enumerate(option_pairs):
             if requested_numeric in (_numeric_option_key(value), _numeric_option_key(text)):
+                if (
+                    is_expiry_month
+                    and requested_month_for_conflict is not None
+                    and _has_conflicting_month_name(value, text, requested_month_for_conflict)
+                ):
+                    continue
                 return idx
 
     if _is_expiry_month_selector(selector):
@@ -2579,8 +2589,15 @@ class GivexDriver:
                 last_count = count
                 if count >= min_options:
                     return
-            except (WebDriverException, TypeError, ValueError):
-                pass
+            except (WebDriverException, TypeError, ValueError) as exc:
+                # Transient polling failures (element not yet attached, JS race).
+                # Intentionally retried until deadline; surfaced via
+                # SelectorTimeoutError if persistent.
+                _log.debug(
+                    "_wait_for_select_options: transient poll error selector=%s error_type=%s",
+                    _selector_name(selector),
+                    type(exc).__name__,
+                )
             except Exception as exc:  # pylint: disable=broad-except
                 _log.debug(
                     "_wait_for_select_options: poll failed selector=%s error_type=%s",

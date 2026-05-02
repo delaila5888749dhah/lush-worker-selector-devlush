@@ -455,6 +455,23 @@ class TestFlexibleOptionMatching(unittest.TestCase):
         self.assertIn("Available values=['01', '02']", message)
         self.assertIn("texts=['January', 'February']", message)
 
+    def test_month_numeric_value_does_not_override_disagreeing_name_text(self):
+        """Rule 3 numeric must NOT pick option whose text names a different month."""
+        with self.assertRaises(ValueError):
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "04",
+                [{"value": "4", "text": "May"}],
+            )
+
+    def test_month_numeric_value_with_matching_name_still_matches(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "04",
+            [{"value": "4", "text": "April"}],
+        )
+        self.assertEqual(idx, 0)
+
 
 class TestDispatchKey(unittest.TestCase):
     """Audit [F2]: direct coverage for ``modules.cdp.keyboard.dispatch_key``."""
