@@ -1249,12 +1249,12 @@ return selectors.map(function(sel) {
                 text = candidate.get("text") or ""
                 parsed = _parse_money_text(text)
                 if parsed is not None:
-                    sel = candidate.get("selector", "?")
-                    visible = candidate.get("visible", False)
-                    text_len = candidate.get("text_len", 0)
                     _logger.debug(
                         "[trace=%s] DOM total read selector=%s visible=%s text_len=%d",
-                        _get_trace_id(), sel, visible, text_len,
+                        _get_trace_id(),
+                        candidate.get("selector", "?"),
+                        candidate.get("visible", False),
+                        candidate.get("text_len", 0),
                     )
                     _validated_notify_total(worker_id, float(parsed))
                     return

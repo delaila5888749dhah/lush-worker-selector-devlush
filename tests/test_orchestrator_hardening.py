@@ -389,7 +389,7 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
         driver.execute_script.assert_called_once()
         # New implementation passes selectors as the second positional argument.
         call_args = driver.execute_script.call_args
-        passed_selectors = call_args.args[1] if len(call_args.args) > 1 else call_args[0][1]
+        passed_selectors = call_args.args[1]
         # All legacy selectors must still be present.
         self.assertIn("#cws_lbl_orderTotal", passed_selectors)
         self.assertIn(".order-total", passed_selectors)
