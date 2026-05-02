@@ -653,6 +653,10 @@ class TestFillPaymentAndBilling(unittest.TestCase):
             card_name=card_name,
         )
 
+    def test_short_name_with_one_digit_passes_name_shape_check(self):
+        self.assertTrue(drv._looks_like_cardholder_name("Jr3"))
+        self.assertFalse(drv._looks_like_cardholder_name("J12"))
+
     def test_fill_payment_and_billing_fills_all_fields(self):
         selenium = _make_driver()
         element = MagicMock()

@@ -27,6 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
+from typing import NoReturn
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -503,8 +504,7 @@ def _looks_like_cardholder_name(s: str) -> bool:
     digit_chars = sum(1 for c in s if c.isdigit())
     # Names can include a few digits, but half-or-more digits is a strong
     # signal that a card number or other numeric payload polluted the field.
-    digit_threshold = max(1, len(s) // 2)
-    if digit_chars >= digit_threshold:
+    if digit_chars * 2 >= len(s):
         return False
     if not any(c.isalpha() for c in s):
         return False
@@ -567,7 +567,7 @@ def _year_option_key(value: str, current_year: int) -> int | None:
     return None
 
 
-def _raise_option_not_found(selector: str, requested: str, options) -> None:
+def _raise_option_not_found(selector: str, requested: str, options) -> NoReturn:
     option_pairs = [_option_value_text(option) for option in options]
     values = [value for value, _text in option_pairs]
     texts = [text for _value, text in option_pairs]
@@ -2545,9 +2545,16 @@ class GivexDriver:
             if not isinstance(options, list):
                 raise TypeError("option metadata is not a list")
         except (TypeError, ValueError, IndexError) as exc:
+            result_len = len(result) if isinstance(result, (list, tuple)) else None
+            item_types = (
+                [type(item).__name__ for item in result[:2]]
+                if isinstance(result, (list, tuple))
+                else []
+            )
             raise ValueError(
                 f"_cdp_select_option: unexpected option metadata result "
-                f"type={type(result).__name__} for selector {selector!r}"
+                f"type={type(result).__name__} len={result_len} "
+                f"item_types={item_types} selector={selector!r}"
             ) from exc
         target_idx = _find_matching_option_index(selector, value, options)
 

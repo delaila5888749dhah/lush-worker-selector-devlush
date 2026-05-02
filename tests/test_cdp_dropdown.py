@@ -100,6 +100,26 @@ class TestCdpSelectOption(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gd._cdp_select_option("#country", "ZZ")
 
+    def test_dropdown_unexpected_metadata_message_includes_safe_shape_summary(self):
+        """Malformed JS result diagnostics should explain the result shape."""
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        selenium.execute_script.return_value = [-1, -1]
+
+        gd = GivexDriver(selenium, strict=False)
+        with patch("modules.cdp.keyboard.dispatch_key") as mock_dispatch, \
+                patch.object(gd, "bounding_box_click"), \
+                patch("modules.cdp.driver.time.sleep"):
+            with self.assertRaises(ValueError) as ctx:
+                gd._cdp_select_option("#country", "US")
+
+        message = str(ctx.exception)
+        self.assertIn("type=list", message)
+        self.assertIn("len=2", message)
+        self.assertIn("item_types=['int', 'int']", message)
+        self.assertIn("selector='#country'", message)
+        mock_dispatch.assert_not_called()
+
     def test_dropdown_missing_element_raises_selector_timeout(self):
         """Empty find_elements → SelectorTimeoutError."""
         selenium = _make_driver()
