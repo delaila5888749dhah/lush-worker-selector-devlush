@@ -387,6 +387,9 @@ class DOMParseEdgeCaseTests(unittest.TestCase):
         with patch("integration.orchestrator.watchdog"):
             _notify_total_from_dom(driver, "dom-worker")
         driver.execute_script.assert_called_once()
+        script = driver.execute_script.call_args.args[0]
+        self.assertIn('var text = el.innerText || "";', script)
+        self.assertNotIn("textContent", script)
         # New implementation passes selectors as the second positional argument.
         call_args = driver.execute_script.call_args
         passed_selectors = call_args.args[1]
@@ -456,6 +459,24 @@ class DOMListCandidateTests(unittest.TestCase):
         ]
         mock_wd = self._call(candidates)
         mock_wd.notify_total.assert_called_once_with("dom-worker", 30.0)
+
+    def test_skips_invisible_candidate_falls_through_to_visible(self):
+        """Invisible parseable candidate is skipped; next visible parseable wins."""
+        candidates = [
+            self._make_candidate("#orderTotal", "$99.99", visible=False),
+            self._make_candidate("#headingTotal", "$25.00"),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_called_once_with("dom-worker", 25.0)
+
+    def test_all_candidates_invisible_does_not_notify(self):
+        """All-invisible candidates must not notify even if text parses."""
+        candidates = [
+            self._make_candidate("#orderTotal", "$99.99", visible=False),
+            self._make_candidate("#headingTotal", "$25.00", visible=False),
+        ]
+        mock_wd = self._call(candidates)
+        mock_wd.notify_total.assert_not_called()
 
     def test_skips_empty_text_candidates(self):
         """Present elements with empty/unparseable text are skipped."""
