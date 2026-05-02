@@ -1244,9 +1244,7 @@ return selectors.map(function(sel) {
             for candidate in result:
                 if not isinstance(candidate, dict):
                     continue
-                if not candidate.get("present"):
-                    continue
-                if not candidate.get("visible"):
+                if not candidate.get("present") or not candidate.get("visible"):
                     continue
                 text = candidate.get("text") or ""
                 parsed = _parse_money_text(text)
