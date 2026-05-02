@@ -391,6 +391,26 @@ class TestFlexibleOptionMatching(unittest.TestCase):
                 [{"value": "day_04_month_12", "text": "Month"}],
             )
 
+    def test_month_numeric_token_rejects_out_of_range_tokens(self):
+        self.assertIsNone(drv._month_option_key("month_00"))
+        self.assertIsNone(drv._month_option_key("month_13"))
+
+    def test_month_numeric_token_handles_repeated_delimiters(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "04",
+            [{"value": "month__04", "text": "April"}],
+        )
+        self.assertEqual(idx, 0)
+
+    def test_month_name_takes_precedence_over_conflicting_numeric_token(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "04",
+            [{"value": "", "text": "April 05"}],
+        )
+        self.assertEqual(idx, 0)
+
     def test_year_full_matches_two_digit_value(self):
         idx = drv._find_matching_option_index(
             drv.SEL_CARD_EXPIRY_YEAR,

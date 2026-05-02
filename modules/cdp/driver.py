@@ -551,7 +551,7 @@ def _month_token_option_key(value: str) -> int | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _month_name_conflicts_with_request(value: str, text: str, requested_month: int) -> bool:
+def _has_conflicting_month_name(value: str, text: str, requested_month: int) -> bool:
     return any(
         (named := _month_name_option_key(part)) is not None and named != requested_month
         for part in (value, text)
@@ -634,7 +634,7 @@ def _find_matching_option_index(
     if _is_expiry_month_selector(selector):
         if (requested_month := _month_option_key(requested_text)) is not None:
             for idx, (value, text) in enumerate(option_pairs):
-                if _month_name_conflicts_with_request(value, text, requested_month):
+                if _has_conflicting_month_name(value, text, requested_month):
                     continue
                 if requested_month in (_month_option_key(value), _month_option_key(text)):
                     return idx
