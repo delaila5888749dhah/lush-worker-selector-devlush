@@ -76,7 +76,9 @@ class GuestEmailRoutesThroughCDP(unittest.TestCase):
         gd = GivexDriver(selenium, strict=False)
         with patch("modules.cdp.driver._type_value") as spy, \
              patch.object(gd, "_wait_for_element", return_value=True), \
+             patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="url"), \
              patch.object(gd, "_wait_for_url"), \
+             patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
              patch("time.sleep"):
@@ -151,7 +153,9 @@ class AllSection5FieldsAvoidSendKeys(unittest.TestCase):
         with patch("modules.cdp.driver._type_value") as spy, \
              patch.object(gd, "_cdp_select_option"), \
              patch.object(gd, "_wait_for_element", return_value=True), \
+             patch.object(gd, "_wait_for_checkout_or_guest_inline", return_value="url"), \
              patch.object(gd, "_wait_for_url"), \
+             patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
              patch.object(gd, "_sm"), \

@@ -1364,6 +1364,26 @@ class Round4DetectionTests(unittest.TestCase):
         self.assertIn(r"cws_lbl_\d{6}", src)
         self.assertIn("radio.type==='radio'", src)
 
+    def test_detect_js_has_no_adjacent_line_comment_bug(self):
+        """Regression: JS line comments in adjacent strings can swallow following code."""
+        import inspect
+        src = inspect.getsource(GivexDriver._select_card_design_if_required)
+        self.assertNotIn("// null skips polling", src)
+        self.assertIn("if(!cont)return null", src)
+
+    def test_detect_error_log_sanitizes_reason(self):
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = RuntimeError("bad <script> value=secret@example.com")
+        gd = GivexDriver(selenium, strict=False)
+        with self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._select_card_design_if_required()
+        combined = "\n".join(logs.output)
+        self.assertIn("card_design detect_error reason_type=RuntimeError", combined)
+        self.assertIn("reason_len=", combined)
+        self.assertIn("skipping", combined)
+        self.assertNotIn("secret@example.com", combined)
+        self.assertNotIn("<script>", combined)
+
 
 class Round4VerificationTests(unittest.TestCase):
     """Fix 3 — verification signals: clicked_radio_checked, checked_count, preview."""
@@ -1590,6 +1610,54 @@ class Round4AtcHittabilityTests(unittest.TestCase):
         import inspect
         src = inspect.getsource(GivexDriver._verify_atc_hittable)
         self.assertIn("#cws_btn_gcBuyAdd", src)
+        self.assertIn("elementFromPoint", src)
+        self.assertIn("scrollIntoView", src)
+
+
+class Round4BeginCheckoutHittabilityTests(unittest.TestCase):
+    """Round 4 hotfix — Begin Checkout viewport/hit-test before click."""
+
+    def _make_gd(self, scroll_ret=None, hittest_ret=None):
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = [scroll_ret, hittest_ret]
+        return GivexDriver(selenium, strict=False)
+
+    def test_begin_checkout_hittest_unrelated_element_raises(self):
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": True, "hittest_pass": False, "w": 100, "h": 40},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            with self.assertRaisesRegex(SessionFlaggedError, "Begin Checkout not hittable"):
+                gd._verify_begin_checkout_hittable()
+        mock_shot.assert_called_once_with("begin_checkout_not_hittable")
+
+    def test_begin_checkout_hittest_passes(self):
+        gd = self._make_gd(
+            scroll_ret=None,
+            hittest_ret={"in_viewport": True, "hittest_pass": True, "w": 100, "h": 40},
+        )
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO"):
+            gd._verify_begin_checkout_hittable()
+        mock_shot.assert_not_called()
+
+    def test_begin_checkout_hittest_inconclusive_proceeds_without_screenshot(self):
+        gd = self._make_gd(scroll_ret=None, hittest_ret=None)
+        with patch.object(gd, "_capture_failure_screenshot") as mock_shot, \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
+            gd._verify_begin_checkout_hittable()
+        self.assertIn("Begin Checkout hittability check inconclusive", "\n".join(logs.output))
+        mock_shot.assert_not_called()
+
+    def test_verify_begin_checkout_js_contains_expected_selector(self):
+        import inspect
+        src = inspect.getsource(GivexDriver._verify_begin_checkout_hittable)
+        self.assertIn("#cws_btn_cartCheckout", src)
         self.assertIn("elementFromPoint", src)
         self.assertIn("scrollIntoView", src)
 
