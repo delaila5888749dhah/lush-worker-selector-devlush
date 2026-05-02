@@ -383,6 +383,14 @@ class TestFlexibleOptionMatching(unittest.TestCase):
                 [{"value": "", "text": "May 04"}],
             )
 
+    def test_month_numeric_token_rejects_ambiguous_multiple_numbers(self):
+        with self.assertRaises(ValueError):
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "04",
+                [{"value": "day_04_month_12", "text": "Month"}],
+            )
+
     def test_year_full_matches_two_digit_value(self):
         idx = drv._find_matching_option_index(
             drv.SEL_CARD_EXPIRY_YEAR,
