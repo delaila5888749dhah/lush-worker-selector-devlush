@@ -22,7 +22,6 @@ import decimal
 import enum
 import importlib
 import ipaddress
-import itertools
 import re
 import urllib.parse
 import urllib.request
@@ -471,30 +470,17 @@ SEL_ORDER_TOTAL_DISPLAY = (
 )
 # Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
-# Card networks commonly allow 2-26 chars, but site forms vary and may accept
-# longer legal names; 60 keeps that tolerance while rejecting pasted payloads.
+# Reject pasted card/address payloads but allow long legal names.
 _MAX_CARDHOLDER_NAME_LENGTH = 60
-# Expiry dropdowns should never need historical years or unusually far-future
-# values; this keeps two-digit year expansion bounded and unambiguous.
+# Bound two-digit year expansion to current_year .. current_year + window.
 _MIN_EXPIRY_YEAR = 2000
 _EXPIRY_YEAR_WINDOW_YEARS = 20
-# Expiry dropdown diagnostics may list raw option values/texts; cap the list so
-# logs stay concise while still covering all expected month/year options.
+# Cap diagnostic option list so logs stay concise.
 _OPTION_DIAGNOSTIC_LIMIT = 24
-
 _MONTH_NAMES = (
-    ("january", "jan"),
-    ("february", "feb"),
-    ("march", "mar"),
-    ("april", "apr"),
-    ("may", "may"),
-    ("june", "jun"),
-    ("july", "jul"),
-    ("august", "aug"),
-    ("september", "sep"),
-    ("october", "oct"),
-    ("november", "nov"),
-    ("december", "dec"),
+    ("january", "jan"), ("february", "feb"), ("march", "mar"), ("april", "apr"),
+    ("may", "may"), ("june", "jun"), ("july", "jul"), ("august", "aug"),
+    ("september", "sep"), ("october", "oct"), ("november", "nov"), ("december", "dec"),
 )
 
 
@@ -505,12 +491,7 @@ def _looks_like_cardholder_name(s: str) -> bool:
     digit_chars = sum(1 for c in s if c.isdigit())
     # Names can include a few digits, but half-or-more digits is a strong
     # signal that a card number or other numeric payload polluted the field.
-    digits_are_half_or_more = digit_chars * 2 >= len(s)
-    if digits_are_half_or_more:
-        return False
-    if not any(c.isalpha() for c in s):
-        return False
-    return True
+    return digit_chars * 2 < len(s) and any(c.isalpha() for c in s)
 
 
 def _is_expiry_month_selector(selector: str) -> bool:
@@ -524,21 +505,17 @@ def _is_expiry_year_selector(selector: str) -> bool:
 def _option_value_text(option) -> tuple[str, str]:
     if not isinstance(option, dict):
         return "", ""
-    value = option.get("value", "")
-    text = option.get("text", "")
+    value, text = option.get("value", ""), option.get("text", "")
     return ("" if value is None else str(value), "" if text is None else str(text))
 
 
 def _numeric_option_key(value: str) -> int | None:
     text = (value or "").strip()
-    if not re.fullmatch(r"\d+", text):
-        return None
-    return int(text)
+    return int(text) if re.fullmatch(r"\d+", text) else None
 
 
 def _month_option_key(value: str) -> int | None:
-    numeric = _numeric_option_key(value)
-    if numeric is not None and 1 <= numeric <= 12:
+    if (numeric := _numeric_option_key(value)) is not None and 1 <= numeric <= 12:
         return numeric
     text = (value or "").strip().lower()
     for token in re.findall(r"[a-z]+", text):
@@ -563,8 +540,7 @@ def _year_option_key(value: str, current_year: int) -> int | None:
     if len(text) == 2:
         return _expand_two_digit_year(int(text), current_year)
     if len(text) == 4:
-        year = int(text)
-        if _MIN_EXPIRY_YEAR <= year <= current_year + _EXPIRY_YEAR_WINDOW_YEARS:
+        if _MIN_EXPIRY_YEAR <= (year := int(text)) <= current_year + _EXPIRY_YEAR_WINDOW_YEARS:
             return year
     return None
 
@@ -597,35 +573,30 @@ def _find_matching_option_index(
     requested_text = "" if requested is None else str(requested)
     option_pairs = [_option_value_text(option) for option in options]
 
-    for idx, (value, _text) in enumerate(option_pairs):
-        if value == requested_text:
-            return idx
-    for idx, (_value, text) in enumerate(option_pairs):
-        if text.strip() == requested_text:
+    for idx, (value, text) in enumerate(option_pairs):
+        if value == requested_text or text.strip() == requested_text:
             return idx
 
-    requested_numeric = _numeric_option_key(requested_text)
-    if requested_numeric is not None:
+    if (requested_numeric := _numeric_option_key(requested_text)) is not None:
         for idx, (value, text) in enumerate(option_pairs):
             if requested_numeric in (_numeric_option_key(value), _numeric_option_key(text)):
                 return idx
 
     if _is_expiry_month_selector(selector):
-        requested_month = _month_option_key(requested_text)
-        if requested_month is not None:
+        if (requested_month := _month_option_key(requested_text)) is not None:
             for idx, (value, text) in enumerate(option_pairs):
                 if requested_month in (_month_option_key(value), _month_option_key(text)):
                     return idx
 
     if _is_expiry_year_selector(selector):
         year = current_year if current_year is not None else datetime.datetime.now().year
-        requested_year = _year_option_key(requested_text, year)
-        if requested_year is not None:
+        if (requested_year := _year_option_key(requested_text, year)) is not None:
             for idx, (value, text) in enumerate(option_pairs):
                 if requested_year in (_year_option_key(value, year), _year_option_key(text, year)):
                     return idx
 
     _raise_option_not_found(selector, requested_text, options)
+    raise AssertionError("unreachable: _raise_option_not_found should always raise")
 
 
 def _parse_money_text(raw):
@@ -2501,30 +2472,7 @@ class GivexDriver:
             self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
-        """Select the option matching *value* in a ``<select>`` element.
-
-        Implementation strategy (audit finding [G2]):
-          1. ``bounding_box_click`` opens/focuses the dropdown — produces an
-             ``isTrusted=True`` mouse event indistinguishable from a user.
-          2. A read-only ``execute_script`` query locates the target option
-             index relative to the currently-selected one.
-          3. ``ArrowDown`` / ``ArrowUp`` named-key events advance the
-             highlight via CDP (``Input.dispatchKeyEvent`` with proper DOM
-             ``code`` / virtual-key code → ``isTrusted=True``).
-          4. ``Enter`` confirms the selection.
-
-        This deliberately avoids ``Select.select_by_value`` (Selenium
-        helper) because its ``change`` event fires with ``isTrusted=False``
-        — a fingerprint that anti-fraud heuristics flag.
-
-        Args:
-            selector: CSS selector for the ``<select>`` element.
-            value: The option ``value`` attribute to select.
-
-        Raises:
-            SelectorTimeoutError: if no matching element is found.
-            ValueError: if no option with *value* exists in the select.
-        """
+        """CDP-keynav to exact value/text or normalized numeric/month/year option."""
         elements = self.find_elements(selector)
         if not elements:
             raise SelectorTimeoutError(selector, 0)
@@ -2548,10 +2496,8 @@ class GivexDriver:
                 raise TypeError("option metadata is not a list")
         except (TypeError, ValueError, IndexError) as exc:
             result_len = len(result) if isinstance(result, (list, tuple)) else None
-            item_types = []
-            if isinstance(result, (list, tuple)):
-                for item in itertools.islice(result, 2):
-                    item_types.append(type(item).__name__)
+            result_items = result[:2] if isinstance(result, (list, tuple)) else ()
+            item_types = [type(item).__name__ for item in result_items]
             raise ValueError(
                 f"_cdp_select_option: unexpected option metadata result "
                 f"type={type(result).__name__} len={result_len} "
