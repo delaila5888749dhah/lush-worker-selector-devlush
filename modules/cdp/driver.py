@@ -22,6 +22,7 @@ import decimal
 import enum
 import importlib
 import ipaddress
+import itertools
 import re
 import urllib.parse
 import urllib.request
@@ -2549,9 +2550,7 @@ class GivexDriver:
             result_len = len(result) if isinstance(result, (list, tuple)) else None
             item_types = []
             if isinstance(result, (list, tuple)):
-                for idx, item in enumerate(result):
-                    if idx >= 2:
-                        break
+                for item in itertools.islice(result, 2):
                     item_types.append(type(item).__name__)
             raise ValueError(
                 f"_cdp_select_option: unexpected option metadata result "
