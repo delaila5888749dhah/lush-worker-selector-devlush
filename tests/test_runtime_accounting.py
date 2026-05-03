@@ -22,7 +22,7 @@ See issue: P0 success_count contamination on non-complete cycles.
 import unittest
 from unittest.mock import MagicMock, patch
 
-from integration.cycle_outcome import CycleDidNotCompleteError
+from integration.cycle_outcome import CycleDidNotCompleteError, normalize_action
 
 
 def _make_bb_client():
@@ -75,6 +75,9 @@ class TestTaskFnNormalization(unittest.TestCase):
         result = self._run_with_action("complete")
         self.assertIsNone(result)
 
+    def test_normalize_accepts_complete_action(self):
+        self.assertEqual(normalize_action("complete"), "complete")
+
     def test_abort_cycle_action_raises(self):
         with self.assertRaises(CycleDidNotCompleteError) as cm:
             self._run_with_action("abort_cycle")
@@ -97,6 +100,14 @@ class TestTaskFnNormalization(unittest.TestCase):
             self._run_with_action(("retry_new_card", sentinel_card))
         # Normalised to leading string token.
         self.assertEqual(cm.exception.action, "retry_new_card")
+
+    def test_tuple_action_with_non_tuple_token_fails_loud(self):
+        with self.assertRaises(ValueError) as cm:
+            normalize_action(("retry", object()))
+        self.assertEqual(
+            str(cm.exception),
+            "run_cycle action token does not support tuple form",
+        )
 
     def test_unknown_action_fails_loud(self):
         with self.assertRaises(ValueError) as cm:

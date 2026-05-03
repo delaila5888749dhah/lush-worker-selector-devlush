@@ -46,11 +46,15 @@ def normalize_action(action) -> str:
     sensitive context and would turn a contract bug into loggable data.
     """
     if isinstance(action, tuple):
-        if len(action) == 0 or not isinstance(action[0], str):
-            raise ValueError("malformed run_cycle action tuple")
+        if len(action) == 0:
+            raise ValueError("empty run_cycle action tuple")
+        if not isinstance(action[0], str):
+            raise ValueError("run_cycle action tuple must start with string token")
         token = action[0]
-        if token not in KNOWN_RUN_CYCLE_TUPLE_ACTIONS:
+        if token not in KNOWN_RUN_CYCLE_ACTIONS:
             raise ValueError("unknown run_cycle tuple action token")
+        if token not in KNOWN_RUN_CYCLE_TUPLE_ACTIONS:
+            raise ValueError("run_cycle action token does not support tuple form")
     elif isinstance(action, str):
         token = action
     else:
