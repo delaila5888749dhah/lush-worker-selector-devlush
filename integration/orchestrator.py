@@ -1696,13 +1696,13 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                         _task_id, exc_info=True,
                     )
             total = None
-    except SessionFlaggedError as exc:
+    except SessionFlaggedError as exc:  # PageStateError subclasses SessionFlaggedError.
         _task_id_log = getattr(task, "task_id", None)
         if (
             isinstance(exc, PageStateError)
             and exc.detected == "givex_fancybox_submission_error_close_failed"
         ):
-            _logger.error("[trace=%s] worker=%s GIVEX_POPUP close failure", _get_trace_id(), worker_id)
+            _logger.error("[trace=%s] worker=%s GIVEX_POPUP close failure; aborting", _get_trace_id(), worker_id)
             watchdog.reset_session(worker_id)
             raise
         try:
