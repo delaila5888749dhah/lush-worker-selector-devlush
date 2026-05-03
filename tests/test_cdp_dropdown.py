@@ -218,16 +218,11 @@ class TestCdpSelectOption(unittest.TestCase):
 
         self.assertIn("last_count=1", str(ctx.exception))
 
-    def test_wait_for_select_options_baseline_blocks_stale_options(self):
-        """With a baseline, returning options must differ from baseline before success."""
+    def test_wait_for_select_options_waits_until_target_option_is_present(self):
         selenium = _make_driver()
-        # Sequence: count=5 (stale, matches baseline), sig=baseline,
-        #           count=5 (still stale), sig=baseline,
-        #           count=2 (refreshed), sig=new
         selenium.execute_script.side_effect = [
-            5, "BASE_SIG",
-            5, "BASE_SIG",
-            2, "NEW_SIG",
+            [{"value": "", "text": "State"}, {"value": "CA", "text": "California"}],
+            [{"value": "", "text": "State"}, {"value": "OR", "text": "Oregon"}],
         ]
         gd = GivexDriver(selenium, strict=False)
 
@@ -236,18 +231,35 @@ class TestCdpSelectOption(unittest.TestCase):
                 "#province",
                 min_options=2,
                 timeout=1.0,
-                baseline_signature="BASE_SIG",
+                target_value="OR",
             )
 
-        # Three count probes + three signature probes before success.
-        self.assertEqual(selenium.execute_script.call_count, 6)
+        self.assertEqual(selenium.execute_script.call_count, 2)
 
-    def test_wait_for_select_options_baseline_timeout_includes_signature_state(self):
+    def test_wait_for_select_options_same_country_target_present_returns_immediately(self):
         selenium = _make_driver()
-        # Count is satisfied but signature never changes from baseline.
-        selenium.execute_script.side_effect = lambda *a, **k: (
-            5 if "options.length" in a[0] else "BASE_SIG"
-        )
+        selenium.execute_script.return_value = [
+            {"value": "", "text": "State"},
+            {"value": "OR", "text": "Oregon"},
+        ]
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("modules.cdp.driver.time.sleep"):
+            gd._wait_for_select_options(
+                "#province",
+                min_options=2,
+                timeout=1.0,
+                target_value="OR",
+            )
+
+        self.assertEqual(selenium.execute_script.call_count, 1)
+
+    def test_wait_for_select_options_target_timeout_reason(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = [
+            {"value": "", "text": "State"},
+            {"value": "CA", "text": "California"},
+        ]
         gd = GivexDriver(selenium, strict=False)
 
         with patch("modules.cdp.driver.time.sleep"):
@@ -256,10 +268,10 @@ class TestCdpSelectOption(unittest.TestCase):
                     "#province",
                     min_options=2,
                     timeout=0.01,
-                    baseline_signature="BASE_SIG",
+                    target_value="OR",
                 )
 
-        self.assertIn("signature_changed=False", str(ctx.exception))
+        self.assertIn("target_present=False", str(ctx.exception))
 
     def test_dropdown_aborts_when_arrow_dispatch_fails(self):
         """Audit [F1]: a failed ``dispatch_key`` MUST stop the navigation
