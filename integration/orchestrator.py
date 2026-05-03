@@ -1696,17 +1696,18 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                         _task_id, exc_info=True,
                     )
             total = None
-    except PageStateError as exc:
-        if exc.detected == "givex_fancybox_submission_error_close_failed":
+    except SessionFlaggedError as exc:
+        _task_id_log = getattr(task, "task_id", None)
+        if (
+            isinstance(exc, PageStateError)
+            and exc.detected == "givex_fancybox_submission_error_close_failed"
+        ):
             _logger.error(
                 "[trace=%s] worker=%s GIVEX_POPUP close failure aborted payment step",
                 _get_trace_id(), worker_id,
             )
             watchdog.reset_session(worker_id)
             raise
-        raise
-    except SessionFlaggedError as exc:
-        _task_id_log = getattr(task, "task_id", None)
         try:
             _alerting.send_alert(
                 f"Watchdog timeout worker={worker_id} task_id={_task_id_log}"
@@ -1774,6 +1775,18 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             _logger.warning(
                 "[trace=%s] FSM fallback InvalidTransitionError for worker=%s: %s",
                 _get_trace_id(), worker_id, _fsm_exc,
+            )
+        except PageStateError as _page_exc:
+            if _page_exc.detected == "givex_fancybox_submission_error_close_failed":
+                _logger.error(
+                    "[trace=%s] worker=%s GIVEX_POPUP fallback close failure aborted",
+                    _get_trace_id(), worker_id,
+                )
+                watchdog.reset_session(worker_id)
+                raise
+            _logger.warning(
+                "[trace=%s] FSM fallback PageStateError for worker=%s reason=%s",
+                _get_trace_id(), worker_id, _page_exc.detected,
             )
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
