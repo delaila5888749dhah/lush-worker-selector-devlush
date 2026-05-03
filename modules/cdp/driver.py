@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -2562,7 +2562,7 @@ class GivexDriver:
         selector: str,
         min_options: int = 2,
         timeout: float = 8.0,
-        target_value: str | None = None,
+        target_value: Optional[str] = None,
     ) -> None:
         """Poll until a dynamic ``select`` has enough options, and target if given."""
         deadline = time.monotonic() + timeout
