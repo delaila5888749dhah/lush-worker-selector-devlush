@@ -221,7 +221,7 @@ class TestCdpSelectOption(unittest.TestCase):
 
         self.assertIn("last_count=1", str(ctx.exception))
 
-    def test_wait_for_select_options_waits_until_target_option_is_present(self):
+    def test_wait_for_select_options_with_target_waits_until_present(self):
         selenium = _make_driver()
         selenium.execute_script.side_effect = [
             [{"value": "", "text": "State"}, {"value": "CA", "text": "California"}],

@@ -2604,13 +2604,13 @@ class GivexDriver:
                 )
             time.sleep(0.25)
 
+        target_found = "N/A" if target_value is None else "False"
         raise SelectorTimeoutError(
             selector,
             int(timeout),
             reason=(
                 f"select options did not satisfy min_options/target; "
-                f"last_count={last_count}"
-                f"{'; target_found=False' if target_value is not None else ''}"
+                f"last_count={last_count}; target_found={target_found}"
             ),
         )
 
