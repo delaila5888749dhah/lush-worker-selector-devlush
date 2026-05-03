@@ -1400,6 +1400,144 @@ class TestDetectPageState(unittest.TestCase):
         self.assertEqual(result, "ui_lock")
 
 
+class TestPostSubmitOutcomeResolver(unittest.TestCase):
+    class FakeClock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    @contextmanager
+    def _fake_time(self):
+        clock = self.FakeClock()
+        with patch("modules.cdp.driver.time.monotonic", clock.monotonic), \
+             patch("modules.cdp.driver.time.sleep", clock.sleep):
+            yield clock
+
+    def test_outcome_success_when_url_transitions_to_confirmation(self):
+        selenium = _make_driver("https://wwws-usa2.givex.com/confirmation/123")
+        self.assertEqual(GivexDriver(selenium).wait_for_post_submit_outcome(), "success")
+
+    def test_outcome_success_when_body_shows_thank_you(self):
+        selenium = _make_driver("https://wwws-usa2.givex.com/payment.html")
+        selenium.find_element.return_value.text = "Thank you for your order"
+        self.assertEqual(GivexDriver(selenium).wait_for_post_submit_outcome(), "success")
+
+    def test_outcome_declined_when_canonical_decline_text(self):
+        selenium = _make_driver()
+        selenium.find_element.return_value.text = "Your transaction failed"
+        self.assertEqual(GivexDriver(selenium).wait_for_post_submit_outcome(), "declined")
+
+    def test_outcome_declined_when_error_vv_in_url(self):
+        selenium = _make_driver("https://wwws-usa2.givex.com/payment.html?error=vv")
+        self.assertEqual(GivexDriver(selenium).wait_for_post_submit_outcome(), "declined")
+
+    def test_outcome_vbv_3ds_when_iframe_detected(self):
+        selenium = _make_driver()
+        first_vbv = SEL_VBV_IFRAME.split(",")[0].strip()
+        selenium.find_elements.side_effect = (
+            lambda _by, sel: [MagicMock()] if sel.strip() == first_vbv else []
+        )
+        self.assertEqual(GivexDriver(selenium).wait_for_post_submit_outcome(), "vbv_3ds")
+
+    def test_outcome_ui_lock_on_timeout_with_no_state(self):
+        with self._fake_time() as clock:
+            gd = GivexDriver(_make_driver())
+            result = gd.wait_for_post_submit_outcome(timeout=1.0)
+        self.assertEqual(result, "ui_lock")
+        self.assertGreaterEqual(clock.now, 1.0)
+
+    def test_popup_then_success_url_during_close_window(self):
+        gd = GivexDriver(_make_driver())
+        with self._fake_time() as clock, \
+             patch.object(gd, "_safe_detect_non_popup_state", side_effect=[None, "success"]), \
+             patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup") as close:
+            close.side_effect = lambda budget: (clock.sleep(0.5) or True)
+            result = gd.wait_for_post_submit_outcome(timeout=2.0)
+        self.assertEqual(result, "success")
+        self.assertLessEqual(clock.now, 2.0)
+
+    def test_popup_then_declined_body_during_settle(self):
+        gd = GivexDriver(_make_driver())
+        with self._fake_time(), \
+             patch.object(gd, "_safe_detect_non_popup_state", side_effect=[None, "declined"]), \
+             patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup", return_value=True):
+            result = gd.wait_for_post_submit_outcome(timeout=2.0)
+        self.assertEqual(result, "declined")
+
+    def test_popup_then_no_state_returns_submission_error_popup(self):
+        gd = GivexDriver(_make_driver())
+        with self._fake_time(), \
+             patch.object(gd, "_safe_detect_non_popup_state", return_value=None), \
+             patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup", return_value=True):
+            result = gd.wait_for_post_submit_outcome(timeout=2.0)
+        self.assertEqual(result, "submission_error_popup")
+
+    def test_popup_close_failure_raises_page_state_error(self):
+        gd = GivexDriver(_make_driver())
+        with self._fake_time(), \
+             patch.object(gd, "_safe_detect_non_popup_state", return_value=None), \
+             patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup", return_value=False):
+            with self.assertRaises(PageStateError) as ctx:
+                gd.wait_for_post_submit_outcome(timeout=2.0)
+        self.assertEqual(ctx.exception.detected, "givex_fancybox_submission_error_close_failed")
+
+    def test_shared_deadline_respected_with_popup_branch(self):
+        gd = GivexDriver(_make_driver())
+        with self._fake_time() as clock, \
+             patch.object(gd, "_safe_detect_non_popup_state", return_value=None), \
+             patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup") as close:
+            close.side_effect = lambda budget: (clock.sleep(1.0) or True)
+            result = gd.wait_for_post_submit_outcome(timeout=2.0)
+        self.assertEqual(result, "submission_error_popup")
+        self.assertLessEqual(clock.now, 2.0)
+
+    def test_safe_current_url_returns_empty_on_webdriver_error(self):
+        selenium = _make_driver()
+        type(selenium).current_url = PropertyMock(side_effect=RuntimeError("boom"))
+        try:
+            self.assertEqual(GivexDriver(selenium)._safe_current_url(), "")
+        finally:
+            del type(selenium).current_url
+
+    def test_safe_body_text_returns_empty_on_dom_error(self):
+        selenium = _make_driver()
+        selenium.find_element.side_effect = RuntimeError("dom")
+        self.assertEqual(GivexDriver(selenium)._safe_body_text_lower(), "")
+
+    def test_safe_detect_non_popup_state_returns_none_on_transient_error(self):
+        selenium = _make_driver()
+        selenium.find_elements.side_effect = RuntimeError("transient")
+        self.assertIsNone(GivexDriver(selenium)._safe_detect_non_popup_state())
+
+    def test_outcome_resolver_survives_transient_url_errors(self):
+        selenium = _make_driver()
+        urls = [RuntimeError("transition"), "https://wwws-usa2.givex.com/confirmation/1"]
+
+        def current_url():
+            value = urls.pop(0)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        type(selenium).current_url = PropertyMock(side_effect=current_url)
+        try:
+            with self._fake_time():
+                result = GivexDriver(selenium).wait_for_post_submit_outcome(timeout=2.0)
+        finally:
+            del type(selenium).current_url
+        self.assertEqual(result, "success")
+
+
 class TestNavigateToEgift(unittest.TestCase):
     """navigate_to_egift waits for URL_EGIFT after clicking buy button."""
 

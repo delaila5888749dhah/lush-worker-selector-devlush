@@ -25,6 +25,7 @@ from modules.cdp.main import (
     register_driver,
     unregister_driver,
     detect_page_state,
+    wait_for_post_submit_outcome,
     fill_card,
     fill_billing,
     fill_payment_and_billing,
@@ -236,6 +237,12 @@ class DetectPageStateTests(unittest.TestCase):
     def test_returns_declined_state(self):
         self.driver.detect_page_state.return_value = "declined"
         self.assertEqual(detect_page_state("w1"), "declined")
+
+    def test_wait_for_post_submit_outcome_delegates_to_driver(self):
+        self.driver.wait_for_post_submit_outcome.return_value = "submission_error_popup"
+        result = wait_for_post_submit_outcome("w1", timeout=3.5)
+        self.assertEqual(result, "submission_error_popup")
+        self.driver.wait_for_post_submit_outcome.assert_called_once_with(timeout=3.5)
 
     def test_propagates_selector_timeout_error(self):
         self.driver.detect_page_state.side_effect = SelectorTimeoutError(

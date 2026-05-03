@@ -728,6 +728,17 @@ SEL_CONFIRMATION_EL = ".order-confirmation, .confirmation-message"
 SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
+_GIVEX_FANCYBOX_CLOSE_VERIFY_S = 0.8
+_GIVEX_FANCYBOX_SELECTORS = (
+    ".fancybox-wrap.fancybox-opened",
+    ".fancybox-wrap.fancybox-type-html",
+)
+_GIVEX_FANCYBOX_CLOSE_SELECTORS = (
+    ".fancybox-wrap.fancybox-opened .fancybox-item.fancybox-close",
+    ".fancybox-opened .fancybox-close",
+    "a.fancybox-close",
+    ".fancybox-close",
+)
 # VBV/3DS cancel button selectors in priority order (Phase 4 audit [D6]).
 # Evaluated one-by-one via :meth:`GivexDriver._find_vbv_cancel_button`; first
 # match wins so higher-priority selectors (explicit Cancel / Return-to-Merchant)
@@ -4221,6 +4232,133 @@ class GivexDriver:
         self.clear_card_fields_cdp()
 
     # ── Post-submit state detection (Step 5) ─────────────────────────────────
+
+    def _safe_current_url(self) -> str:
+        try:
+            return self._driver.current_url or ""
+        except Exception:
+            return ""
+
+    def _safe_body_text_lower(self) -> str:
+        try:
+            return self._driver.find_element("tag name", "body").text.lower()
+        except Exception:
+            return ""
+
+    def _safe_detect_non_popup_state(self) -> str | None:
+        """Snapshot classifier used only by the post-submit outcome resolver."""
+        try:
+            url = self._safe_current_url()
+            if any(frag in url for frag in URL_CONFIRM_FRAGMENTS):
+                return "success"
+            on_givex = URL_CONFIRM_HOST in url.lower()
+            if on_givex and self.find_elements(SEL_CONFIRMATION_EL):
+                return "success"
+            text = self._safe_body_text_lower()
+            if on_givex and "thank you for your order" in text:
+                return "success"
+            if self.find_elements(SEL_VBV_IFRAME):
+                return "vbv_3ds"
+            if "error=vv" in url.lower():
+                return "declined"
+            if self.find_elements(SEL_DECLINED_MSG):
+                return "declined"
+            if "declined" in text or "transaction failed" in text:
+                return "declined"
+        except Exception:
+            return None
+        return None
+
+    def _detect_givex_submission_error_popup(self) -> bool:
+        try:
+            elements = []
+            for selector in _GIVEX_FANCYBOX_SELECTORS:
+                elements.extend(self._driver.find_elements("css selector", selector))
+        except Exception:
+            return False
+        for element in elements:
+            try:
+                if hasattr(element, "is_displayed") and not element.is_displayed():
+                    continue
+                text = (getattr(element, "text", "") or "").lower()
+            except Exception:
+                continue
+            if (
+                "something went wrong" in text
+                and "submission" in text
+                and "try again" in text
+            ):
+                return True
+        return False
+
+    def _popup_gone_within(self, budget: float) -> bool:
+        deadline = time.monotonic() + max(0.0, budget)
+        while time.monotonic() < deadline:
+            if not self._detect_givex_submission_error_popup():
+                return True
+            time.sleep(0.1)
+        return not self._detect_givex_submission_error_popup()
+
+    def _press_escape_for_popup(self) -> None:
+        try:
+            self._driver.execute_cdp_cmd(
+                "Input.dispatchKeyEvent",
+                {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
+            )
+            self._driver.execute_cdp_cmd(
+                "Input.dispatchKeyEvent",
+                {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
+            )
+            return
+        except Exception:
+            pass
+        try:
+            self._driver.switch_to.active_element.send_keys("\ue00c")
+        except Exception:
+            return
+
+    def _close_givex_submission_error_popup(self, budget: float = 2.0) -> bool:
+        deadline = time.monotonic() + max(0.0, budget)
+        for selector in _GIVEX_FANCYBOX_CLOSE_SELECTORS:
+            if time.monotonic() >= deadline:
+                return False
+            try:
+                self.bounding_box_click(selector)
+                _log.info("GIVEX_FANCYBOX_CLOSE click attempted")
+            except Exception:
+                continue
+            if self._popup_gone_within(min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, deadline - time.monotonic())):
+                return True
+        if time.monotonic() < deadline:
+            self._press_escape_for_popup()
+            _log.info("GIVEX_FANCYBOX_CLOSE escape attempted")
+            return self._popup_gone_within(
+                min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, deadline - time.monotonic())
+            )
+        return False
+
+    def wait_for_post_submit_outcome(self, timeout: float = 15.0) -> str:
+        """Resolve post-submit outcome via bounded race within a shared deadline."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self._safe_detect_non_popup_state()
+            if state in {"success", "declined", "vbv_3ds"}:
+                return state
+            if self._detect_givex_submission_error_popup():
+                close_budget = min(2.0, deadline - time.monotonic())
+                if close_budget <= 0:
+                    return "ui_lock"
+                if not self._close_givex_submission_error_popup(budget=close_budget):
+                    raise PageStateError("givex_fancybox_submission_error_close_failed")
+                settle_deadline = min(time.monotonic() + 1.5, deadline)
+                while time.monotonic() < settle_deadline:
+                    state = self._safe_detect_non_popup_state()
+                    if state in {"success", "declined", "vbv_3ds"}:
+                        return state
+                    time.sleep(min(0.2, max(0.0, settle_deadline - time.monotonic())))
+                return "submission_error_popup"
+            time.sleep(min(0.4, max(0.0, deadline - time.monotonic())))
+        return "ui_lock"
 
     def detect_page_state(self) -> str:
         """Inspect the current page and return the FSM state name.

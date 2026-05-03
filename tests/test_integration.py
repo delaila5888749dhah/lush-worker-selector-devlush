@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from modules.common.exceptions import (
     CycleExhaustedError,
     InvalidTransitionError,
+    PageStateError,
     SessionFlaggedError,
 )
 from modules.common.types import CardInfo, CycleContext, State, WorkerTask
@@ -118,11 +119,35 @@ class HandleOutcomeTests(unittest.TestCase):
         self.assertEqual(_action_name(action), "retry_new_card")
         self.assertIs(action[1], task.order_queue[0])
 
+    def test_real_declined_sends_alert_and_consumes_swap_card(self):
+        queue_card = CardInfo("4000000000000002", "07", "27", "123")
+        task = _make_task(order_queue=[queue_card])
+        ctx = CycleContext(cycle_id="cycle-1", worker_id="default", task=task)
+        with patch("integration.orchestrator._alerting") as mock_alerting:
+            action = handle_outcome(State("declined"), task.order_queue, ctx=ctx)
+        self.assertEqual(_action_name(action), "retry_new_card")
+        self.assertEqual(ctx.swap_count, 1)
+        mock_alerting.send_alert.assert_called_once()
+
     def test_declined_empty_queue_returns_retry(self):
         self.assertEqual(handle_outcome(State("declined"), []), "retry")
 
     def test_ui_lock_returns_retry(self):
         self.assertEqual(handle_outcome(State("ui_lock"), []), "retry")
+
+    def test_ui_lock_does_not_alert_or_consume_swap_card(self):
+        queue_card = CardInfo("4000000000000002", "07", "27", "123")
+        task = _make_task(order_queue=[queue_card])
+        ctx = CycleContext(cycle_id="cycle-1", worker_id="default", task=task)
+        with (
+            patch("integration.orchestrator._alerting") as mock_alerting,
+            patch("integration.orchestrator._ctx_next_swap_card") as mock_next,
+        ):
+            action = handle_outcome(State("ui_lock"), task.order_queue, ctx=ctx)
+        self.assertEqual(action, "retry")
+        self.assertEqual(ctx.swap_count, 0)
+        mock_alerting.send_alert.assert_not_called()
+        mock_next.assert_not_called()
 
     def test_vbv_3ds_clears_fields_and_returns_await_3ds(self):
         with patch("integration.orchestrator.cdp") as mock_cdp:
@@ -239,6 +264,65 @@ class RunPaymentStepTests(unittest.TestCase):
         self.assertEqual(total, 49.99)
         self.assertEqual(state.name, "success")
 
+    def test_submission_error_popup_uses_ui_lock_without_card_decline(self):
+        task = _make_task()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+            patch("integration.orchestrator._alerting") as mock_alerting,
+            patch("integration.orchestrator._ctx_next_swap_card") as mock_next,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 49.99
+            mock_cdp.wait_for_post_submit_outcome.return_value = "submission_error_popup"
+            mock_fsm.transition_for_worker.return_value = State("ui_lock")
+            with self.assertLogs("integration.orchestrator", level="INFO") as logs:
+                state, total = run_payment_step(task)
+        self.assertIsNone(total)
+        self.assertEqual(state.name, "ui_lock")
+        mock_fsm.transition_for_worker.assert_called_with("default", "ui_lock")
+        mock_watchdog.reset_session.assert_called_with("default")
+        mock_alerting.send_alert.assert_not_called()
+        mock_next.assert_not_called()
+        self.assertIn("GIVEX_POPUP_RECOVERED", "\n".join(logs.output))
+
+    def test_close_failure_aborts_safely_without_unconfirmed_mark(self):
+        store = MagicMock()
+        exc = PageStateError("givex_fancybox_submission_error_close_failed")
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator._get_idempotency_store", return_value=store),
+            patch("integration.orchestrator._ctx_next_swap_card") as mock_next,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 49.99
+            mock_cdp.wait_for_post_submit_outcome.side_effect = exc
+            with self.assertRaises(PageStateError):
+                run_payment_step(_make_task())
+        mock_watchdog.reset_session.assert_called_with("default")
+        store.mark_unconfirmed.assert_not_called()
+        mock_next.assert_not_called()
+
+    def test_real_declined_outcome_returns_declined_state_for_decline_path(self):
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 49.99
+            mock_cdp.wait_for_post_submit_outcome.return_value = "declined"
+            mock_fsm.transition_for_worker.return_value = State("declined")
+            state, total = run_payment_step(_make_task())
+        self.assertIsNone(total)
+        self.assertEqual(state.name, "declined")
+        mock_watchdog.reset_session.assert_called_with("default")
+
     def test_dom_total_fallback_notifies_watchdog_before_wait(self):
         with (
             patch("integration.orchestrator.billing") as mock_billing,
@@ -329,7 +413,7 @@ class RunCycleTests(unittest.TestCase):
             # that state remains None and handle_outcome returns "retry" (P0-1).
             # With the P0-2 retry loop, persistent "retry" outcomes are capped at
             # 2 attempts and converted to "abort_cycle".
-            mock_cdp.detect_page_state.side_effect = RuntimeError("page not detected")
+            mock_cdp.wait_for_post_submit_outcome.side_effect = RuntimeError("page not detected")
             action, state, total = run_cycle(_make_task())
         # Retry loop: "retry" × 2 → "abort_cycle"
         self.assertIn(action, ("retry", "abort_cycle"))
