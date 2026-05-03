@@ -165,6 +165,7 @@ class TestAbortCycleReturn(unittest.TestCase):
 
     def test_abort_cycle_return_releases_profile_and_no_retry(self):
         from integration.worker_task import make_task_fn
+        from modules.common.exceptions import CycleDidNotCompleteError
         task = MagicMock()
         bb_client = _make_bitbrowser_client()
 
@@ -181,15 +182,18 @@ class TestAbortCycleReturn(unittest.TestCase):
                 return_value=("abort_cycle", None, None),
             ) as mock_run_cycle,
         ):
-            # Should return normally (no exception, no retry loop) and release
-            # profile via BitBrowserSession.__exit__ → client.close_profile.
-            result = make_task_fn(task_source=MagicMock(return_value=task))("w-abort")
+            # P0: abort_cycle must raise CycleDidNotCompleteError so the
+            # runtime accounts the cycle as an error (not a success).  The
+            # BitBrowserSession context manager still releases the profile
+            # and the finally block still unregisters the driver.
+            with self.assertRaises(CycleDidNotCompleteError) as cm:
+                make_task_fn(task_source=MagicMock(return_value=task))("w-abort")
 
-        self.assertIsNone(result)
+        self.assertEqual(cm.exception.action, "abort_cycle")
         mock_run_cycle.assert_called_once()
         # Profile released via BitBrowserSession context manager exit.
         bb_client.close_profile.assert_called_once()
-        # Driver unregistered even on early return.
+        # Driver unregistered even when the cycle exits via exception.
         mock_cdp.unregister_driver.assert_called_once_with("w-abort")
 
 
