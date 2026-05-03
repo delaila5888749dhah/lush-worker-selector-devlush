@@ -2430,12 +2430,12 @@ class GivexDriver:
         self, max_wait: float = _GIVEX_FANCYBOX_CLOSE_VERIFY_S,
     ) -> bool:
         deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            if not self._is_givex_fancybox_open():
-                return True
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            if not self._is_givex_fancybox_open():
+                return True
             time.sleep(min(0.2, remaining))
         return not self._is_givex_fancybox_open()
 
