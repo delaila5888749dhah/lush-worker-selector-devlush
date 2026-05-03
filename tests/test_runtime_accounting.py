@@ -23,6 +23,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from integration.cycle_outcome import CycleDidNotCompleteError, normalize_action
+from modules.common.types import CardInfo
 
 
 def _make_bb_client():
@@ -48,6 +49,16 @@ def _patches():
             patch("integration.worker_task._get_current_ip_best_effort", return_value=None),
             patch("integration.worker_task.maxmind_lookup_zip", return_value=None),
         ],
+    )
+
+
+def _make_card():
+    return CardInfo(
+        card_number="4111111111111111",
+        exp_month="12",
+        exp_year="2030",
+        cvv="123",
+        card_name="Test User",
     )
 
 
@@ -102,19 +113,34 @@ class TestTaskFnNormalization(unittest.TestCase):
 
     def test_tuple_action_normalized(self):
         """Tuple-form actions like ('retry_new_card', card) must be normalized."""
-        sentinel_card = object()
+        sentinel_card = _make_card()
         with self.assertRaises(CycleDidNotCompleteError) as cm:
             self._run_with_action(("retry_new_card", sentinel_card))
         # Normalised to leading string token.
         self.assertEqual(cm.exception.action, "retry_new_card")
 
-    def test_tuple_action_with_non_tuple_token_fails_loud(self):
+    def test_string_token_in_unsupported_tuple_form_fails_loud(self):
         with self.assertRaises(ValueError) as cm:
             normalize_action(("retry", object()))
         self.assertEqual(
             str(cm.exception),
             "run_cycle action token does not support tuple form",
         )
+
+    def test_tuple_action_wrong_arity_fails_loud(self):
+        card = _make_card()
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card",))
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", card, "extra"))
+
+    def test_tuple_action_invalid_payload_fails_loud(self):
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", None))
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", object()))
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", "not-a-card"))
 
     def test_unknown_action_fails_loud(self):
         with self.assertRaises(ValueError) as cm:
