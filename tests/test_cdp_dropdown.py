@@ -190,7 +190,10 @@ class TestCdpSelectOption(unittest.TestCase):
 
     def test_wait_for_select_options_succeeds_after_options_reach_minimum(self):
         selenium = _make_driver()
-        selenium.execute_script.side_effect = [1, 2]
+        selenium.execute_script.side_effect = [
+            [{"value": "", "text": "State"}],
+            [{"value": "", "text": "State"}, {"value": "OR", "text": "Oregon"}],
+        ]
         gd = GivexDriver(selenium, strict=False)
 
         with patch("modules.cdp.driver.time.sleep"):
@@ -200,7 +203,7 @@ class TestCdpSelectOption(unittest.TestCase):
 
     def test_wait_for_select_options_timeout_raises(self):
         selenium = _make_driver()
-        selenium.execute_script.return_value = 1
+        selenium.execute_script.return_value = [{"value": "", "text": "State"}]
         gd = GivexDriver(selenium, strict=False)
 
         with patch("modules.cdp.driver.time.sleep"):
@@ -209,7 +212,7 @@ class TestCdpSelectOption(unittest.TestCase):
 
     def test_wait_for_select_options_timeout_reason_includes_last_count(self):
         selenium = _make_driver()
-        selenium.execute_script.return_value = 1
+        selenium.execute_script.return_value = [{"value": "", "text": "State"}]
         gd = GivexDriver(selenium, strict=False)
 
         with patch("modules.cdp.driver.time.sleep"):
@@ -271,7 +274,7 @@ class TestCdpSelectOption(unittest.TestCase):
                     target_value="OR",
                 )
 
-        self.assertIn("target_present=False", str(ctx.exception))
+        self.assertIn("target_found=False", str(ctx.exception))
 
     def test_dropdown_aborts_when_arrow_dispatch_fails(self):
         """Audit [F1]: a failed ``dispatch_key`` MUST stop the navigation

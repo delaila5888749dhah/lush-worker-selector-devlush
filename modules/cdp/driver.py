@@ -2578,7 +2578,7 @@ class GivexDriver:
                     selector,
                 )
                 options = result if isinstance(result, list) else []
-                last_count = len(options) if isinstance(result, list) else int(result or 0)
+                last_count = len(options)
                 if last_count >= min_options:
                     if target_value is None:
                         return
@@ -2609,7 +2609,8 @@ class GivexDriver:
             int(timeout),
             reason=(
                 f"select options did not satisfy min_options/target; "
-                f"last_count={last_count}; target_present={target_value is None}"
+                f"last_count={last_count}"
+                f"{'; target_found=False' if target_value is not None else ''}"
             ),
         )
 
