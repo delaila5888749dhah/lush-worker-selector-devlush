@@ -86,6 +86,8 @@ except ImportError:
 
 _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 _GIVEX_CART_STATE_POLL_DEFAULT_S = 18.0
+_GIVEX_FANCYBOX_CLICK_ATTEMPTS = 2
+_GIVEX_FANCYBOX_CLOSE_VERIFY_S = 3.0
 
 _log = logging.getLogger(__name__)
 
@@ -2388,7 +2390,7 @@ class GivexDriver:
                 """
             ) is True
         except Exception:  # pylint: disable=broad-except
-            _log.debug("GIVEX_SUBMISSION_ERROR_POPUP detect skipped", exc_info=True)
+            _log.debug("GIVEX_SUBMISSION_ERROR_POPUP detect skipped")
             return False
 
     def _is_givex_fancybox_open(self) -> bool:
@@ -2397,11 +2399,13 @@ class GivexDriver:
                 "return !!document.querySelector('.fancybox-wrap.fancybox-opened');"
             ))
         except Exception:  # pylint: disable=broad-except
-            _log.debug("GIVEX_FANCYBOX_CLOSE verify skipped", exc_info=True)
+            _log.debug("GIVEX_FANCYBOX_CLOSE verify skipped")
             return True
 
-    def _wait_for_givex_fancybox_closed(self, timeout: float = 3.0) -> bool:
-        deadline = time.monotonic() + timeout
+    def _wait_for_givex_fancybox_closed(
+        self, max_wait: float = _GIVEX_FANCYBOX_CLOSE_VERIFY_S,
+    ) -> bool:
+        deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             if not self._is_givex_fancybox_open():
                 return True
@@ -2417,14 +2421,13 @@ class GivexDriver:
             ".fancybox-item.fancybox-close",
         )
         for selector in selectors:
-            for attempt in range(2):
+            for attempt in range(_GIVEX_FANCYBOX_CLICK_ATTEMPTS):
                 try:
                     self.bounding_box_click(selector)
                 except Exception:  # pylint: disable=broad-except
                     _log.debug(
                         "GIVEX_FANCYBOX_CLOSE click failed selector_index=%d attempt=%d",
                         selectors.index(selector), attempt + 1,
-                        exc_info=True,
                     )
                     continue
                 if self._wait_for_givex_fancybox_closed():
@@ -2436,7 +2439,7 @@ class GivexDriver:
         try:
             dispatch_key(self._driver, "Escape")
         except Exception:  # pylint: disable=broad-except
-            _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed", exc_info=True)
+            _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed")
         if self._wait_for_givex_fancybox_closed():
             _log.info("GIVEX_FANCYBOX_CLOSE dismissed via Escape")
             return True

@@ -406,9 +406,10 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
     def test_popup_logs_no_payment_pii_or_raw_payment_selectors(self):
         selenium = _make_driver()
         gd = GivexDriver(selenium)
-        with patch.object(gd, "bounding_box_click", side_effect=RuntimeError("click failed")), \
+        pii_error = RuntimeError("#cws_card 4111111111111111 cvv=123 jane@example.com")
+        with patch.object(gd, "bounding_box_click", side_effect=pii_error), \
              patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=False), \
-             patch("modules.cdp.keyboard.dispatch_key", return_value=True), \
+             patch("modules.cdp.keyboard.dispatch_key", side_effect=pii_error), \
              self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
             gd._close_givex_submission_error_popup()
 
@@ -417,6 +418,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         self.assertNotIn("#cws_", joined)
         self.assertNotIn("4111111111111111", joined)
         self.assertNotIn("123", joined)
+        self.assertNotIn("jane@example.com", joined)
 
     def test_submission_error_popup_exception_maps_to_retryable_decline(self):
         from integration import orchestrator as orch
