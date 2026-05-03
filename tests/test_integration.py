@@ -305,12 +305,14 @@ class RunPaymentStepTests(unittest.TestCase):
             ]
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_fsm.transition_for_worker.return_value = State("ui_lock")
-            state, _total = run_payment_step(_make_task())
+            with self.assertLogs("integration.orchestrator", level="INFO") as logs:
+                state, _total = run_payment_step(_make_task())
         self.assertEqual(state.name, "ui_lock")
         mock_fsm.transition_for_worker.assert_called_with("default", "ui_lock")
         mock_watchdog.reset_session.assert_called_once_with("default")
         mock_alerting.send_alert.assert_not_called()
         mock_next.assert_not_called()
+        self.assertIn("GIVEX_POPUP_RECOVERED during fallback", "\n".join(logs.output))
 
     def test_close_failure_aborts_safely_without_unconfirmed_mark(self):
         store = MagicMock()
