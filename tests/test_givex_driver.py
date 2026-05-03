@@ -55,7 +55,6 @@ from modules.cdp.driver import (
     SEL_SENDER_NAME,
     SEL_UI_LOCK_SPINNER,
     SEL_VBV_IFRAME,
-    _SubmissionErrorPopupDetected,
     URL_BASE,
     URL_CART,
     URL_CHECKOUT,
@@ -393,7 +392,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
              patch("modules.cdp.driver._dispatch_key", return_value=True):
             self.assertFalse(gd._close_givex_submission_error_popup())
 
-        self.assertLessEqual(sum(waits), drv._GIVEX_FANCYBOX_CLOSE_TOTAL_BUDGET_S)
+        self.assertLessEqual(sum(waits), 4.0)
         self.assertTrue(all(wait <= drv._GIVEX_FANCYBOX_CLOSE_VERIFY_S for wait in waits))
 
     def test_post_submit_wait_detects_popup_and_raises_retryable(self):
@@ -402,8 +401,9 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
              patch.object(gd, "_close_givex_submission_error_popup") as close, \
              patch("modules.cdp.driver.time.sleep", return_value=None):
-            with self.assertRaises(_SubmissionErrorPopupDetected):
+            with self.assertRaises(PageStateError) as ctx:
                 gd._wait_for_url("/confirmation", timeout=1)
+            self.assertEqual(ctx.exception.detected, "givex_fancybox_submission_error")
 
         close.assert_called_once()
 
@@ -438,15 +438,18 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         gd = GivexDriver(selenium)
         with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
              patch.object(gd, "_close_givex_submission_error_popup", return_value=True):
-            with self.assertRaises(_SubmissionErrorPopupDetected):
+            with self.assertRaises(PageStateError) as ctx:
                 gd.detect_page_state()
+            self.assertEqual(ctx.exception.detected, "givex_fancybox_submission_error")
 
     def test_public_detect_page_state_translates_popup_signal(self):
         from modules.cdp import main as cdp_main
 
         worker_id = "popup-public-translate"
         cdp_main.register_driver(worker_id, MagicMock(
-            detect_page_state=MagicMock(side_effect=_SubmissionErrorPopupDetected())
+            detect_page_state=MagicMock(
+                side_effect=PageStateError("givex_fancybox_submission_error")
+            )
         ))
         try:
             self.assertEqual(cdp_main.detect_page_state(worker_id), "declined")
@@ -459,7 +462,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         worker_id = "popup-public-close-failed"
         cdp_main.register_driver(worker_id, MagicMock(
             detect_page_state=MagicMock(
-                side_effect=_SubmissionErrorPopupDetected(popup_closed=False)
+                side_effect=PageStateError("givex_fancybox_submission_error_close_failed")
             )
         ))
         try:
