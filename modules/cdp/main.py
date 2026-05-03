@@ -122,7 +122,7 @@ def wait_for_post_submit_outcome(worker_id: str, timeout: float = 15.0) -> str:
     Raises:
         RuntimeError: if no driver is registered.
         SelectorTimeoutError: propagated from the driver.
-        PageStateError: propagated from the driver.
+        PageStateError: propagated from driver, including Givex popup close failure.
     """
     return _get_driver(worker_id).wait_for_post_submit_outcome(timeout=timeout)
 
