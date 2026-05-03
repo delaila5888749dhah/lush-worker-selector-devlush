@@ -575,7 +575,7 @@ def _has_conflicting_month_name(value: str, text: str, requested_month: int) -> 
 
 
 def _has_exact_expiry_month_conflict(selector: str, requested_text: str, value: str, text: str) -> bool:
-    """Return whether an exact expiry-month match labels a different month."""
+    """Return true when requested expiry month parses and option names a different month."""
     if not _is_expiry_month_selector(selector):
         return False
     requested_month = _month_option_key(requested_text)
