@@ -50,7 +50,7 @@ def normalize_action(action) -> str:
             raise ValueError("malformed run_cycle action tuple")
         token = action[0]
         if token not in KNOWN_RUN_CYCLE_TUPLE_ACTIONS:
-            raise ValueError("malformed run_cycle tuple action")
+            raise ValueError("unknown run_cycle tuple action token")
     elif isinstance(action, str):
         token = action
     else:

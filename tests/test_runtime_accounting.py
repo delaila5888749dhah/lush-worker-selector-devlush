@@ -106,12 +106,12 @@ class TestTaskFnNormalization(unittest.TestCase):
         self.assertEqual(str(cm.exception), "unknown run_cycle action token")
 
     def test_malformed_action_type_fails_loud(self):
-        class SensitiveAction:
+        class UnstringifiableAction:
             def __str__(self):
                 raise AssertionError("normalize_action must not stringify arbitrary objects")
 
         with self.assertRaises(ValueError) as cm:
-            self._run_with_action(SensitiveAction())
+            self._run_with_action(UnstringifiableAction())
         self.assertEqual(str(cm.exception), "malformed run_cycle action type")
 
 
