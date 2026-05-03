@@ -729,6 +729,7 @@ SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
 _GIVEX_FANCYBOX_CLOSE_VERIFY_S = 0.8
+_GIVEX_FANCYBOX_SETTLE_S = 1.5
 _GIVEX_FANCYBOX_SELECTORS = (".fancybox-wrap.fancybox-opened", ".fancybox-wrap.fancybox-type-html")
 _GIVEX_FANCYBOX_CLOSE_SELECTORS = (
     ".fancybox-wrap.fancybox-opened .fancybox-item.fancybox-close",
@@ -4305,12 +4306,12 @@ class GivexDriver:
                 {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
             )
             return
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("GIVEX_FANCYBOX_CLOSE escape CDP failed: %s", _sanitize_error(str(exc)))
         try:
             self._driver.switch_to.active_element.send_keys("\ue00c")
-        except Exception:
-            return
+        except Exception as exc:
+            _log.debug("GIVEX_FANCYBOX_CLOSE escape send_keys failed: %s", _sanitize_error(str(exc)))
 
     def _close_givex_submission_error_popup(self, budget: float = 2.0) -> bool:
         deadline = time.monotonic() + max(0.0, budget)
@@ -4345,7 +4346,7 @@ class GivexDriver:
                     return "ui_lock"
                 if not self._close_givex_submission_error_popup(budget=close_budget):
                     raise PageStateError("givex_fancybox_submission_error_close_failed")
-                settle_deadline = min(time.monotonic() + 1.5, deadline)
+                settle_deadline = min(time.monotonic() + _GIVEX_FANCYBOX_SETTLE_S, deadline)
                 while time.monotonic() < settle_deadline:
                     state = self._safe_detect_non_popup_state()
                     if state in {"success", "declined", "vbv_3ds"}:
