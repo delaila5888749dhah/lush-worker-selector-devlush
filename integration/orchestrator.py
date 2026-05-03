@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.common.exceptions import CDPError, InvalidTransitionError, SessionFlaggedError
+from modules.common.exceptions import CDPError, InvalidTransitionError, PageStateError, SessionFlaggedError
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
@@ -1623,25 +1623,29 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             "[trace=%s] submit_completed for worker=%s",
             _get_trace_id(), worker_id,
         )
-        # P0-1: Detect page state immediately after submit and wire FSM transition.
-        # This is the primary path for all FSM state changes in production.
-        # Spinner-visible ``ui_busy`` is treated as active loading: re-probe
-        # until a stable state appears (or until the busy-recheck budget is
-        # exhausted). Only canonical FSM states are forwarded to
-        # ``transition_for_worker``; a residual ``ui_busy`` is left to the
-        # post-submit fallback below to retry once Phase C completes.
         try:
-            _page_state = _settle_busy_page_state(
-                lambda: cdp.detect_page_state(worker_id)
-            )
+            _page_state = cdp._get_driver(worker_id).wait_for_post_submit_outcome()  # pylint: disable=protected-access
+            if _page_state == "submission_error_popup":
+                _logger.info(
+                    "[trace=%s] worker=%s GIVEX_POPUP_RECOVERED; technical retry path",
+                    _get_trace_id(), worker_id,
+                )
+                state = fsm.transition_for_worker(worker_id, "ui_lock")
+                watchdog.reset_session(worker_id)
+                return state, None
             if _page_state in _FSM_STATES:
-                fsm.transition_for_worker(worker_id, _page_state)
+                state = fsm.transition_for_worker(worker_id, _page_state)
+                if _page_state == "declined":
+                    watchdog.reset_session(worker_id)
+                    return state, None
             else:
                 _logger.info(
                     "[trace=%s] worker=%s post-submit state=%s is non-FSM; "
                     "deferring transition to fallback path",
                     _get_trace_id(), worker_id, _page_state,
                 )
+        except PageStateError:
+            raise
         except InvalidTransitionError as _fsm_exc:
             _logger.warning(
                 "[trace=%s] FSM InvalidTransitionError after submit for worker=%s: %s",
@@ -1649,7 +1653,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             )
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
-                "[trace=%s] detect_page_state failed after submit for worker=%s — "
+                "[trace=%s] wait_for_post_submit_outcome failed after submit for worker=%s — "
                 "FSM transition skipped; fallback will attempt at state read.",
                 _get_trace_id(), worker_id, exc_info=True,
             )
@@ -1690,6 +1694,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             total = None
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
+        if isinstance(exc, PageStateError) and exc.detected == "givex_fancybox_submission_error_close_failed":
+            _logger.error("[trace=%s] worker=%s GIVEX_POPUP close failure: aborting", _get_trace_id(), worker_id)
         try:
             _alerting.send_alert(
                 f"Watchdog timeout worker={worker_id} task_id={_task_id_log}"
@@ -1741,30 +1747,37 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         raise
     state = fsm.get_current_state_for_worker(worker_id)
     if state is None:
-        # P0-1 fallback: FSM was never transitioned by the primary path (e.g.
-        # detect_page_state raised after submit, or returned ``ui_busy``).  Try
-        # once more here, settling any remaining spinner-visible loading first
-        # so we don't push a non-FSM ``ui_busy`` value into the FSM.
         try:
-            _page_state = _settle_busy_page_state(
-                lambda: cdp.detect_page_state(worker_id)
-            )
-            if _page_state in _FSM_STATES:
+            _page_state = cdp._get_driver(worker_id).wait_for_post_submit_outcome()  # pylint: disable=protected-access
+            if _page_state == "submission_error_popup":
+                _logger.info("[trace=%s] worker=%s GIVEX_POPUP_RECOVERED during fallback; technical retry path", _get_trace_id(), worker_id)
+                state = fsm.transition_for_worker(worker_id, "ui_lock")
+                watchdog.reset_session(worker_id)
+            elif _page_state in _FSM_STATES:
                 state = fsm.transition_for_worker(worker_id, _page_state)
             else:
-                _logger.warning(
-                    "[trace=%s] FSM fallback state=%s is non-FSM for worker=%s — "
-                    "returning state=None; handle_outcome will retry.",
-                    _get_trace_id(), _page_state, worker_id,
-                )
+                _logger.warning("[trace=%s] FSM fallback state=%s is non-FSM for worker=%s — returning state=None; handle_outcome will retry.", _get_trace_id(), _page_state, worker_id)
         except InvalidTransitionError as _fsm_exc:
             _logger.warning(
                 "[trace=%s] FSM fallback InvalidTransitionError for worker=%s: %s",
                 _get_trace_id(), worker_id, _fsm_exc,
             )
+        except PageStateError as _page_exc:
+            if _page_exc.detected == "givex_fancybox_submission_error_close_failed":
+                _logger.error("[trace=%s] worker=%s GIVEX_POPUP fallback close failure", _get_trace_id(), worker_id)
+            else:
+                _logger.warning("[trace=%s] FSM fallback PageStateError for worker=%s reason=%s", _get_trace_id(), worker_id, _page_exc.detected)
+            _task_id_fb = getattr(task, "task_id", None)
+            if _task_id_fb is not None:
+                try:
+                    _get_idempotency_store().mark_unconfirmed(_task_id_fb, ttl_seconds=_UNCONFIRMED_TTL_SECONDS)
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.error("Failed to mark task_id=%s as unconfirmed", _task_id_fb, exc_info=True)
+            watchdog.reset_session(worker_id)
+            raise
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
-                "[trace=%s] FSM fallback detect_page_state failed for worker=%s — "
+                "[trace=%s] FSM fallback wait_for_post_submit_outcome failed for worker=%s — "
                 "returning state=None; handle_outcome will retry.",
                 _get_trace_id(), worker_id, exc_info=True,
             )
