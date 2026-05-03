@@ -1653,7 +1653,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 _get_trace_id(), worker_id, _fsm_exc,
             )
         except SubmissionErrorPopupDetected as _popup_exc:
-            if not _popup_exc.popup_closed:
+            if _popup_exc.popup_closed is False:
                 _logger.warning(
                     "[trace=%s] GIVEX_SUBMISSION_ERROR_POPUP worker=%s reason=%s; "
                     "popup close failed, aborting retry path",

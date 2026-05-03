@@ -2433,7 +2433,10 @@ class GivexDriver:
         while time.monotonic() < deadline:
             if not self._is_givex_fancybox_open():
                 return True
-            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.2, remaining))
         return not self._is_givex_fancybox_open()
 
     def _close_givex_submission_error_popup(self) -> bool:
