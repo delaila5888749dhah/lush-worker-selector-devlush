@@ -1775,8 +1775,6 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                     _logger.error("Failed to mark task_id=%s as unconfirmed", _task_id_fb, exc_info=True)
             watchdog.reset_session(worker_id)
             raise
-            watchdog.reset_session(worker_id)
-            raise
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
                 "[trace=%s] FSM fallback wait_for_post_submit_outcome failed for worker=%s — "
