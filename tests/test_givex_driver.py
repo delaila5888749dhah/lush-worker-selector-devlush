@@ -1537,6 +1537,34 @@ class TestPostSubmitOutcomeResolver(unittest.TestCase):
             del type(selenium).current_url
         self.assertEqual(result, "success")
 
+    def test_logs_no_pii_or_raw_selectors(self):
+        selenium = _make_driver()
+        popup = MagicMock()
+        popup.is_displayed.return_value = True
+        popup.text = (
+            "Something went wrong with your submission, please try again "
+            "4111111111111111 123 test@example.com #cws_txt_cardNumber"
+        )
+
+        def find_elements(_by, selector):
+            if "fancybox-wrap" in selector and "Something went wrong" in popup.text:
+                return [popup]
+            return []
+
+        selenium.find_elements.side_effect = find_elements
+        gd = GivexDriver(selenium)
+
+        def close(_selector):
+            popup.text = ""
+
+        with patch.object(gd, "bounding_box_click", side_effect=close), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            self.assertTrue(gd._close_givex_submission_error_popup(budget=1.0))
+        output = "\n".join(logs.output)
+        self.assertIn("GIVEX_FANCYBOX_CLOSE", output)
+        for forbidden in ("#cws_", "4111111111111111", " 123 ", "test@example.com"):
+            self.assertNotIn(forbidden, output)
+
 
 class TestNavigateToEgift(unittest.TestCase):
     """navigate_to_egift waits for URL_EGIFT after clicking buy button."""
