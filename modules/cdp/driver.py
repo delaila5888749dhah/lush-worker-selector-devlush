@@ -574,6 +574,13 @@ def _has_conflicting_month_name(value: str, text: str, requested_month: int) -> 
     )
 
 
+def _has_exact_expiry_month_conflict(selector: str, requested_text: str, value: str, text: str) -> bool:
+    if not _is_expiry_month_selector(selector):
+        return False
+    requested_month = _month_option_key(requested_text)
+    return requested_month is not None and _has_conflicting_month_name(value, text, requested_month)
+
+
 def _expand_two_digit_year(value: int, current_year: int) -> int | None:
     matches = [
         year for year in range(current_year, current_year + _EXPIRY_YEAR_WINDOW_YEARS + 1)
@@ -637,23 +644,18 @@ def _find_matching_option_index(
 ) -> int:
     requested_text = "" if requested is None else str(requested)
     option_pairs = [_option_value_text(option) for option in options]
-    is_expiry_month = _is_expiry_month_selector(selector)
-    requested_month_for_conflict = (
-        _month_option_key(requested_text) if is_expiry_month else None
-    )
 
     for idx, (value, text) in enumerate(option_pairs):
-        exact_match = value == requested_text or text.strip() == requested_text
-        conflicting_month = (
-            exact_match
-            and is_expiry_month
-            and requested_month_for_conflict is not None
-            and _has_conflicting_month_name(value, text, requested_month_for_conflict)
-        )
-        if exact_match and not conflicting_month:
+        if value != requested_text and text.strip() != requested_text:
+            continue
+        if not _has_exact_expiry_month_conflict(selector, requested_text, value, text):
             return idx
 
     if (requested_numeric := _numeric_option_key(requested_text)) is not None:
+        is_expiry_month = _is_expiry_month_selector(selector)
+        requested_month_for_conflict = (
+            _month_option_key(requested_text) if is_expiry_month else None
+        )
         for idx, (value, text) in enumerate(option_pairs):
             if requested_numeric in (_numeric_option_key(value), _numeric_option_key(text)):
                 if (
