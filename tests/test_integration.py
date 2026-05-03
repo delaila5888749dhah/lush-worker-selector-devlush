@@ -288,6 +288,30 @@ class RunPaymentStepTests(unittest.TestCase):
         mock_next.assert_not_called()
         self.assertIn("GIVEX_POPUP_RECOVERED", "\n".join(logs.output))
 
+    def test_fallback_submission_error_popup_uses_ui_lock_without_card_decline(self):
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+            patch("integration.orchestrator._alerting") as mock_alerting,
+            patch("integration.orchestrator._ctx_next_swap_card") as mock_next,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 49.99
+            mock_cdp.wait_for_post_submit_outcome.side_effect = [
+                "still_loading",
+                "submission_error_popup",
+            ]
+            mock_fsm.get_current_state_for_worker.return_value = None
+            mock_fsm.transition_for_worker.return_value = State("ui_lock")
+            state, _total = run_payment_step(_make_task())
+        self.assertEqual(state.name, "ui_lock")
+        mock_fsm.transition_for_worker.assert_called_with("default", "ui_lock")
+        mock_watchdog.reset_session.assert_called_once_with("default")
+        mock_alerting.send_alert.assert_not_called()
+        mock_next.assert_not_called()
+
     def test_close_failure_aborts_safely_without_unconfirmed_mark(self):
         store = MagicMock()
         exc = PageStateError("givex_fancybox_submission_error_close_failed")

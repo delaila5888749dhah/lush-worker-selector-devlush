@@ -1623,16 +1623,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             "[trace=%s] submit_completed for worker=%s",
             _get_trace_id(), worker_id,
         )
-        # P0-1: Resolve page outcome immediately after submit and wire FSM transition.
-        # This is the primary path for all FSM state changes in production.
-        # Resolver owns popup recovery/racing; only canonical FSM states reach the FSM.
         try:
             _page_state = cdp.wait_for_post_submit_outcome(worker_id)
             if _page_state == "submission_error_popup":
-                _logger.info(
-                    "[trace=%s] worker=%s GIVEX_POPUP_RECOVERED; technical retry path",
-                    _get_trace_id(), worker_id,
-                )
+                _logger.info("[trace=%s] worker=%s GIVEX_POPUP_RECOVERED; technical retry path", _get_trace_id(), worker_id)
                 state = fsm.transition_for_worker(worker_id, "ui_lock")
                 watchdog.reset_session(worker_id)
                 return state, None
@@ -1695,7 +1689,6 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                         _task_id, exc_info=True,
                     )
             total = None
-    # PageStateError inherits SessionFlaggedError, so this preserves its cleanup path.
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
         if (
@@ -1758,7 +1751,11 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     if state is None:
         try:
             _page_state = cdp.wait_for_post_submit_outcome(worker_id)
-            if _page_state in _FSM_STATES:
+            if _page_state == "submission_error_popup":
+                _logger.info("[trace=%s] worker=%s GIVEX_POPUP_RECOVERED during fallback; technical retry path", _get_trace_id(), worker_id)
+                state = fsm.transition_for_worker(worker_id, "ui_lock")
+                watchdog.reset_session(worker_id)
+            elif _page_state in _FSM_STATES:
                 state = fsm.transition_for_worker(worker_id, _page_state)
             else:
                 _logger.warning(
