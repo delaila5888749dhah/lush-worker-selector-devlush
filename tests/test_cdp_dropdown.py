@@ -276,7 +276,7 @@ class TestCdpSelectOption(unittest.TestCase):
 
         self.assertIn("target_found=False", str(ctx.exception))
 
-    def test_wait_for_select_options_unexpected_error_propagates(self):
+    def test_wait_for_select_options_propagates_unexpected_errors(self):
         selenium = _make_driver()
         selenium.execute_script.side_effect = RuntimeError("unexpected_selenium_error")
         gd = GivexDriver(selenium, strict=False)
