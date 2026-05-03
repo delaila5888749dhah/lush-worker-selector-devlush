@@ -63,7 +63,13 @@ from modules.cdp.driver import (
     URL_GEO_CHECK,
     URL_PAYMENT,
 )
-from modules.common.exceptions import CDPClickError, PageStateError, SelectorTimeoutError, SessionFlaggedError
+from modules.common.exceptions import (
+    CDPClickError,
+    PageStateError,
+    SelectorTimeoutError,
+    SessionFlaggedError,
+    SubmissionErrorPopupDetected,
+)
 from modules.common.types import BillingProfile, CardInfo, WorkerTask
 
 
@@ -286,6 +292,161 @@ class TestWaitForUrl(unittest.TestCase):
         gd = GivexDriver(selenium)
         with self.assertRaises(PageStateError):
             gd._wait_for_url("/e-gifts/", timeout=1)
+
+
+class TestGivexSubmissionErrorPopup(unittest.TestCase):
+    def test_detector_returns_true_for_fancybox_with_error_text(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = True
+        gd = GivexDriver(selenium)
+
+        self.assertTrue(gd._detect_givex_submission_error_popup())
+        script = selenium.execute_script.call_args.args[0]
+        self.assertIn(".fancybox-wrap.fancybox-opened", script)
+        self.assertIn("offsetParent", script)
+        self.assertIn("something went wrong", script)
+
+    def test_detector_returns_false_for_fancybox_without_error_text(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = False
+        gd = GivexDriver(selenium)
+
+        self.assertFalse(gd._detect_givex_submission_error_popup())
+
+    def test_detector_returns_false_when_no_modal_visible(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = False
+        gd = GivexDriver(selenium)
+
+        self.assertFalse(gd._detect_givex_submission_error_popup())
+
+    def test_detector_handles_case_insensitive_match(self):
+        selenium = _make_driver()
+        selenium.execute_script.return_value = True
+        gd = GivexDriver(selenium)
+
+        self.assertTrue(gd._detect_givex_submission_error_popup())
+        self.assertIn("/something went wrong/i", selenium.execute_script.call_args.args[0])
+
+    def test_close_uses_bounding_box_click_on_fancybox_close(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "bounding_box_click") as click, \
+             patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=True):
+            self.assertTrue(gd._close_givex_submission_error_popup())
+
+        click.assert_called_once()
+        selector = click.call_args.args[0]
+        self.assertIn("fancybox-close", selector)
+        scripts = "\n".join(str(c.args[0]) for c in selenium.execute_script.call_args_list)
+        self.assertNotIn("$.fancybox.close", scripts)
+        self.assertNotIn("removeNode", scripts)
+
+    def test_close_falls_back_to_escape_when_click_fails(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "bounding_box_click", side_effect=RuntimeError("click failed")), \
+             patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=True), \
+             patch("modules.cdp.keyboard.dispatch_key", return_value=True) as dispatch, \
+             self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
+            self.assertTrue(gd._close_givex_submission_error_popup())
+
+        dispatch.assert_called_once_with(selenium, "Escape")
+        self.assertIn("GIVEX_FANCYBOX_CLOSE", "\n".join(logs.output))
+
+    def test_close_verifies_popup_gone_after_click(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_is_givex_fancybox_open", side_effect=[True, False]):
+            self.assertTrue(gd._close_givex_submission_error_popup())
+
+    def test_close_returns_false_if_popup_persists(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "bounding_box_click", side_effect=RuntimeError("click failed")), \
+             patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=False), \
+             patch("modules.cdp.keyboard.dispatch_key", return_value=True), \
+             self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
+            self.assertFalse(gd._close_givex_submission_error_popup())
+
+        self.assertIn("popup persisted", "\n".join(logs.output))
+
+    def test_post_submit_wait_detects_popup_and_raises_retryable(self):
+        selenium = _make_driver(current_url="https://example.com/payment.html")
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup") as close, \
+             patch("modules.cdp.driver.time.sleep", return_value=None):
+            with self.assertRaises(SubmissionErrorPopupDetected):
+                gd._wait_for_url("/confirmation", timeout=1)
+
+        close.assert_called_once()
+
+    def test_post_submit_wait_url_change_wins_race(self):
+        selenium = _make_driver(current_url="https://example.com/confirmation")
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True) as detect, \
+             patch.object(gd, "_close_givex_submission_error_popup") as close:
+            gd._wait_for_url("/confirmation", timeout=1)
+
+        detect.assert_not_called()
+        close.assert_not_called()
+
+    def test_post_submit_timeout_behavior_preserved(self):
+        selenium = _make_driver(current_url="https://example.com/payment.html")
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_detect_givex_submission_error_popup", return_value=False) as detect, \
+             patch("modules.cdp.driver.time.sleep", return_value=None):
+            with self.assertRaises(PageStateError):
+                gd._wait_for_url("/confirmation", timeout=0.01)
+
+        self.assertGreaterEqual(detect.call_count, 1)
+
+    def test_popup_logs_no_payment_pii_or_raw_payment_selectors(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "bounding_box_click", side_effect=RuntimeError("click failed")), \
+             patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=False), \
+             patch("modules.cdp.keyboard.dispatch_key", return_value=True), \
+             self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
+            gd._close_givex_submission_error_popup()
+
+        joined = "\n".join(logs.output)
+        self.assertIn("GIVEX_FANCYBOX_CLOSE", joined)
+        self.assertNotIn("#cws_", joined)
+        self.assertNotIn("4111111111111111", joined)
+        self.assertNotIn("123", joined)
+
+    def test_submission_error_popup_exception_maps_to_retryable_decline(self):
+        from integration import orchestrator as orch
+        from modules.fsm import main as fsm
+
+        worker_id = "popup-retry"
+        task = _make_task()
+        profile = _make_billing()
+        fake_store = MagicMock()
+        fake_driver = MagicMock()
+        orch.initialize_cycle(worker_id)
+        try:
+            with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
+                 patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
+                 patch.object(orch.cdp, "_get_driver", return_value=fake_driver), \
+                 patch.object(orch.cdp, "detect_page_state",
+                              side_effect=SubmissionErrorPopupDetected()), \
+                 patch.object(orch, "_setup_network_total_listener"), \
+                 patch.object(orch, "_notify_total_from_dom"), \
+                 patch.object(orch, "_emit_billing_audit_event"), \
+                 patch.object(orch.watchdog, "enable_network_monitor"), \
+                 patch.object(orch.watchdog, "reset_session"), \
+                 patch.object(orch.watchdog, "wait_for_total", side_effect=[50, 50]):
+                state, _total = orch.run_payment_step(
+                    task, worker_id=worker_id, _profile=profile,
+                )
+        finally:
+            fsm.cleanup_worker(worker_id)
+
+        self.assertEqual(state.name, "declined")
 
 
 class TestFindElements(unittest.TestCase):

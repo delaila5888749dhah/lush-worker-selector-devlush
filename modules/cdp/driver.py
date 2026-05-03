@@ -59,6 +59,7 @@ from modules.common.exceptions import (
     PageStateError,
     SelectorTimeoutError,
     SessionFlaggedError,
+    SubmissionErrorPopupDetected,
 )
 from modules.common.sanitize import sanitize_error as _sanitize_error  # INV-PII-UNIFIED-01
 
@@ -2370,8 +2371,77 @@ class GivexDriver:
                     expected_short, transitions, time.monotonic() - started,
                 )
                 return
+            if self._detect_givex_submission_error_popup():
+                self._close_givex_submission_error_popup()
+                raise SubmissionErrorPopupDetected()
             time.sleep(0.5)
         raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
+
+    def _detect_givex_submission_error_popup(self) -> bool:
+        """Return True if visible Fancybox modal contains submission error text."""
+        try:
+            return self._driver.execute_script(
+                """
+                var el = document.querySelector('.fancybox-wrap.fancybox-opened');
+                if (!el || el.offsetParent === null) { return false; }
+                return /something went wrong/i.test(el.innerText || '');
+                """
+            ) is True
+        except Exception:  # pylint: disable=broad-except
+            _log.debug("GIVEX_SUBMISSION_ERROR_POPUP detect skipped", exc_info=True)
+            return False
+
+    def _is_givex_fancybox_open(self) -> bool:
+        try:
+            return bool(self._driver.execute_script(
+                "return !!document.querySelector('.fancybox-wrap.fancybox-opened');"
+            ))
+        except Exception:  # pylint: disable=broad-except
+            _log.debug("GIVEX_FANCYBOX_CLOSE verify skipped", exc_info=True)
+            return True
+
+    def _wait_for_givex_fancybox_closed(self, timeout: float = 3.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._is_givex_fancybox_open():
+                return True
+            time.sleep(0.2)
+        return not self._is_givex_fancybox_open()
+
+    def _close_givex_submission_error_popup(self) -> bool:
+        """Click Fancybox close button via existing CDP click path. Returns True on success."""
+        selectors = (
+            ".fancybox-wrap.fancybox-opened a.fancybox-item.fancybox-close",
+            "a.fancybox-close",
+            ".fancybox-close",
+            ".fancybox-item.fancybox-close",
+        )
+        for selector in selectors:
+            for attempt in range(2):
+                try:
+                    self.bounding_box_click(selector)
+                except Exception:  # pylint: disable=broad-except
+                    _log.debug(
+                        "GIVEX_FANCYBOX_CLOSE click failed selector_index=%d attempt=%d",
+                        selectors.index(selector), attempt + 1,
+                        exc_info=True,
+                    )
+                    continue
+                if self._wait_for_givex_fancybox_closed():
+                    _log.info("GIVEX_FANCYBOX_CLOSE dismissed via click")
+                    return True
+                break
+        from modules.cdp.keyboard import dispatch_key  # local import: avoid module-level coupling
+        _log.warning("GIVEX_FANCYBOX_CLOSE click retries failed; dispatching Escape")
+        try:
+            dispatch_key(self._driver, "Escape")
+        except Exception:  # pylint: disable=broad-except
+            _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed", exc_info=True)
+        if self._wait_for_givex_fancybox_closed():
+            _log.info("GIVEX_FANCYBOX_CLOSE dismissed via Escape")
+            return True
+        _log.warning("GIVEX_FANCYBOX_CLOSE popup persisted after click and Escape")
+        return False
 
     def _capture_failure_screenshot(self, label: str) -> None:
         """Best-effort failure PNG capture; never raises."""
@@ -4280,6 +4350,9 @@ class GivexDriver:
             return "declined"
         if "declined" in page_text or "transaction failed" in page_text:
             return "declined"
+        if self._detect_givex_submission_error_popup():
+            self._close_givex_submission_error_popup()
+            raise SubmissionErrorPopupDetected()
 
         # 4 — ui_busy (spinner visible means active loading, not a stuck UI)
         if self.find_elements(SEL_UI_LOCK_SPINNER):
@@ -4296,6 +4369,9 @@ class GivexDriver:
                 return "vbv_3ds"
             if "error=vv" in current_url:
                 return "declined"
+            if self._detect_givex_submission_error_popup():
+                self._close_givex_submission_error_popup()
+                raise SubmissionErrorPopupDetected()
             if self.find_elements(SEL_UI_LOCK_SPINNER):
                 return "ui_busy"
         # After 3s with no spinner/state change → treat as stuck ui_lock

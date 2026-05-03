@@ -21,7 +21,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.common.exceptions import CDPError, InvalidTransitionError, SessionFlaggedError
+from modules.common.exceptions import (
+    CDPError,
+    InvalidTransitionError,
+    SessionFlaggedError,
+    SubmissionErrorPopupDetected,
+)
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
@@ -1647,6 +1652,13 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 "[trace=%s] FSM InvalidTransitionError after submit for worker=%s: %s",
                 _get_trace_id(), worker_id, _fsm_exc,
             )
+        except SubmissionErrorPopupDetected as _popup_exc:
+            _logger.info(
+                "[trace=%s] GIVEX_SUBMISSION_ERROR_POPUP worker=%s reason=%s; "
+                "mapping to declined retry path",
+                _get_trace_id(), worker_id, _popup_exc.reason,
+            )
+            fsm.transition_for_worker(worker_id, "declined")
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
                 "[trace=%s] detect_page_state failed after submit for worker=%s — "
