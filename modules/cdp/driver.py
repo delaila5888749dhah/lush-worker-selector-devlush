@@ -4240,7 +4240,6 @@ class GivexDriver:
             return ""
 
     def _safe_detect_non_popup_state(self) -> str | None:
-        """Snapshot classifier used only by the post-submit outcome resolver."""
         try:
             url = self._safe_current_url()
             if any(frag in url for frag in URL_CONFIRM_FRAGMENTS):
