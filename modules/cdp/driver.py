@@ -4279,11 +4279,7 @@ class GivexDriver:
                 text = (getattr(element, "text", "") or "").lower()
             except Exception:
                 continue
-            if (
-                "something went wrong" in text
-                and "submission" in text
-                and "try again" in text
-            ):
+            if "something went wrong" in text and "submission" in text and "try again" in text:
                 return True
         return False
 
@@ -4297,14 +4293,11 @@ class GivexDriver:
 
     def _press_escape_for_popup(self) -> None:
         try:
-            self._driver.execute_cdp_cmd(
-                "Input.dispatchKeyEvent",
-                {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
-            )
-            self._driver.execute_cdp_cmd(
-                "Input.dispatchKeyEvent",
-                {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
-            )
+            for event_type in ("keyDown", "keyUp"):
+                self._driver.execute_cdp_cmd(
+                    "Input.dispatchKeyEvent",
+                    {"type": event_type, "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
+                )
             return
         except Exception as exc:
             _log.debug("GIVEX_FANCYBOX_CLOSE escape CDP failed: %s", _sanitize_error(str(exc)))

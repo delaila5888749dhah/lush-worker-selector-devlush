@@ -1702,10 +1702,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             isinstance(exc, PageStateError)
             and exc.detected == "givex_fancybox_submission_error_close_failed"
         ):
-            _logger.error(
-                "[trace=%s] worker=%s GIVEX_POPUP close failure aborted payment step",
-                _get_trace_id(), worker_id,
-            )
+            _logger.error("[trace=%s] worker=%s GIVEX_POPUP close failure", _get_trace_id(), worker_id)
             watchdog.reset_session(worker_id)
             raise
         try:
@@ -1778,10 +1775,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             )
         except PageStateError as _page_exc:
             if _page_exc.detected == "givex_fancybox_submission_error_close_failed":
-                _logger.error(
-                    "[trace=%s] worker=%s GIVEX_POPUP fallback close failure aborted",
-                    _get_trace_id(), worker_id,
-                )
+                _logger.error("[trace=%s] worker=%s GIVEX_POPUP fallback close failure", _get_trace_id(), worker_id)
                 watchdog.reset_session(worker_id)
                 raise
             _logger.warning(

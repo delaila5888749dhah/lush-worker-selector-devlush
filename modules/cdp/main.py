@@ -115,19 +115,10 @@ def detect_page_state(worker_id: str) -> str:
 def wait_for_post_submit_outcome(worker_id: str, timeout: float = 15.0) -> str:
     """Resolve post-submit outcome via the registered driver.
 
-    Args:
-        worker_id: Unique identifier for the worker whose driver to use.
-        timeout: Maximum seconds to wait for a decisive post-submit state.
-
-    Returns:
-        The resolved post-submit outcome as a string.
-
-    Raises:
-        RuntimeError: if no driver has been registered for the given worker_id.
-        SelectorTimeoutError: if the driver cannot locate a required element
-            within the allowed timeout (propagated from the driver).
-        PageStateError: if the driver detects an unrecoverable page-state
-            condition such as a Givex submission-error popup close failure.
+    Args: worker_id identifies the registered driver; timeout bounds wait seconds.
+    Returns: Resolved outcome string.
+    Raises: RuntimeError for missing driver; SelectorTimeoutError and PageStateError
+        propagate from the driver, including Givex popup close-failure states.
     """
     return _get_driver(worker_id).wait_for_post_submit_outcome(timeout=timeout)
 
