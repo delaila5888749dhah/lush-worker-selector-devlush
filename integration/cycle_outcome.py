@@ -11,9 +11,9 @@ class CycleDidNotCompleteError(RuntimeError):
     """Raised when ``run_cycle()`` returned a non-complete action.
 
     Used to signal to :func:`integration.runtime._worker_fn` that a
-    cycle did not complete successfully (e.g. ``failure``,
-    ``abort_cycle``, ``await_3ds``, ``retry``) so the runtime accounts
-    the cycle as an error rather than a success.
+    cycle did not complete successfully (e.g. ``abort_cycle``,
+    ``await_3ds``, ``retry``, ``retry_new_card``) so the runtime
+    accounts the cycle as an error rather than a success.
     """
 
     def __init__(self, action: str, reason: str = ""):

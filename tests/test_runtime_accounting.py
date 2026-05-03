@@ -1,8 +1,8 @@
 """P0 — runtime accounting must not contaminate success_count.
 
-When ``run_cycle()`` returns a non-complete action (``failure``,
-``abort_cycle``, ``await_3ds``, ``retry``, etc.) the runtime must
-record the cycle as an error — not a success.
+When ``run_cycle()`` returns a non-complete action (``abort_cycle``,
+``await_3ds``, ``retry``, ``retry_new_card``) the runtime must record
+the cycle as an error — not a success.
 
 These tests target the contract directly:
 
@@ -10,8 +10,12 @@ These tests target the contract directly:
     :class:`CycleDidNotCompleteError` on any non-complete action
     (including tuple-form actions like ``("retry_new_card", ...)``).
   * ``integration.runtime._worker_fn`` translates that exception into
-    ``monitor.record_error`` + ``autoscaler.record_failure``, never
-    ``record_success``.
+    ``monitor.record_error``, does not call ``monitor.record_success``,
+    and does not call ``autoscaler.record_failure`` again because
+    ``run_cycle()`` already accounted the autoscaler outcome for
+    non-complete actions. The branch also does not increment
+    ``_pending_restarts`` because this is an expected per-cycle
+    outcome, not a worker crash.
 
 See issue: P0 success_count contamination on non-complete cycles.
 """
@@ -225,6 +229,21 @@ class TestRuntimeAccounting(unittest.TestCase):
             runtime._consecutive_billing_failures = 1
         self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
         self.assertEqual(runtime._consecutive_billing_failures, 0)
+
+    def test_non_complete_does_not_increment_pending_restarts(self):
+        """CycleDidNotCompleteError is an expected per-cycle outcome — NOT a
+        crash — so it must NOT increment _pending_restarts. This locks down
+        the lifecycle distinction from CycleExhaustedError / generic Exception
+        handlers, which DO increment _pending_restarts."""
+        from integration import runtime
+
+        with runtime._lock:
+            runtime._pending_restarts = 0
+
+        self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
+
+        with runtime._lock:
+            self.assertEqual(runtime._pending_restarts, 0)
 
     def test_real_path_no_double_count(self):
         """End-to-end: worker_task → run_cycle → runtime must increment

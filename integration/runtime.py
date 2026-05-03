@@ -287,8 +287,8 @@ def _worker_fn(worker_id, task_fn, persona):
                 _log_event(worker_id, "error", "billing_failure", err_data)
                 break
             except CycleDidNotCompleteError as exc:
-                # P0: run_cycle() returned a non-complete action (failure,
-                # abort_cycle, await_3ds, retry, ...). Record as error so
+                # P0: run_cycle() returned a non-complete action (abort_cycle,
+                # await_3ds, retry, retry_new_card). Record as error so
                 # success_count is not contaminated, but keep the worker
                 # alive — this is an expected per-cycle outcome, not a crash.
                 persona_type_tag = persona.persona_type if persona is not None else None
