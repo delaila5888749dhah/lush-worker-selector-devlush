@@ -24,7 +24,8 @@ from modules.delay.persona import PersonaProfile
 from modules.billing import main as billing
 from modules.cdp import main as cdp
 from modules.cdp.proxy import get_default_pool
-from modules.common.exceptions import CycleDidNotCompleteError, CycleExhaustedError
+from modules.common.exceptions import CycleExhaustedError
+from integration.cycle_outcome import CycleDidNotCompleteError
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error  # INV-PII-UNIFIED-01
 from modules.common.thresholds import ERROR_RATE_THRESHOLD, MAX_RESTARTS_PER_HOUR
 _logger = logging.getLogger(__name__)
@@ -295,7 +296,12 @@ def _worker_fn(worker_id, task_fn, persona):
                     monitor.record_error(persona_type=persona_type_tag)
                 except Exception:
                     _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
-                get_autoscaler().record_failure(worker_id)
+                # run_cycle() already accounted autoscaler failure for non-complete
+                # outcomes — do NOT double-count here.
+                # Non-complete cycle is not a billing failure — it breaks the
+                # billing circuit-breaker consecutive streak.
+                with _lock:
+                    _consecutive_billing_failures = 0
                 err_data: dict = {"error": _sanitize_error(exc), "action": exc.action}
                 if persona_type_tag is not None:
                     err_data["persona_type"] = persona_type_tag
