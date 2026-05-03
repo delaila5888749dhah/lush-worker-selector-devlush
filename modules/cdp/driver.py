@@ -729,10 +729,7 @@ SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
 _GIVEX_FANCYBOX_SELECTORS = (".fancybox-wrap.fancybox-opened", ".fancybox-wrap.fancybox-type-html")
-_GIVEX_FANCYBOX_CLOSE_SELECTORS = (
-    ".fancybox-wrap.fancybox-opened .fancybox-item.fancybox-close",
-    ".fancybox-opened .fancybox-close", "a.fancybox-close", ".fancybox-close",
-)
+_GIVEX_FANCYBOX_CLOSE_SELECTORS = (".fancybox-wrap.fancybox-opened .fancybox-item.fancybox-close", ".fancybox-opened .fancybox-close", "a.fancybox-close", ".fancybox-close")
 # VBV/3DS cancel button selectors in priority order (Phase 4 audit [D6]).
 # Evaluated one-by-one via :meth:`GivexDriver._find_vbv_cancel_button`; first
 # match wins so higher-priority selectors (explicit Cancel / Return-to-Merchant)
@@ -4291,10 +4288,7 @@ class GivexDriver:
     def _press_escape_for_popup(self) -> None:
         try:
             for event_type in ("keyDown", "keyUp"):
-                self._driver.execute_cdp_cmd(
-                    "Input.dispatchKeyEvent",
-                    {"type": event_type, "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
-                )
+                self._driver.execute_cdp_cmd("Input.dispatchKeyEvent", {"type": event_type, "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
             return
         except Exception as exc:
             _log.debug("GIVEX_FANCYBOX_CLOSE escape CDP failed: %s", _sanitize_error(str(exc)))
@@ -4313,20 +4307,15 @@ class GivexDriver:
                 _log.info("GIVEX_FANCYBOX_CLOSE click attempted")
             except Exception:
                 continue
-            if self._popup_gone_within(
-                max(0.0, min(0.8, deadline - time.monotonic()))
-            ):
+            if self._popup_gone_within(max(0.0, min(0.8, deadline - time.monotonic()))):
                 return True
         if time.monotonic() < deadline:
             self._press_escape_for_popup()
             _log.info("GIVEX_FANCYBOX_CLOSE escape attempted")
-            return self._popup_gone_within(
-                max(0.0, min(0.8, deadline - time.monotonic()))
-            )
+            return self._popup_gone_within(max(0.0, min(0.8, deadline - time.monotonic())))
         return False
 
     def wait_for_post_submit_outcome(self, timeout: float = 15.0) -> str:
-        """Resolve post-submit outcome via bounded race within a shared deadline."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self._safe_detect_non_popup_state()

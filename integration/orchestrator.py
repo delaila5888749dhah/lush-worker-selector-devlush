@@ -1626,7 +1626,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         try:
             _page_state = cdp.wait_for_post_submit_outcome(worker_id)
             if _page_state == "submission_error_popup":
-                _logger.info("[trace=%s] worker=%s GIVEX_POPUP_RECOVERED; technical retry path", _get_trace_id(), worker_id)
+                _logger.info(
+                    "[trace=%s] worker=%s GIVEX_POPUP_RECOVERED; technical retry path",
+                    _get_trace_id(), worker_id,
+                )
                 state = fsm.transition_for_worker(worker_id, "ui_lock")
                 watchdog.reset_session(worker_id)
                 return state, None
@@ -1691,7 +1694,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             total = None
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
-        if isinstance(exc, PageStateError) and exc.detected == "givex_fancybox_submission_error_close_failed":
+        if (
+            isinstance(exc, PageStateError)
+            and exc.detected == "givex_fancybox_submission_error_close_failed"
+        ):
             _logger.error("[trace=%s] worker=%s GIVEX_POPUP close failure: aborting", _get_trace_id(), worker_id)
             watchdog.reset_session(worker_id)
             raise
@@ -1755,11 +1761,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             elif _page_state in _FSM_STATES:
                 state = fsm.transition_for_worker(worker_id, _page_state)
             else:
-                _logger.warning(
-                    "[trace=%s] FSM fallback state=%s is non-FSM for worker=%s — "
-                    "returning state=None; handle_outcome will retry.",
-                    _get_trace_id(), _page_state, worker_id,
-                )
+                _logger.warning("[trace=%s] FSM fallback state=%s is non-FSM for worker=%s — returning state=None; handle_outcome will retry.", _get_trace_id(), _page_state, worker_id)
         except InvalidTransitionError as _fsm_exc:
             _logger.warning(
                 "[trace=%s] FSM fallback InvalidTransitionError for worker=%s: %s",
