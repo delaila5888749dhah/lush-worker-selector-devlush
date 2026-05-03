@@ -89,10 +89,14 @@ _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 _GIVEX_CART_STATE_POLL_DEFAULT_S = 18.0
 _GIVEX_FANCYBOX_CLICK_ATTEMPTS = 1  # bounded: 4 selectors + Escape at 0.8s each
 _GIVEX_FANCYBOX_CLOSE_VERIFY_S = 0.8
-_GIVEX_SUBMISSION_ERROR = "givex_fancybox_submission_error"
-_GIVEX_SUBMISSION_ERROR_CLOSE_FAILED = "givex_fancybox_submission_error_close_failed"
+_GIVEX_POPUP_ERROR = "givex_fancybox_submission_error"
+_GIVEX_POPUP_CLOSE_FAILED = "givex_fancybox_submission_error_close_failed"
 
 _log = logging.getLogger(__name__)
+
+
+def _givex_submission_popup_error(closed: bool) -> PageStateError:
+    return PageStateError(_GIVEX_POPUP_ERROR if closed else _GIVEX_POPUP_CLOSE_FAILED)
 
 
 def _sanitize_url_for_log(url: str) -> str:
@@ -2381,10 +2385,7 @@ class GivexDriver:
                 closed = self._close_givex_submission_error_popup()
                 if closed and expected_fragment in self._driver.current_url:
                     return
-                raise PageStateError(
-                    _GIVEX_SUBMISSION_ERROR if closed
-                    else _GIVEX_SUBMISSION_ERROR_CLOSE_FAILED
-                )
+                raise _givex_submission_popup_error(closed)
             time.sleep(0.5)
         raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
 
@@ -4363,10 +4364,7 @@ class GivexDriver:
                 state = self._detect_non_popup_page_state()
                 if state is not None:
                     return state
-            raise PageStateError(
-                _GIVEX_SUBMISSION_ERROR if closed
-                else _GIVEX_SUBMISSION_ERROR_CLOSE_FAILED
-            )
+            raise _givex_submission_popup_error(closed)
 
         # 4 — ui_busy (spinner visible means active loading, not a stuck UI)
         if self.find_elements(SEL_UI_LOCK_SPINNER):
@@ -4385,10 +4383,7 @@ class GivexDriver:
                     state = self._detect_non_popup_page_state()
                     if state is not None:
                         return state
-                raise PageStateError(
-                    _GIVEX_SUBMISSION_ERROR if closed
-                    else _GIVEX_SUBMISSION_ERROR_CLOSE_FAILED
-                )
+                raise _givex_submission_popup_error(closed)
             if self.find_elements(SEL_UI_LOCK_SPINNER):
                 return "ui_busy"
         # After 3s with no spinner/state change → treat as stuck ui_lock
