@@ -341,6 +341,22 @@ class RunPaymentStepTests(unittest.TestCase):
         mock_watchdog.reset_session.assert_called_once_with("default")
         store.mark_unconfirmed.assert_not_called()
 
+    def test_fallback_non_close_pagestateerror_resets_and_propagates(self):
+        exc = PageStateError("unexpected_state")
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator.cdp") as mock_cdp,
+            patch("integration.orchestrator.watchdog") as mock_watchdog,
+            patch("integration.orchestrator.fsm") as mock_fsm,
+        ):
+            mock_billing.select_profile.return_value = MagicMock()
+            mock_watchdog.wait_for_total.return_value = 49.99
+            mock_cdp.wait_for_post_submit_outcome.side_effect = [RuntimeError("transient"), exc]
+            mock_fsm.get_current_state_for_worker.return_value = None
+            with self.assertRaises(PageStateError):
+                run_payment_step(_make_task())
+        mock_watchdog.reset_session.assert_called_once_with("default")
+
     def test_real_declined_outcome_returns_declined_state_for_decline_path(self):
         with (
             patch("integration.orchestrator.billing") as mock_billing,

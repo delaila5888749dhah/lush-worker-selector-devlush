@@ -1775,12 +1775,13 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         except PageStateError as _page_exc:
             if _page_exc.detected == "givex_fancybox_submission_error_close_failed":
                 _logger.error("[trace=%s] worker=%s GIVEX_POPUP fallback close failure", _get_trace_id(), worker_id)
-                watchdog.reset_session(worker_id)
-                raise
-            _logger.warning(
-                "[trace=%s] FSM fallback PageStateError for worker=%s reason=%s",
-                _get_trace_id(), worker_id, _page_exc.detected,
-            )
+            else:
+                _logger.warning(
+                    "[trace=%s] FSM fallback PageStateError for worker=%s reason=%s",
+                    _get_trace_id(), worker_id, _page_exc.detected,
+                )
+            watchdog.reset_session(worker_id)
+            raise
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
                 "[trace=%s] FSM fallback wait_for_post_submit_outcome failed for worker=%s — "
