@@ -101,6 +101,8 @@ class TestTaskFnNormalization(unittest.TestCase):
     def test_unknown_action_fails_loud(self):
         with self.assertRaises(ValueError) as cm:
             self._run_with_action("completed")
+        # Do not echo invalid action tokens; keep malformed contract errors
+        # free of arbitrary runtime data.
         self.assertEqual(str(cm.exception), "unknown run_cycle action token")
 
     def test_malformed_action_type_fails_loud(self):

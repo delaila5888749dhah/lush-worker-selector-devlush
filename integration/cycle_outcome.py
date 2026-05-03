@@ -32,6 +32,8 @@ KNOWN_RUN_CYCLE_ACTIONS = frozenset({
     "retry_new_card",
 })
 
+KNOWN_RUN_CYCLE_TUPLE_ACTIONS = frozenset({"retry_new_card"})
+
 
 def normalize_action(action) -> str:
     """Return canonical action token; fail loud on malformed action values.
@@ -47,7 +49,7 @@ def normalize_action(action) -> str:
         if not action or not isinstance(action[0], str):
             raise ValueError("malformed run_cycle action tuple")
         token = action[0]
-        if token != "retry_new_card":
+        if token not in KNOWN_RUN_CYCLE_TUPLE_ACTIONS:
             raise ValueError("malformed run_cycle tuple action")
     elif isinstance(action, str):
         token = action
