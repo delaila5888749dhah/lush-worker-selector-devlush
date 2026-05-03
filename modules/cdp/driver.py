@@ -2657,7 +2657,6 @@ class GivexDriver:
                         return
                     try:
                         _find_matching_option_index(selector, target_value, options)
-                        last_target_present = True
                         return
                     except ValueError:
                         last_target_present = False
@@ -2670,7 +2669,7 @@ class GivexDriver:
 
         raise SelectorTimeoutError(
             selector,
-            int(timeout),
+            timeout,
             reason=(
                 f"select options did not reach {min_options} "
                 f"or target_value not present; last_count={last_count}, "

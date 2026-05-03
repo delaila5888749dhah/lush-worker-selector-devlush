@@ -255,6 +255,7 @@ class TestRound6ASelectorsAndSelects(unittest.TestCase):
             gd._wait_for_select_options(
                 SEL_BILLING_STATE, min_options=2, timeout=0.01, target_value="ON"
             )
+        self.assertEqual(ctx.exception.timeout, 0.01)
         self.assertIn("last_count=1", ctx.exception.reason)
         self.assertIn("target_value_present=False", ctx.exception.reason)
 
