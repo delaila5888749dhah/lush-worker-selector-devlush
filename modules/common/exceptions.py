@@ -6,6 +6,24 @@ class CycleExhaustedError(Exception):
     pass
 
 
+class CycleDidNotCompleteError(RuntimeError):
+    """Raised when run_cycle() returned a non-complete action.
+
+    Used by ``integration.worker_task.task_fn`` to signal to
+    ``integration.runtime._worker_fn`` that a cycle did not complete
+    successfully (e.g. ``failure``, ``abort_cycle``, ``await_3ds``,
+    ``retry``) so the runtime accounts the cycle as an error rather
+    than a success.
+    """
+
+    def __init__(self, action: str, reason: str = ""):
+        self.action = action
+        self.reason = reason
+        super().__init__(
+            f"cycle did not complete: action={action} reason={reason}"
+        )
+
+
 class InvalidStateError(Exception):
     pass
 
