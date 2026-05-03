@@ -1,5 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv()
 """Production entrypoint for lush-worker-selector.
 
 Start with:
@@ -13,6 +11,11 @@ starts with a no-op stub task_fn so this code can merge and coexist with
 existing deployments without forcing an immediate cutover.  Set the flag
 to ``1`` / ``true`` / ``yes`` to activate the production browser lifecycle.
 """
+# Load .env BEFORE any project imports so module-level os.environ reads
+# (e.g. modules.delay.config) see operator overrides.
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv()  # noqa: E402
+
 import atexit
 import logging
 import os
