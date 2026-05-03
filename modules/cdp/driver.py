@@ -443,7 +443,7 @@ _SELECTOR_NAMES = dict(
 
 
 def _selector_name(sel: str) -> str:
-    return _SELECTOR_NAMES.get(sel, "UNKNOWN_SELECTOR")
+    return _SELECTOR_NAMES.get(sel, str(sel))
 
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
 SEL_CARD_NAME         = "#cws_txt_ccName"
@@ -468,8 +468,6 @@ _SELECTOR_NAMES.update({
     SEL_BILLING_CITY: "SEL_BILLING_CITY",
     SEL_BILLING_ZIP: "SEL_BILLING_ZIP",
     SEL_BILLING_PHONE: "SEL_BILLING_PHONE",
-    SEL_BILLING_COUNTRY: "SEL_BILLING_COUNTRY",
-    SEL_BILLING_STATE: "SEL_BILLING_STATE",
 })
 # Visible Order Total element verified against the captured watchdog/preflight
 # total in :meth:`GivexDriver.submit_purchase` right before clicking COMPLETE
@@ -639,16 +637,22 @@ def _find_matching_option_index(
 ) -> int:
     requested_text = "" if requested is None else str(requested)
     option_pairs = [_option_value_text(option) for option in options]
+    is_expiry_month = _is_expiry_month_selector(selector)
+    requested_month_for_conflict = (
+        _month_option_key(requested_text) if is_expiry_month else None
+    )
 
     for idx, (value, text) in enumerate(option_pairs):
         if value == requested_text or text.strip() == requested_text:
+            if (
+                is_expiry_month
+                and requested_month_for_conflict is not None
+                and _has_conflicting_month_name(value, text, requested_month_for_conflict)
+            ):
+                continue
             return idx
 
     if (requested_numeric := _numeric_option_key(requested_text)) is not None:
-        is_expiry_month = _is_expiry_month_selector(selector)
-        requested_month_for_conflict = (
-            _month_option_key(requested_text) if is_expiry_month else None
-        )
         for idx, (value, text) in enumerate(option_pairs):
             if requested_numeric in (_numeric_option_key(value), _numeric_option_key(text)):
                 if (
@@ -2593,12 +2597,6 @@ class GivexDriver:
                 # SelectorTimeoutError if persistent.
                 _log.debug(
                     "_wait_for_select_options: transient poll error selector=%s error_type=%s",
-                    _selector_name(selector),
-                    type(exc).__name__,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                _log.debug(
-                    "_wait_for_select_options: poll failed selector=%s error_type=%s",
                     _selector_name(selector),
                     type(exc).__name__,
                 )

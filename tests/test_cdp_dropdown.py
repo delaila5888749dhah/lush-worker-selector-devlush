@@ -276,6 +276,19 @@ class TestCdpSelectOption(unittest.TestCase):
 
         self.assertIn("target_found=False", str(ctx.exception))
 
+    def test_wait_for_select_options_unexpected_error_propagates(self):
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = RuntimeError("driver bug")
+        gd = GivexDriver(selenium, strict=False)
+
+        with self.assertRaises(RuntimeError):
+            gd._wait_for_select_options("#province", min_options=2, timeout=1.0)
+
+    def test_selector_name_falls_back_to_raw_selector(self):
+        self.assertEqual(drv._selector_name("#unknown_select"), "#unknown_select")
+        self.assertNotIn(drv.SEL_BILLING_COUNTRY, drv._SELECTOR_NAMES)
+        self.assertNotIn(drv.SEL_BILLING_STATE, drv._SELECTOR_NAMES)
+
     def test_dropdown_aborts_when_arrow_dispatch_fails(self):
         """Audit [F1]: a failed ``dispatch_key`` MUST stop the navigation
         loop and surface the error — silently continuing then sending
@@ -527,6 +540,30 @@ class TestFlexibleOptionMatching(unittest.TestCase):
             drv.SEL_CARD_EXPIRY_MONTH,
             "04",
             [{"value": "4", "text": "April"}],
+        )
+        self.assertEqual(idx, 0)
+
+    def test_month_exact_value_does_not_override_disagreeing_name_text(self):
+        with self.assertRaises(ValueError):
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "04",
+                [{"value": "04", "text": "May"}],
+            )
+
+    def test_month_exact_text_does_not_override_disagreeing_name_value(self):
+        with self.assertRaises(ValueError):
+            drv._find_matching_option_index(
+                drv.SEL_CARD_EXPIRY_MONTH,
+                "04",
+                [{"value": "May", "text": "04"}],
+            )
+
+    def test_month_exact_value_with_matching_name_still_matches(self):
+        idx = drv._find_matching_option_index(
+            drv.SEL_CARD_EXPIRY_MONTH,
+            "04",
+            [{"value": "04", "text": "April"}],
         )
         self.assertEqual(idx, 0)
 
