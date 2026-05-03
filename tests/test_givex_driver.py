@@ -55,6 +55,7 @@ from modules.cdp.driver import (
     SEL_SENDER_NAME,
     SEL_UI_LOCK_SPINNER,
     SEL_VBV_IFRAME,
+    SubmissionErrorPopupDetected,
     URL_BASE,
     URL_CART,
     URL_CHECKOUT,
@@ -64,11 +65,11 @@ from modules.cdp.driver import (
     URL_PAYMENT,
 )
 from modules.common.exceptions import (
+    CDPError,
     CDPClickError,
     PageStateError,
     SelectorTimeoutError,
     SessionFlaggedError,
-    SubmissionErrorPopupDetected,
 )
 from modules.common.types import BillingProfile, CardInfo, WorkerTask
 
@@ -372,6 +373,29 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
 
         self.assertIn("popup persisted", "\n".join(logs.output))
 
+    def test_close_respects_total_budget_when_popup_persists(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        now = {"value": 0.0}
+        waits = []
+
+        def _monotonic():
+            return now["value"]
+
+        def _wait_closed(*, max_wait=drv._GIVEX_FANCYBOX_CLOSE_VERIFY_S):
+            waits.append(max_wait)
+            now["value"] += max_wait
+            return False
+
+        with patch("modules.cdp.driver.time.monotonic", side_effect=_monotonic), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_wait_for_givex_fancybox_closed", side_effect=_wait_closed), \
+             patch("modules.cdp.driver._dispatch_key", return_value=True):
+            self.assertFalse(gd._close_givex_submission_error_popup())
+
+        self.assertLessEqual(sum(waits), drv._GIVEX_FANCYBOX_CLOSE_TOTAL_BUDGET_S)
+        self.assertTrue(all(wait <= drv._GIVEX_FANCYBOX_CLOSE_VERIFY_S for wait in waits))
+
     def test_post_submit_wait_detects_popup_and_raises_retryable(self):
         selenium = _make_driver(current_url="https://example.com/payment.html")
         gd = GivexDriver(selenium)
@@ -429,6 +453,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         profile = _make_billing()
         fake_store = MagicMock()
         fake_driver = MagicMock()
+        wait_total = MagicMock(return_value=50)
         orch.initialize_cycle(worker_id)
         try:
             with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
@@ -441,7 +466,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
                  patch.object(orch, "_emit_billing_audit_event"), \
                  patch.object(orch.watchdog, "enable_network_monitor"), \
                  patch.object(orch.watchdog, "reset_session"), \
-                 patch.object(orch.watchdog, "wait_for_total", side_effect=[50, 50]):
+                 patch.object(orch.watchdog, "wait_for_total", wait_total):
                 state, _total = orch.run_payment_step(
                     task, worker_id=worker_id, _profile=profile,
                 )
@@ -449,6 +474,41 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
             fsm.cleanup_worker(worker_id)
 
         self.assertEqual(state.name, "declined")
+        self.assertEqual(wait_total.call_count, 1)
+        fake_store.mark_unconfirmed.assert_not_called()
+
+    def test_submission_error_popup_close_failure_aborts_before_card_swap(self):
+        from integration import orchestrator as orch
+        from modules.fsm import main as fsm
+
+        worker_id = "popup-close-failed"
+        task = _make_task()
+        profile = _make_billing()
+        fake_store = MagicMock()
+        fake_driver = MagicMock()
+        wait_total = MagicMock(return_value=50)
+        orch.initialize_cycle(worker_id)
+        try:
+            with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
+                 patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
+                 patch.object(orch.cdp, "_get_driver", return_value=fake_driver), \
+                 patch.object(orch.cdp, "detect_page_state",
+                              side_effect=SubmissionErrorPopupDetected(popup_closed=False)), \
+                 patch.object(orch, "_setup_network_total_listener"), \
+                 patch.object(orch, "_notify_total_from_dom"), \
+                 patch.object(orch, "_emit_billing_audit_event"), \
+                 patch.object(orch.watchdog, "enable_network_monitor"), \
+                 patch.object(orch.watchdog, "reset_session"), \
+                 patch.object(orch.watchdog, "wait_for_total", wait_total):
+                with self.assertRaises(CDPError):
+                    orch.run_payment_step(
+                        task, worker_id=worker_id, _profile=profile,
+                    )
+        finally:
+            fsm.cleanup_worker(worker_id)
+
+        self.assertEqual(wait_total.call_count, 1)
+        fake_store.mark_unconfirmed.assert_not_called()
 
 
 class TestFindElements(unittest.TestCase):

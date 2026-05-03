@@ -61,7 +61,6 @@ from modules.common.exceptions import (
     PageStateError,
     SelectorTimeoutError,
     SessionFlaggedError,
-    SubmissionErrorPopupDetected,
 )
 from modules.common.sanitize import sanitize_error as _sanitize_error  # INV-PII-UNIFIED-01
 
@@ -89,9 +88,24 @@ except ImportError:
 _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 _GIVEX_CART_STATE_POLL_DEFAULT_S = 18.0
 _GIVEX_FANCYBOX_CLICK_ATTEMPTS = 2
-_GIVEX_FANCYBOX_CLOSE_VERIFY_S = 3.0
+_GIVEX_FANCYBOX_CLOSE_VERIFY_S = 0.8
+_GIVEX_FANCYBOX_CLOSE_TOTAL_BUDGET_S = 4.0
 
 _log = logging.getLogger(__name__)
+
+
+class SubmissionErrorPopupDetected(Exception):
+    """Internal signal for the Givex Fancybox submission-error popup."""
+
+    def __init__(
+        self,
+        reason: str = "givex_fancybox_submission_error",
+        *,
+        popup_closed: bool = True,
+    ):
+        super().__init__(reason)
+        self.reason = reason
+        self.popup_closed = popup_closed
 
 
 def _sanitize_url_for_log(url: str) -> str:
@@ -2376,8 +2390,8 @@ class GivexDriver:
                 )
                 return
             if self._detect_givex_submission_error_popup():
-                self._close_givex_submission_error_popup()
-                raise SubmissionErrorPopupDetected()
+                closed = self._close_givex_submission_error_popup()
+                raise SubmissionErrorPopupDetected(popup_closed=closed)
             time.sleep(0.5)
         raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
 
@@ -2419,7 +2433,7 @@ class GivexDriver:
         while time.monotonic() < deadline:
             if not self._is_givex_fancybox_open():
                 return True
-            time.sleep(0.2)
+            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
         return not self._is_givex_fancybox_open()
 
     def _close_givex_submission_error_popup(self) -> bool:
@@ -2430,8 +2444,13 @@ class GivexDriver:
             ".fancybox-close",
             ".fancybox-item.fancybox-close",
         )
+        deadline = time.monotonic() + _GIVEX_FANCYBOX_CLOSE_TOTAL_BUDGET_S
         for selector_index, selector in enumerate(selectors):
+            if time.monotonic() >= deadline:
+                break
             for attempt in range(_GIVEX_FANCYBOX_CLICK_ATTEMPTS):
+                if time.monotonic() >= deadline:
+                    break
                 try:
                     self.bounding_box_click(selector)
                 except Exception:  # pylint: disable=broad-except
@@ -2440,13 +2459,22 @@ class GivexDriver:
                         selector_index, attempt + 1,
                     )
                     continue
-                if self._wait_for_givex_fancybox_closed():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if self._wait_for_givex_fancybox_closed(
+                    max_wait=min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, remaining),
+                ):
                     _log.info("GIVEX_FANCYBOX_CLOSE dismissed via click")
                     return True
                 _log.debug(
                     "GIVEX_FANCYBOX_CLOSE persisted after click selector_index=%d attempt=%d",
                     selector_index, attempt + 1,
         )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _log.warning("GIVEX_FANCYBOX_CLOSE close budget exhausted before Escape")
+            return False
         _log.warning("GIVEX_FANCYBOX_CLOSE click retries failed; dispatching Escape")
         try:
             if _dispatch_key is None:
@@ -2458,7 +2486,10 @@ class GivexDriver:
                 "GIVEX_FANCYBOX_CLOSE Escape dispatch exception_type=%s",
                 type(exc).__name__,
             )
-        if self._wait_for_givex_fancybox_closed():
+        remaining = deadline - time.monotonic()
+        if remaining > 0 and self._wait_for_givex_fancybox_closed(
+            max_wait=min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, remaining),
+        ):
             _log.info("GIVEX_FANCYBOX_CLOSE dismissed via Escape")
             return True
         _log.warning("GIVEX_FANCYBOX_CLOSE popup persisted after click and Escape")
@@ -4372,8 +4403,8 @@ class GivexDriver:
         if "declined" in page_text or "transaction failed" in page_text:
             return "declined"
         if self._detect_givex_submission_error_popup():
-            self._close_givex_submission_error_popup()
-            raise SubmissionErrorPopupDetected()
+            closed = self._close_givex_submission_error_popup()
+            raise SubmissionErrorPopupDetected(popup_closed=closed)
 
         # 4 — ui_busy (spinner visible means active loading, not a stuck UI)
         if self.find_elements(SEL_UI_LOCK_SPINNER):
@@ -4391,8 +4422,8 @@ class GivexDriver:
             if "error=vv" in current_url:
                 return "declined"
             if self._detect_givex_submission_error_popup():
-                self._close_givex_submission_error_popup()
-                raise SubmissionErrorPopupDetected()
+                closed = self._close_givex_submission_error_popup()
+                raise SubmissionErrorPopupDetected(popup_closed=closed)
             if self.find_elements(SEL_UI_LOCK_SPINNER):
                 return "ui_busy"
         # After 3s with no spinner/state change → treat as stuck ui_lock

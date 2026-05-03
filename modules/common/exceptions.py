@@ -47,14 +47,6 @@ class PageStateError(SessionFlaggedError):
         )
 
 
-class SubmissionErrorPopupDetected(Exception):
-    """Givex Fancybox submission-error popup detected after submit."""
-
-    def __init__(self, reason: str = "givex_fancybox_submission_error"):
-        super().__init__(reason)
-        self.reason = reason
-
-
 class CDPError(Exception):
     """Raised when a CDP operation fails in a way that must abort the cycle.
 
