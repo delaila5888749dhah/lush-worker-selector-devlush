@@ -304,7 +304,12 @@ def _worker_fn(worker_id, task_fn, persona):
                 with _lock:
                     _restart_delay = 0
                     _consecutive_billing_failures = 0
-                err_data: dict = {"error": _sanitize_error(exc), "action": exc.action}
+                err_data: dict = {
+                    "error_type": "CycleDidNotCompleteError",
+                    "action": exc.action,
+                }
+                if getattr(exc, "reason", ""):
+                    err_data["reason_present"] = True
                 if persona_type_tag is not None:
                     err_data["persona_type"] = persona_type_tag
                     err_data["persona_seed"] = persona._seed

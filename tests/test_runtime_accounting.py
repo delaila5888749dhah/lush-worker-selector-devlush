@@ -78,6 +78,13 @@ class TestTaskFnNormalization(unittest.TestCase):
     def test_normalize_accepts_complete_action(self):
         self.assertEqual(normalize_action("complete"), "complete")
 
+    def test_cycle_did_not_complete_message_redacts_reason(self):
+        sensitive_reason = "card=4111111111111111 cvv=123"
+        exc = CycleDidNotCompleteError(action="retry", reason=sensitive_reason)
+        self.assertEqual(str(exc), "cycle did not complete: action=retry reason=<redacted>")
+        self.assertNotIn(sensitive_reason, str(exc))
+        self.assertEqual(exc.reason, sensitive_reason)
+
     def test_abort_cycle_action_raises(self):
         with self.assertRaises(CycleDidNotCompleteError) as cm:
             self._run_with_action("abort_cycle")
@@ -281,6 +288,29 @@ class TestRuntimeAccounting(unittest.TestCase):
 
         with runtime._lock:
             self.assertEqual(runtime._pending_restarts, 0)
+
+    def test_non_complete_log_payload_does_not_include_reason_text(self):
+        from integration import runtime
+
+        sensitive_reason = "card=4111111111111111 cvv=123"
+        events = []
+
+        def capture_log(*args):
+            events.append(args)
+
+        with patch.object(runtime, "_log_event", side_effect=capture_log):
+            self._run_one_cycle(
+                CycleDidNotCompleteError(action="abort_cycle", reason=sensitive_reason)
+            )
+
+        cycle_events = [event for event in events if len(event) >= 3 and event[2] == "cycle_not_complete"]
+        self.assertEqual(len(cycle_events), 1)
+        err_data = cycle_events[0][3]
+        self.assertEqual(err_data["error_type"], "CycleDidNotCompleteError")
+        self.assertEqual(err_data["action"], "abort_cycle")
+        self.assertIs(err_data["reason_present"], True)
+        self.assertNotIn("error", err_data)
+        self.assertNotIn(sensitive_reason, repr(err_data))
 
     def test_real_path_no_double_count(self):
         """End-to-end: worker_task → run_cycle → runtime must increment

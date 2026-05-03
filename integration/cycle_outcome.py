@@ -19,9 +19,10 @@ class CycleDidNotCompleteError(RuntimeError):
     def __init__(self, action: str, reason: str = ""):
         self.action = action
         self.reason = reason
-        super().__init__(
-            f"cycle did not complete: action={action} reason={reason}"
-        )
+        msg = f"cycle did not complete: action={action}"
+        if reason:
+            msg += " reason=<redacted>"
+        super().__init__(msg)
 
 
 KNOWN_RUN_CYCLE_ACTIONS = frozenset({
