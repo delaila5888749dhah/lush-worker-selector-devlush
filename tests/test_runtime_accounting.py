@@ -107,12 +107,17 @@ class TestTaskFnNormalization(unittest.TestCase):
 
     def test_malformed_action_type_fails_loud(self):
         class UnstringifiableAction:
+            stringified = False
+
             def __str__(self):
+                self.stringified = True
                 raise AssertionError("normalize_action must not stringify arbitrary objects")
 
+        action = UnstringifiableAction()
         with self.assertRaises(ValueError) as cm:
-            self._run_with_action(UnstringifiableAction())
+            self._run_with_action(action)
         self.assertEqual(str(cm.exception), "malformed run_cycle action type")
+        self.assertFalse(action.stringified)
 
 
 class TestRuntimeAccounting(unittest.TestCase):
