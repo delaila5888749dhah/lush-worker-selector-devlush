@@ -47,9 +47,11 @@ except ImportError:  # pragma: no cover - selenium always present in prod
 
 try:
     from modules.cdp.mouse import GhostCursor as _GhostCursor
+    from modules.cdp.keyboard import dispatch_key as _dispatch_key
     from modules.cdp.keyboard import type_value as _type_value
 except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always present
     _GhostCursor = None  # type: ignore[assignment,misc]
+    _dispatch_key = None  # type: ignore[assignment,misc]
     _type_value = None  # type: ignore[assignment,misc]
 
 from modules.common.exceptions import (
@@ -2433,11 +2435,14 @@ class GivexDriver:
                 if self._wait_for_givex_fancybox_closed():
                     _log.info("GIVEX_FANCYBOX_CLOSE dismissed via click")
                     return True
-                break
-        from modules.cdp.keyboard import dispatch_key  # local import: avoid module-level coupling
+                _log.debug(
+                    "GIVEX_FANCYBOX_CLOSE persisted after click selector_index=%d attempt=%d",
+                    selectors.index(selector), attempt + 1,
+                )
         _log.warning("GIVEX_FANCYBOX_CLOSE click retries failed; dispatching Escape")
         try:
-            dispatch_key(self._driver, "Escape")
+            if _dispatch_key is None or not _dispatch_key(self._driver, "Escape"):
+                _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed")
         except Exception:  # pylint: disable=broad-except
             _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed")
         if self._wait_for_givex_fancybox_closed():

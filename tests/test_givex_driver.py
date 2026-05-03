@@ -347,7 +347,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         gd = GivexDriver(selenium)
         with patch.object(gd, "bounding_box_click", side_effect=RuntimeError("click failed")), \
              patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=True), \
-             patch("modules.cdp.keyboard.dispatch_key", return_value=True) as dispatch, \
+             patch("modules.cdp.driver._dispatch_key", return_value=True) as dispatch, \
              self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
             self.assertTrue(gd._close_givex_submission_error_popup())
 
@@ -366,7 +366,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         gd = GivexDriver(selenium)
         with patch.object(gd, "bounding_box_click", side_effect=RuntimeError("click failed")), \
              patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=False), \
-             patch("modules.cdp.keyboard.dispatch_key", return_value=True), \
+             patch("modules.cdp.driver._dispatch_key", return_value=True), \
              self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
             self.assertFalse(gd._close_givex_submission_error_popup())
 
@@ -409,7 +409,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         pii_error = RuntimeError("#cws_card 4111111111111111 cvv=123 jane@example.com")
         with patch.object(gd, "bounding_box_click", side_effect=pii_error), \
              patch.object(gd, "_wait_for_givex_fancybox_closed", return_value=False), \
-             patch("modules.cdp.keyboard.dispatch_key", side_effect=pii_error), \
+             patch("modules.cdp.driver._dispatch_key", side_effect=pii_error), \
              self.assertLogs("modules.cdp.driver", level="WARNING") as logs:
             gd._close_givex_submission_error_popup()
 
