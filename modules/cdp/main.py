@@ -114,7 +114,6 @@ def detect_page_state(worker_id: str) -> str:
 
 def wait_for_post_submit_outcome(worker_id: str, timeout: float = 15.0) -> str:
     """Resolve post-submit outcome via the registered driver.
-
     Args: worker_id identifies the registered driver; timeout bounds wait seconds.
     Returns: Resolved outcome string.
     Raises: RuntimeError for missing driver; SelectorTimeoutError and PageStateError

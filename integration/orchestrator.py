@@ -1625,8 +1625,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         )
         # P0-1: Resolve page outcome immediately after submit and wire FSM transition.
         # This is the primary path for all FSM state changes in production.
-        # The resolver owns popup recovery and bounded state racing. Only
-        # canonical FSM states are forwarded to ``transition_for_worker``.
+        # Resolver owns popup recovery/racing; only canonical FSM states reach the FSM.
         try:
             _page_state = cdp.wait_for_post_submit_outcome(worker_id)
             if _page_state == "submission_error_popup":
@@ -1756,8 +1755,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
         raise
     state = fsm.get_current_state_for_worker(worker_id)
     if state is None:
-        # P0-1 fallback: FSM was never transitioned by the primary path. Try
-        # once more here so a late decisive outcome can still wire the FSM.
+        # P0-1 fallback: try once more so a late decisive outcome can wire the FSM.
         try:
             _page_state = cdp.wait_for_post_submit_outcome(worker_id)
             if _page_state in _FSM_STATES:
