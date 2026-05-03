@@ -165,7 +165,7 @@ class TestAbortCycleReturn(unittest.TestCase):
 
     def test_abort_cycle_return_releases_profile_and_no_retry(self):
         from integration.worker_task import make_task_fn
-        from modules.common.exceptions import CycleDidNotCompleteError
+        from integration.cycle_outcome import CycleDidNotCompleteError
         task = MagicMock()
         bb_client = _make_bitbrowser_client()
 

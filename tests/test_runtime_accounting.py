@@ -18,7 +18,7 @@ See issue: P0 success_count contamination on non-complete cycles.
 import unittest
 from unittest.mock import MagicMock, patch
 
-from modules.common.exceptions import CycleDidNotCompleteError
+from integration.cycle_outcome import CycleDidNotCompleteError
 
 
 def _make_bb_client():
@@ -173,13 +173,11 @@ class TestRuntimeAccounting(unittest.TestCase):
 
     def test_failure_action_records_error(self):
         from modules.monitor import main as monitor
-        from modules.rollout.autoscaler import get_autoscaler
 
-        wid = self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
+        self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
         m = monitor.get_metrics()
         self.assertEqual(m["success_count"], 0)
         self.assertEqual(m["error_count"], 1)
-        self.assertEqual(get_autoscaler().get_consecutive_failures(wid), 1)
 
     def test_abort_cycle_records_error(self):
         from modules.monitor import main as monitor
@@ -203,6 +201,73 @@ class TestRuntimeAccounting(unittest.TestCase):
         m = monitor.get_metrics()
         self.assertGreaterEqual(m["success_count"], 1)
         self.assertEqual(m["error_count"], 0)
+
+    # ── Regression tests for the runtime accounting contract ─────────────
+
+    def test_runtime_branch_does_not_call_autoscaler_failure(self):
+        """Runtime CycleDidNotCompleteError branch must NOT call
+        autoscaler.record_failure — run_cycle() already did it."""
+        from integration import runtime
+        from unittest.mock import MagicMock
+
+        mock_autoscaler = MagicMock()
+        with patch.object(runtime, "get_autoscaler", return_value=mock_autoscaler):
+            self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
+        mock_autoscaler.record_failure.assert_not_called()
+        # And it must not have been recorded as success either.
+        mock_autoscaler.record_success.assert_not_called()
+
+    def test_non_complete_resets_billing_streak(self):
+        """CycleDidNotCompleteError must reset _consecutive_billing_failures."""
+        from integration import runtime
+
+        with runtime._lock:
+            runtime._consecutive_billing_failures = 1
+        self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
+        self.assertEqual(runtime._consecutive_billing_failures, 0)
+
+    def test_real_path_no_double_count(self):
+        """End-to-end: worker_task → run_cycle → runtime must increment
+        consecutive_failures by exactly 1, not 2.
+
+        Mirrors the real ``run_cycle`` contract by recording autoscaler
+        failure before returning a non-complete action; if the runtime
+        branch incorrectly double-counted, this would observe 2.
+        """
+        from integration import runtime
+        from modules.monitor import main as monitor
+        from modules.rollout.autoscaler import get_autoscaler
+
+        recorded_wid = []
+
+        def fake_task(worker_id):
+            # Mirror real run_cycle: autoscaler accounting before "return".
+            get_autoscaler().record_failure(worker_id)
+            recorded_wid.append(worker_id)
+            raise CycleDidNotCompleteError(action="failure")
+
+        import threading
+        runtime._state = "RUNNING"
+        done_evt = threading.Event()
+        original_error = monitor.record_error
+
+        def _spy_error(*a, **kw):
+            original_error(*a, **kw)
+            done_evt.set()
+
+        def task_fn(worker_id):
+            with runtime._lock:
+                runtime._stop_requests.add(worker_id)
+            fake_task(worker_id)
+
+        with patch.object(monitor, "record_error", side_effect=_spy_error):
+            wid = runtime.start_worker(task_fn)
+            self.assertTrue(done_evt.wait(timeout=2))
+            runtime.stop_worker(wid, timeout=2)
+        runtime._state = "INIT"
+
+        # If the runtime branch double-counted, this would be 2.
+        self.assertEqual(get_autoscaler().get_consecutive_failures(wid), 1)
 
 
 if __name__ == "__main__":

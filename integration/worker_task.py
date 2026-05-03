@@ -38,23 +38,11 @@ from modules.cdp.fingerprint import (
     BitBrowserSession,
     get_bitbrowser_client,
 )
-from modules.common.exceptions import CycleDidNotCompleteError
+from integration.cycle_outcome import CycleDidNotCompleteError, normalize_action
 from modules.delay.persona import PersonaProfile
 from modules.delay.temporal import set_utc_offset
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
-
-
-def _normalize_action(action) -> str:
-    """Return canonical string action regardless of tuple form.
-
-    ``run_cycle()`` may return ``action`` as a plain string (e.g.
-    ``"complete"``) or as a tuple like ``("retry_new_card", CardInfo)``.
-    Normalise to the leading string token for comparisons.
-    """
-    if isinstance(action, tuple) and action:
-        return str(action[0])
-    return str(action)
 
 # P1-5: Task-level abort registry.
 _abort_lock: threading.Lock = threading.Lock()
@@ -221,7 +209,7 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                             ctx=ctx,
                             abort_check=lambda: is_task_aborted(worker_id),
                         )
-                        normalized = _normalize_action(action)
+                        normalized = normalize_action(action)
                         if normalized != "complete":
                             if normalized == "abort_cycle":
                                 _log.info(
