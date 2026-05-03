@@ -43,7 +43,7 @@ Or run directly from a PowerShell prompt at the repo root:
 | `-Safe`           | Sets `ENABLE_PRODUCTION_TASK_FN=0` (no-op stub task_fn) for the session.                        |
 | `-Production`     | Sets `ENABLE_PRODUCTION_TASK_FN=1` after an interactive `YES` confirmation prompt.              |
 | `-SkipGitPull`    | Skips `git pull origin main --ff-only`.                                                         |
-| `-NoDomFallback`  | Leaves `ALLOW_DOM_ONLY_WATCHDOG` unset. Default behaviour sets it to `1` for the session only.  |
+| `-NoDomFallback`  | Sets `ALLOW_DOM_ONLY_WATCHDOG=0` for the launcher session, overriding any parent shell or `.env` value. Default behaviour sets it to `1` for the session only.  |
 
 `-Safe` and `-Production` are mutually exclusive.
 

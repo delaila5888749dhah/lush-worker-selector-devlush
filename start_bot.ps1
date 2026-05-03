@@ -177,7 +177,9 @@ if (-not $NoDomFallback) {
     $env:ALLOW_DOM_ONLY_WATCHDOG = "1"
     Write-Host "==> Session ALLOW_DOM_ONLY_WATCHDOG=1 (DOM fallback enabled)" -ForegroundColor Cyan
 } else {
-    Write-Host "==> -NoDomFallback set: leaving ALLOW_DOM_ONLY_WATCHDOG unset" -ForegroundColor Yellow
+    # Explicitly override any parent/.env value for this launcher session.
+    $env:ALLOW_DOM_ONLY_WATCHDOG = "0"
+    Write-Host "==> -NoDomFallback set: Session ALLOW_DOM_ONLY_WATCHDOG=0" -ForegroundColor Yellow
 }
 
 # 8. Print redacted env summary
