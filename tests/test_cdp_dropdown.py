@@ -26,7 +26,7 @@ def _make_driver():
 
 
 def _option_result(current_idx, values):
-    return [current_idx, [{"value": value, "text": value} for value in values]]
+    return [current_idx, values[current_idx] if current_idx >= 0 else "", False, [{"value": value, "text": value} for value in values]]
 
 
 class TestCdpSelectOption(unittest.TestCase):
@@ -117,7 +117,7 @@ class TestCdpSelectOption(unittest.TestCase):
         self.assertIn("type=list", message)
         self.assertIn("len=2", message)
         self.assertIn("item_types=['int', 'int']", message)
-        self.assertIn("selector='#country'", message)
+        self.assertIn("selector=UNREGISTERED_SELECTOR", message)
         mock_dispatch.assert_not_called()
 
     def test_dropdown_missing_element_raises_selector_timeout(self):

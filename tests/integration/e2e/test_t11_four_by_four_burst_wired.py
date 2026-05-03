@@ -30,7 +30,12 @@ class TestT11FourByFourBurstWired(E2EBase):
         bio.generate_burst_pattern.return_value = [0.07]
         setattr(gd, "_bio", bio)
 
-        with patch("modules.cdp.driver._type_value") as mock_type:
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_verify_field_value_length"), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch("modules.cdp.driver._type_value") as mock_type:
             gd._realistic_type_field(
                 SEL_CARD_NUMBER,
                 "4111111111111111",

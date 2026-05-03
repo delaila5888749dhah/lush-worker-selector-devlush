@@ -20,6 +20,7 @@ import types
 import datetime
 import decimal
 import unittest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, PropertyMock, call, patch
 
 from modules.cdp import driver as drv
@@ -115,6 +116,16 @@ def _make_billing() -> BillingProfile:
     )
 
 
+@contextmanager
+def _patched_focus_verification(gd):
+    with patch.object(gd, "_human_scroll_to"), \
+         patch.object(gd, "_wait_scroll_stable"), \
+         patch.object(gd, "bounding_box_click"), \
+         patch.object(gd, "_verify_field_value_length"), \
+         patch.object(gd, "_engine_aware_sleep"):
+        yield
+
+
 class TestWaitForElement(unittest.TestCase):
     """_wait_for_element returns True when found, False on timeout."""
 
@@ -136,6 +147,129 @@ class TestWaitForElement(unittest.TestCase):
         elapsed = time.monotonic() - start
         self.assertFalse(result)
         self.assertGreaterEqual(elapsed, 0.5)
+
+
+class TestRound6ASelectorsAndSelects(unittest.TestCase):
+    def test_selector_registries_are_strict_and_safe(self):
+        text_fields = {
+            SEL_CARD_NAME, SEL_CARD_NUMBER, SEL_CARD_CVV,
+            SEL_BILLING_ADDRESS, SEL_BILLING_CITY, SEL_BILLING_ZIP,
+            SEL_BILLING_PHONE,
+        }
+        select_fields = {
+            SEL_BILLING_COUNTRY, SEL_BILLING_STATE,
+            SEL_CARD_EXPIRY_MONTH, SEL_CARD_EXPIRY_YEAR,
+        }
+        self.assertTrue(text_fields.issubset(drv._SELECTOR_NAMES))
+        self.assertTrue(select_fields.isdisjoint(drv._SELECTOR_NAMES))
+        self.assertEqual(
+            {drv._SELECTOR_LOG_NAMES[s] for s in select_fields},
+            {
+                "SEL_BILLING_COUNTRY", "SEL_BILLING_STATE",
+                "SEL_CARD_EXPIRY_MONTH", "SEL_CARD_EXPIRY_YEAR",
+            },
+        )
+        self.assertEqual(drv._selector_name("#cws_list_secret"), "UNREGISTERED_SELECTOR")
+
+    def test_card_number_focus_happens_before_cdp_typing(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        gd = GivexDriver(selenium)
+        events = []
+        with patch.object(gd, "_human_scroll_to", side_effect=lambda *_: events.append("scroll")), \
+             patch.object(gd, "_wait_scroll_stable", side_effect=lambda: events.append("stable")), \
+             patch.object(gd, "bounding_box_click", side_effect=lambda *_: events.append("click")), \
+             patch.object(gd, "_verify_field_value_length"), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch("modules.cdp.driver._type_value", side_effect=lambda *_a, **_k: events.append("type")):
+            gd._realistic_type_field(
+                SEL_CARD_NUMBER,
+                "4111111111111111",
+                use_burst=True,
+                field_kind="card_number",
+            )
+        self.assertEqual(events[:4], ["scroll", "stable", "click", "type"])
+
+    def test_expiry_month_tolerant_matches_and_rejections(self):
+        match_cases = [
+            {"value": "4", "text": "April"},
+            {"value": "04", "text": "April"},
+            {"value": "ccExpMon_4", "text": "April"},
+            {"value": "ccExpMon_04", "text": "April"},
+            {"value": "month_04", "text": "Month 04"},
+            {"value": "month__04", "text": "April"},
+            {"value": "", "text": "04 - April"},
+            {"value": "", "text": "Apr"},
+            {"value": "", "text": "April 05"},
+        ]
+        for option in match_cases:
+            with self.subTest(option=option):
+                self.assertEqual(
+                    drv._find_matching_option_index(SEL_CARD_EXPIRY_MONTH, "04", [option]),
+                    0,
+                )
+        reject_cases = [
+            [{"value": "01", "text": "January"}, {"value": "02", "text": "February"}],
+            [{"value": "04", "text": "May"}],
+            [{"value": "4", "text": "May"}],
+            [{"value": "", "text": "May 04"}],
+            [{"value": "day_04_month_12", "text": "Month"}],
+            [{"value": "", "text": "Month"}],
+            [{"value": "", "text": "Select Month"}],
+            [{"value": "", "text": "--"}],
+            [{"value": "", "text": ""}],
+        ]
+        for options in reject_cases:
+            with self.subTest(options=options):
+                with self.assertRaises(ValueError):
+                    drv._find_matching_option_index(SEL_CARD_EXPIRY_MONTH, "04", options)
+        self.assertIsNone(drv._month_option_key("month_00"))
+        self.assertIsNone(drv._month_option_key("month_13"))
+
+    def test_wait_for_select_options_target_aware_and_stale_safe(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        selenium.execute_script.return_value = [2, [{"value": "US", "text": "US"}]]
+        with patch("modules.cdp.driver.time.sleep"):
+            gd._wait_for_select_options(SEL_BILLING_STATE, min_options=2, timeout=1.0)
+        selenium.execute_script.return_value = [2, [{"value": "ON", "text": "Ontario"}]]
+        with patch("modules.cdp.driver.time.sleep"):
+            gd._wait_for_select_options(
+                SEL_BILLING_STATE, min_options=2, timeout=1.0, target_value="ON"
+            )
+        selenium.execute_script.side_effect = [
+            [50, [{"value": "CA", "text": "California"}]],
+            [13, [{"value": "ON", "text": "Ontario"}]],
+        ]
+        with patch("modules.cdp.driver.time.sleep") as mock_sleep:
+            gd._wait_for_select_options(
+                SEL_BILLING_STATE, min_options=2, timeout=1.0, target_value="ON"
+            )
+        mock_sleep.assert_called_once_with(0.25)
+
+    def test_wait_for_select_options_timeout_propagation_and_safe_logs(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        selenium.execute_script.return_value = [1, [{"value": "CA", "text": "California"}]]
+        with self.assertRaises(SelectorTimeoutError) as ctx:
+            gd._wait_for_select_options(
+                SEL_BILLING_STATE, min_options=2, timeout=0.01, target_value="ON"
+            )
+        self.assertEqual(ctx.exception.timeout, 0.01)
+        self.assertIn("last_count=1", ctx.exception.reason)
+        self.assertIn("target_value_present=False", ctx.exception.reason)
+
+        selenium.execute_script.side_effect = RuntimeError("boom")
+        with self.assertRaises(RuntimeError):
+            gd._wait_for_select_options(SEL_BILLING_STATE, timeout=1.0)
+
+        selenium.execute_script.side_effect = [drv.WebDriverException("stale")]
+        with self.assertLogs("modules.cdp.driver", level="DEBUG") as logs:
+            with self.assertRaises(SelectorTimeoutError):
+                gd._wait_for_select_options(SEL_BILLING_STATE, timeout=0.01)
+        joined = "\n".join(logs.output)
+        self.assertIn("SEL_BILLING_STATE", joined)
+        self.assertNotIn("#cws_list_", joined)
 
 
 class TestWaitForUrl(unittest.TestCase):
@@ -667,7 +801,8 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         gd = GivexDriver(selenium)
 
         with patch.object(gd, "_cdp_select_option") as mock_select, \
-             patch("time.sleep"):
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
 
         # Card fields go through CDP dispatchKeyEvent; collect "text" params.
@@ -705,7 +840,9 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         billing = _make_billing()
         gd = GivexDriver(selenium)
 
-        with patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
+        with patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
 
         cdp_chars = "".join(
@@ -722,6 +859,7 @@ class TestFillPaymentAndBilling(unittest.TestCase):
 
         with patch.object(gd, "_realistic_type_field") as mock_type, \
              patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
              self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd.fill_payment_and_billing(card, billing)
 
@@ -739,6 +877,7 @@ class TestFillPaymentAndBilling(unittest.TestCase):
 
         with patch.object(gd, "_realistic_type_field") as mock_type, \
              patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
              self.assertLogs("modules.cdp.driver", level="INFO") as logs:
             gd.fill_payment_and_billing(card, billing)
 
@@ -755,7 +894,8 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         card = self._card_with_name("4474370703270993")
 
         with patch.object(gd, "_realistic_type_field") as mock_type, \
-             patch.object(gd, "_cdp_select_option"):
+             patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"):
             gd.fill_payment_and_billing(card, billing)
 
         self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
@@ -767,7 +907,8 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         card = self._card_with_name(" - ")
 
         with patch.object(gd, "_realistic_type_field") as mock_type, \
-             patch.object(gd, "_cdp_select_option"):
+             patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"):
             gd.fill_payment_and_billing(card, billing)
 
         self.assertEqual(mock_type.call_args_list[0].args[:2], (SEL_CARD_NAME, "Jane Doe"))
@@ -805,12 +946,45 @@ class TestFillPaymentAndBilling(unittest.TestCase):
         billing = _make_billing()
         gd = GivexDriver(selenium)
 
-        with patch.object(gd, "_cdp_select_option") as mock_select:
+        with patch.object(gd, "_cdp_select_option") as mock_select, \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd):
             gd.fill_payment_and_billing(task.primary_card, billing)
 
         country_calls = [c for c in mock_select.call_args_list if c.args[0] == SEL_BILLING_COUNTRY]
         self.assertEqual(len(country_calls), 1)
         self.assertEqual(country_calls[0].args[1], "US")
+
+    def test_fill_payment_and_billing_waits_for_state_after_country_only(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        task = _make_task()
+        billing = _make_billing()
+        events = []
+
+        def select(selector, value):
+            events.append(("select", selector, value))
+
+        def wait(selector, **kwargs):
+            events.append(("wait", selector, kwargs))
+
+        with patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_cdp_select_option", side_effect=select), \
+             patch.object(gd, "_wait_for_select_options", side_effect=wait):
+            gd.fill_payment_and_billing(task.primary_card, billing)
+
+        self.assertEqual(
+            events,
+            [
+                ("select", SEL_CARD_EXPIRY_MONTH, task.primary_card.exp_month),
+                ("select", SEL_CARD_EXPIRY_YEAR, task.primary_card.exp_year),
+                ("select", SEL_BILLING_COUNTRY, billing.country),
+                ("wait", SEL_BILLING_STATE, {
+                    "min_options": 2, "timeout": 8.0, "target_value": billing.state,
+                }),
+                ("select", SEL_BILLING_STATE, billing.state),
+            ],
+        )
 
     def test_fill_payment_and_billing_skips_phone_when_none(self):
         selenium = _make_driver()
@@ -835,7 +1009,9 @@ class TestFillPaymentAndBilling(unittest.TestCase):
             country="US",
         )
         gd = GivexDriver(selenium)
-        with patch.object(gd, "_cdp_select_option"):
+        with patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd):
             # Should not raise even with None phone
             gd.fill_payment_and_billing(card, billing)
 
@@ -851,7 +1027,9 @@ class TestFillBilling(unittest.TestCase):
         billing = _make_billing()
         gd = GivexDriver(selenium)
 
-        with patch.object(gd, "_cdp_select_option") as mock_select:
+        with patch.object(gd, "_cdp_select_option") as mock_select, \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd):
             gd.fill_billing(billing)
 
         # Phase 3A Task 1: billing text fields routed through CDP dispatchKeyEvent.
@@ -869,6 +1047,34 @@ class TestFillBilling(unittest.TestCase):
         state_calls = [c for c in mock_select.call_args_list if c.args[0] == SEL_BILLING_STATE]
         self.assertGreaterEqual(len(state_calls), 1)
         self.assertEqual(state_calls[0].args[1], billing.state)
+
+    def test_fill_billing_waits_for_state_after_country(self):
+        selenium = _make_driver()
+        gd = GivexDriver(selenium)
+        billing = _make_billing()
+        events = []
+
+        def select(selector, value):
+            events.append(("select", selector, value))
+
+        def wait(selector, **kwargs):
+            events.append(("wait", selector, kwargs))
+
+        with patch.object(gd, "_realistic_type_field"), \
+             patch.object(gd, "_cdp_select_option", side_effect=select), \
+             patch.object(gd, "_wait_for_select_options", side_effect=wait):
+            gd.fill_billing(billing)
+
+        self.assertEqual(
+            events,
+            [
+                ("select", SEL_BILLING_COUNTRY, billing.country),
+                ("wait", SEL_BILLING_STATE, {
+                    "min_options": 2, "timeout": 8.0, "target_value": billing.state,
+                }),
+                ("select", SEL_BILLING_STATE, billing.state),
+            ],
+        )
 
     def test_fill_billing_form_is_alias_for_fill_billing(self):
         """fill_billing_form must delegate to fill_billing."""
@@ -2469,7 +2675,9 @@ class TestFillPaymentBiometrics(unittest.TestCase):
             field_kinds.append(kw.get("field_kind", "text"))
             original(sel, val, **kw)
         with patch.object(gd, "_realistic_type_field", side_effect=spy), \
-             patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
+             patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
         self.assertIn("name", field_kinds)
         self.assertIn("card_number", field_kinds)
@@ -2485,7 +2693,9 @@ class TestFillPaymentBiometrics(unittest.TestCase):
         gd._sm.transition("FILLING_FORM")
         task = _make_task()
         billing = _make_billing()
-        with patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
+        with patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd), patch("time.sleep"):
             with patch.object(gd._sm, "transition") as mock_transition:
                 gd.fill_payment_and_billing(task.primary_card, billing)
         mock_transition.assert_any_call("PAYMENT")
@@ -2497,7 +2707,9 @@ class TestFillPaymentBiometrics(unittest.TestCase):
         gd = GivexDriver(selenium)
         task = _make_task()
         billing = _make_billing()
-        with patch.object(gd, "_cdp_select_option"), patch("time.sleep"):
+        with patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
+             _patched_focus_verification(gd), patch("time.sleep"):
             gd.fill_payment_and_billing(task.primary_card, billing)
 
 

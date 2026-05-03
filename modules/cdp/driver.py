@@ -440,10 +440,15 @@ _SELECTOR_NAMES = dict(
         (SEL_GUEST_EMAIL, "SEL_GUEST_EMAIL"),
     )
 )
+_SELECTOR_LOG_NAMES: dict[str, str] = {}
 
 
 def _selector_name(sel: str) -> str:
-    return _SELECTOR_NAMES.get(sel, "UNKNOWN_SELECTOR")
+    return (
+        _SELECTOR_NAMES.get(sel)
+        or _SELECTOR_LOG_NAMES.get(sel)
+        or "UNREGISTERED_SELECTOR"
+    )
 
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
 SEL_CARD_NAME         = "#cws_txt_ccName"
@@ -468,6 +473,19 @@ SEL_ORDER_TOTAL_DISPLAY = (
     "#orderTotal, #headingTotal, #cws_lbl_orderTotal, .order-total, .checkout-total, [data-total],"
     " #orderTotalLine, #orderSubtotal, #totalsContent"
 )
+_SELECTOR_NAMES.update({
+    SEL_CARD_NAME: "SEL_CARD_NAME",
+    SEL_CARD_NUMBER: "SEL_CARD_NUMBER",
+    SEL_CARD_CVV: "SEL_CARD_CVV",
+    SEL_BILLING_ADDRESS: "SEL_BILLING_ADDRESS",
+    SEL_BILLING_CITY: "SEL_BILLING_CITY",
+    SEL_BILLING_ZIP: "SEL_BILLING_ZIP",
+    SEL_BILLING_PHONE: "SEL_BILLING_PHONE",
+})
+_SELECTOR_LOG_NAMES.update({
+    SEL_BILLING_COUNTRY: "SEL_BILLING_COUNTRY", SEL_BILLING_STATE: "SEL_BILLING_STATE",
+    SEL_CARD_EXPIRY_MONTH: "SEL_CARD_EXPIRY_MONTH", SEL_CARD_EXPIRY_YEAR: "SEL_CARD_EXPIRY_YEAR",
+})
 # Tolerance for DOM-vs-expected total comparison; absorbs display rounding.
 _ORDER_TOTAL_TOLERANCE = decimal.Decimal("0.01")
 # Reject pasted card/address payloads but allow long legal names.
@@ -514,15 +532,41 @@ def _numeric_option_key(value: str) -> int | None:
     return int(text) if re.fullmatch(r"\d+", text) else None
 
 
-def _month_option_key(value: str) -> int | None:
-    if (numeric := _numeric_option_key(value)) is not None and 1 <= numeric <= 12:
-        return numeric
+def _month_numeric_token_key(value: str) -> int | None:
     text = (value or "").strip().lower()
-    for token in re.findall(r"[a-z]+", text):
+    matches: list[int] = []
+    for token in re.split(r"[_\-/\s]+", text):
+        if re.fullmatch(r"\d{1,2}", token):
+            number = int(token)
+            if 1 <= number <= 12:
+                matches.append(number)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _month_name_key(value: str) -> int | None:
+    for token in re.findall(r"[a-z]+", (value or "").strip().lower()):
         for idx, (full_name, abbrev) in enumerate(_MONTH_NAMES, start=1):
             if token == full_name or token == abbrev:
                 return idx
     return None
+
+
+def _month_option_key(value: str) -> int | None:
+    return _month_name_key(value) or _month_numeric_token_key(value)
+
+
+def _month_placeholder(value: str, text: str) -> bool:
+    if (value or "").strip():
+        return False
+    return (text or "").strip().lower() in {"", "month", "select month", "--"}
+
+
+def _has_conflicting_month_name(value: str, text: str, requested_month: int) -> bool:
+    for candidate in (value, text):
+        month = _month_name_key(candidate)
+        if month is not None and month != requested_month:
+            return True
+    return False
 
 
 def _expand_two_digit_year(value: int, current_year: int) -> int | None:
@@ -545,21 +589,34 @@ def _year_option_key(value: str, current_year: int) -> int | None:
     return None
 
 
-def _raise_option_not_found(selector: str, requested: str, options) -> NoReturn:
+def _raise_option_not_found(
+    selector: str,
+    requested: str,
+    options,
+    *,
+    selected_index: int | None = None,
+    current_value: str | None = None,
+    disabled: bool | None = None,
+) -> NoReturn:
     option_pairs = [_option_value_text(option) for option in options]
     values = [value for value, _text in option_pairs]
     texts = [text for _value, text in option_pairs]
     if _is_expiry_month_selector(selector) or _is_expiry_year_selector(selector):
         raise ValueError(
-            f"Option value={requested!r} not found in {selector}. "
+            f"Option not found selector={_selector_name(selector)} "
+            f"option_count={len(options)}, "
             f"Available values={values[:_OPTION_DIAGNOSTIC_LIMIT]}, "
-            f"texts={texts[:_OPTION_DIAGNOSTIC_LIMIT]}"
+            f"texts={texts[:_OPTION_DIAGNOSTIC_LIMIT]}, "
+            f"selectedIndex={selected_index}, current_value={current_value!r}, "
+            f"disabled={disabled}"
         )
     raise ValueError(
-        f"Option value={requested!r} not found in {selector}. "
+        f"Option not found selector={_selector_name(selector)} "
         f"option_count={len(options)}, "
         f"value_lengths={[len(v) for v in values][:_OPTION_DIAGNOSTIC_LIMIT]}, "
-        f"text_lengths={[len(t) for t in texts][:_OPTION_DIAGNOSTIC_LIMIT]}"
+        f"text_lengths={[len(t) for t in texts][:_OPTION_DIAGNOSTIC_LIMIT]}, "
+        f"selectedIndex={selected_index}, "
+        f"current_value_len={len(current_value or '')}, disabled={disabled}"
     )
 
 
@@ -572,21 +629,39 @@ def _find_matching_option_index(
 ) -> int:
     requested_text = "" if requested is None else str(requested)
     option_pairs = [_option_value_text(option) for option in options]
+    is_expiry_month = _is_expiry_month_selector(selector)
+    requested_month = _month_option_key(requested_text) if is_expiry_month else None
 
     for idx, (value, text) in enumerate(option_pairs):
+        if is_expiry_month:
+            if requested_month is None or _month_placeholder(value, text):
+                continue
+            if _has_conflicting_month_name(value, text, requested_month):
+                continue
         if value == requested_text or text.strip() == requested_text:
             return idx
 
-    if (requested_numeric := _numeric_option_key(requested_text)) is not None:
+    if is_expiry_month and requested_month is not None:
+        for idx, (value, text) in enumerate(option_pairs):
+            if _month_placeholder(value, text):
+                continue
+            if _has_conflicting_month_name(value, text, requested_month):
+                continue
+            if requested_month in (_month_numeric_token_key(value), _month_numeric_token_key(text)):
+                return idx
+    elif (requested_numeric := _numeric_option_key(requested_text)) is not None:
         for idx, (value, text) in enumerate(option_pairs):
             if requested_numeric in (_numeric_option_key(value), _numeric_option_key(text)):
                 return idx
 
-    if _is_expiry_month_selector(selector):
-        if (requested_month := _month_option_key(requested_text)) is not None:
-            for idx, (value, text) in enumerate(option_pairs):
-                if requested_month in (_month_option_key(value), _month_option_key(text)):
-                    return idx
+    if is_expiry_month and requested_month is not None:
+        for idx, (value, text) in enumerate(option_pairs):
+            if _month_placeholder(value, text):
+                continue
+            if _has_conflicting_month_name(value, text, requested_month):
+                continue
+            if requested_month in (_month_name_key(value), _month_name_key(text)):
+                return idx
 
     if _is_expiry_year_selector(selector):
         year = current_year if current_year is not None else datetime.datetime.now().year
@@ -2483,15 +2558,18 @@ class GivexDriver:
         # Step 2 — read option metadata, then locate the target index in Python.
         js = (
             "const sel = document.querySelector(arguments[0]);"
-            "if (!sel) return [-1, -1];"
+            "if (!sel) return [-1, '', false, -1];"
             "const opts = Array.from(sel.options);"
             "const currentIdx = sel.selectedIndex;"
-            "return [currentIdx, opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')}))];"
+            "return [currentIdx, sel.value || '', !!sel.disabled, "
+            "opts.map(o => ({value: o.value, text: (o.textContent || o.innerText || '')}))];"
         )
         result = self._driver.execute_script(js, selector)
         try:
             current_idx = int(result[0])
-            options = result[1]
+            current_value = "" if result[1] is None else str(result[1])
+            disabled = bool(result[2])
+            options = result[3]
             if not isinstance(options, list):
                 raise TypeError("option metadata is not a list")
         except (TypeError, ValueError, IndexError) as exc:
@@ -2501,9 +2579,19 @@ class GivexDriver:
             raise ValueError(
                 f"_cdp_select_option: unexpected option metadata result "
                 f"type={type(result).__name__} len={result_len} "
-                f"item_types={item_types} selector={selector!r}"
+                f"item_types={item_types} selector={_selector_name(selector)}"
             ) from exc
-        target_idx = _find_matching_option_index(selector, value, options)
+        try:
+            target_idx = _find_matching_option_index(selector, value, options)
+        except ValueError as exc:
+            _raise_option_not_found(
+                selector,
+                "" if value is None else str(value),
+                options,
+                selected_index=current_idx,
+                current_value=current_value,
+                disabled=disabled,
+            )
 
         # Step 3 — keyboard-navigate from current to target.
         from modules.cdp.keyboard import dispatch_key  # local import: avoid cycle
@@ -2525,7 +2613,7 @@ class GivexDriver:
             if not dispatch_key(self._driver, key):
                 raise CDPCommandError(
                     "Input.dispatchKeyEvent",
-                    f"_cdp_select_option: failed to dispatch {key!r} for {selector!r}",
+                    f"_cdp_select_option: failed to dispatch {key!r} for {_selector_name(selector)}",
                 )
             jitter = self._rnd.uniform(0.0, 0.05) if self._rnd is not None else 0.0
             time.sleep(0.05 + jitter)
@@ -2535,8 +2623,59 @@ class GivexDriver:
         if not dispatch_key(self._driver, "Enter"):
             raise CDPCommandError(
                 "Input.dispatchKeyEvent",
-                f"_cdp_select_option: failed to dispatch Enter for {selector!r}",
+                f"_cdp_select_option: failed to dispatch Enter for {_selector_name(selector)}",
             )
+
+    def _wait_for_select_options(
+        self,
+        selector: str,
+        min_options: int = 2,
+        timeout: float = 8.0,
+        target_value: str | None = None,
+    ) -> None:
+        """Poll until the dropdown has min_options and target_value is matchable."""
+        deadline = time.monotonic() + timeout
+        last_count = -1
+        last_target_present = False
+
+        while time.monotonic() < deadline:
+            try:
+                result = self._driver.execute_script(
+                    "const el=document.querySelector(arguments[0]);"
+                    "if (!el || !el.options) return [0, []];"
+                    "return [el.options.length, "
+                    "Array.from(el.options).map(o => ({"
+                    "value: o.value, text: (o.textContent || o.innerText || '')"
+                    "}))];",
+                    selector,
+                )
+                count = int(result[0]) if result else 0
+                options = result[1] if (result and len(result) > 1) else []
+                last_count = count
+                if count >= min_options:
+                    if target_value is None:
+                        return
+                    try:
+                        _find_matching_option_index(selector, target_value, options)
+                        return
+                    except ValueError:
+                        last_target_present = False
+            except (WebDriverException, TypeError, ValueError) as exc:
+                _log.debug(
+                    "_wait_for_select_options: transient poll error selector=%s error_type=%s",
+                    _selector_name(selector), type(exc).__name__,
+                )
+            time.sleep(0.25)
+
+        raise SelectorTimeoutError(
+            selector,
+            timeout,
+            reason=(
+                f"select options did not reach {min_options} "
+                f"or target_value not present; last_count={last_count}, "
+                f"target_value_present={last_target_present}"
+            ),
+        )
 
     def _wait_scroll_stable(self, timeout: float = 2.0, stable_ms: float | None = None) -> bool:
         stable_window = (stable_ms if stable_ms is not None else self._get_rng().uniform(350, 600)) / 1000.0
@@ -3890,6 +4029,12 @@ class GivexDriver:
         # via _realistic_type_field (Phase 3A Task 1, INV-PAYMENT-01 anti-detect).
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
+        self._wait_for_select_options(
+            SEL_BILLING_STATE,
+            min_options=2,
+            timeout=8.0,
+            target_value=billing_profile.state,
+        )
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
         self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
         self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")
@@ -3919,6 +4064,12 @@ class GivexDriver:
         """
         self._realistic_type_field(SEL_BILLING_ADDRESS, billing_profile.address, field_kind="text")
         self._cdp_select_option(SEL_BILLING_COUNTRY, billing_profile.country)
+        self._wait_for_select_options(
+            SEL_BILLING_STATE,
+            min_options=2,
+            timeout=8.0,
+            target_value=billing_profile.state,
+        )
         self._cdp_select_option(SEL_BILLING_STATE, billing_profile.state)
         self._realistic_type_field(SEL_BILLING_CITY, billing_profile.city, field_kind="text")
         self._realistic_type_field(SEL_BILLING_ZIP, billing_profile.zip_code, field_kind="amount")

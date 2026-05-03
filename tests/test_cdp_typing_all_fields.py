@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import unittest
 import warnings
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from modules.cdp.driver import (
@@ -68,6 +69,16 @@ def _make_task() -> WorkerTask:
     )
 
 
+@contextmanager
+def _patched_payment_focus(gd):
+    with patch.object(gd, "_human_scroll_to"), \
+         patch.object(gd, "_wait_scroll_stable"), \
+         patch.object(gd, "bounding_box_click"), \
+         patch.object(gd, "_verify_field_value_length"), \
+         patch.object(gd, "_engine_aware_sleep"):
+        yield
+
+
 class GuestEmailRoutesThroughCDP(unittest.TestCase):
     """Task 1 §5 entry-point: select_guest_checkout uses CDP for email."""
 
@@ -80,6 +91,8 @@ class GuestEmailRoutesThroughCDP(unittest.TestCase):
              patch.object(gd, "_wait_for_url"), \
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable"), \
              patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")
@@ -94,7 +107,9 @@ class BillingFieldsRouteThroughCDP(unittest.TestCase):
 
     def _run_fill(self, gd):
         with patch.object(gd, "_cdp_select_option"), \
+             patch.object(gd, "_wait_for_select_options"), \
              patch.object(gd, "_sm"), \
+             _patched_payment_focus(gd), \
              patch("time.sleep"):
             gd.fill_payment_and_billing(_make_card(), _make_billing())
 
@@ -158,6 +173,9 @@ class AllSection5FieldsAvoidSendKeys(unittest.TestCase):
              patch.object(gd, "_verify_begin_checkout_hittable"), \
              patch.object(gd, "bounding_box_click"), \
              patch.object(gd, "_field_value_length", return_value=len("guest@example.com")), \
+             patch.object(gd, "_wait_for_select_options"), \
+             patch.object(gd, "_verify_field_value_length"), \
+             patch.object(gd, "_engine_aware_sleep"), \
              patch.object(gd, "_sm"), \
              patch("time.sleep"):
             gd.select_guest_checkout("guest@example.com")
