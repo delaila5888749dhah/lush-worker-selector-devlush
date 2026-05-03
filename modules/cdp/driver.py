@@ -2391,8 +2391,11 @@ class GivexDriver:
                 return /something went wrong/i.test(el.innerText || '');
                 """
             ) is True
-        except Exception:  # pylint: disable=broad-except
-            _log.debug("GIVEX_SUBMISSION_ERROR_POPUP detect skipped")
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug(
+                "GIVEX_SUBMISSION_ERROR_POPUP detect skipped js_error_type=%s",
+                type(exc).__name__,
+            )
             return False
 
     def _is_givex_fancybox_open(self) -> bool:
@@ -2400,8 +2403,11 @@ class GivexDriver:
             return bool(self._driver.execute_script(
                 "return !!document.querySelector('.fancybox-wrap.fancybox-opened');"
             ))
-        except Exception:  # pylint: disable=broad-except
-            _log.debug("GIVEX_FANCYBOX_CLOSE verify skipped")
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug(
+                "GIVEX_FANCYBOX_CLOSE verify skipped js_error_type=%s",
+                type(exc).__name__,
+            )
             # Fail as "still open" so a verification error cannot be mistaken
             # for a successful dismissal.
             return True
@@ -2440,13 +2446,18 @@ class GivexDriver:
                 _log.debug(
                     "GIVEX_FANCYBOX_CLOSE persisted after click selector_index=%d attempt=%d",
                     selector_index, attempt + 1,
-                )
+        )
         _log.warning("GIVEX_FANCYBOX_CLOSE click retries failed; dispatching Escape")
         try:
-            if _dispatch_key is None or not _dispatch_key(self._driver, "Escape"):
-                _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed")
-        except Exception:  # pylint: disable=broad-except
-            _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch failed")
+            if _dispatch_key is None:
+                _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch unavailable")
+            elif not _dispatch_key(self._driver, "Escape"):
+                _log.warning("GIVEX_FANCYBOX_CLOSE Escape dispatch returned_false")
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.warning(
+                "GIVEX_FANCYBOX_CLOSE Escape dispatch exception_type=%s",
+                type(exc).__name__,
+            )
         if self._wait_for_givex_fancybox_closed():
             _log.info("GIVEX_FANCYBOX_CLOSE dismissed via Escape")
             return True
