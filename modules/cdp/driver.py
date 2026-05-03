@@ -2402,6 +2402,8 @@ class GivexDriver:
             ))
         except Exception:  # pylint: disable=broad-except
             _log.debug("GIVEX_FANCYBOX_CLOSE verify skipped")
+            # Fail as "still open" so a verification error cannot be mistaken
+            # for a successful dismissal.
             return True
 
     def _wait_for_givex_fancybox_closed(
@@ -2422,14 +2424,14 @@ class GivexDriver:
             ".fancybox-close",
             ".fancybox-item.fancybox-close",
         )
-        for selector in selectors:
+        for selector_index, selector in enumerate(selectors):
             for attempt in range(_GIVEX_FANCYBOX_CLICK_ATTEMPTS):
                 try:
                     self.bounding_box_click(selector)
                 except Exception:  # pylint: disable=broad-except
                     _log.debug(
                         "GIVEX_FANCYBOX_CLOSE click failed selector_index=%d attempt=%d",
-                        selectors.index(selector), attempt + 1,
+                        selector_index, attempt + 1,
                     )
                     continue
                 if self._wait_for_givex_fancybox_closed():
@@ -2437,7 +2439,7 @@ class GivexDriver:
                     return True
                 _log.debug(
                     "GIVEX_FANCYBOX_CLOSE persisted after click selector_index=%d attempt=%d",
-                    selectors.index(selector), attempt + 1,
+                    selector_index, attempt + 1,
                 )
         _log.warning("GIVEX_FANCYBOX_CLOSE click retries failed; dispatching Escape")
         try:
