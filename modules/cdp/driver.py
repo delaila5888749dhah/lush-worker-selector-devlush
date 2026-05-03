@@ -4292,7 +4292,7 @@ class GivexDriver:
         while time.monotonic() < deadline:
             if not self._detect_givex_submission_error_popup():
                 return True
-            time.sleep(0.1)
+            time.sleep(max(0.0, min(0.1, deadline - time.monotonic())))
         return not self._detect_givex_submission_error_popup()
 
     def _press_escape_for_popup(self) -> None:
@@ -4323,13 +4323,15 @@ class GivexDriver:
                 _log.info("GIVEX_FANCYBOX_CLOSE click attempted")
             except Exception:
                 continue
-            if self._popup_gone_within(min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, deadline - time.monotonic())):
+            if self._popup_gone_within(
+                max(0.0, min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, deadline - time.monotonic()))
+            ):
                 return True
         if time.monotonic() < deadline:
             self._press_escape_for_popup()
             _log.info("GIVEX_FANCYBOX_CLOSE escape attempted")
             return self._popup_gone_within(
-                min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, deadline - time.monotonic())
+                max(0.0, min(_GIVEX_FANCYBOX_CLOSE_VERIFY_S, deadline - time.monotonic()))
             )
         return False
 
@@ -4351,9 +4353,9 @@ class GivexDriver:
                     state = self._safe_detect_non_popup_state()
                     if state in {"success", "declined", "vbv_3ds"}:
                         return state
-                    time.sleep(min(0.2, settle_deadline - time.monotonic()))
+                    time.sleep(max(0.0, min(0.2, settle_deadline - time.monotonic())))
                 return "submission_error_popup"
-            time.sleep(min(0.4, deadline - time.monotonic()))
+            time.sleep(max(0.0, min(0.4, deadline - time.monotonic())))
         return "ui_lock"
 
     def detect_page_state(self) -> str:

@@ -283,7 +283,7 @@ class RunPaymentStepTests(unittest.TestCase):
         self.assertIsNone(total)
         self.assertEqual(state.name, "ui_lock")
         mock_fsm.transition_for_worker.assert_called_with("default", "ui_lock")
-        mock_watchdog.reset_session.assert_called_with("default")
+        mock_watchdog.reset_session.assert_called_once_with("default")
         mock_alerting.send_alert.assert_not_called()
         mock_next.assert_not_called()
         self.assertIn("GIVEX_POPUP_RECOVERED", "\n".join(logs.output))
@@ -303,7 +303,7 @@ class RunPaymentStepTests(unittest.TestCase):
             mock_cdp.wait_for_post_submit_outcome.side_effect = exc
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
-        mock_watchdog.reset_session.assert_called_with("default")
+        mock_watchdog.reset_session.assert_called_once_with("default")
         store.mark_unconfirmed.assert_not_called()
         mock_next.assert_not_called()
 

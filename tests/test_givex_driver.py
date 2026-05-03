@@ -1451,6 +1451,10 @@ class TestPostSubmitOutcomeResolver(unittest.TestCase):
         self.assertEqual(result, "ui_lock")
         self.assertGreaterEqual(clock.now, 1.0)
 
+    def test_resolver_does_not_call_negative_sleep_in_production_clock(self):
+        gd = GivexDriver(_make_driver())
+        self.assertEqual(gd.wait_for_post_submit_outcome(timeout=0.01), "ui_lock")
+
     def test_popup_then_success_url_during_close_window(self):
         gd = GivexDriver(_make_driver())
         with self._fake_time() as clock, \

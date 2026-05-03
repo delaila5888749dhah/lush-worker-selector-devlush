@@ -1648,14 +1648,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                     "deferring transition to fallback path",
                     _get_trace_id(), worker_id, _page_state,
                 )
-        except PageStateError as _page_exc:
-            if _page_exc.detected == "givex_fancybox_submission_error_close_failed":
-                _logger.warning(
-                    "[trace=%s] worker=%s GIVEX_POPUP close failed; aborting cycle safely",
-                    _get_trace_id(), worker_id,
-                )
-                watchdog.reset_session(worker_id)
-                raise
+        except PageStateError:
             raise
         except InvalidTransitionError as _fsm_exc:
             _logger.warning(
