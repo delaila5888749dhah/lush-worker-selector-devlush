@@ -95,7 +95,7 @@ _GIVEX_POPUP_CLOSE_FAILED = "givex_fancybox_submission_error_close_failed"
 _log = logging.getLogger(__name__)
 
 
-def _givex_submission_popup_error(closed: bool) -> PageStateError:
+def _make_givex_submission_popup_error(closed: bool) -> PageStateError:
     return PageStateError(_GIVEX_POPUP_ERROR if closed else _GIVEX_POPUP_CLOSE_FAILED)
 
 
@@ -2357,7 +2357,7 @@ class GivexDriver:
         deadline = time.monotonic() + timeout
         last_url = last_non_empty_url = ""
         transitions = 0
-        expected_fragment = url_fragment or ""
+        expected_fragment = url_fragment
         expected_short = _short_url(expected_fragment)
         started = time.monotonic()
         while time.monotonic() < deadline:
@@ -2385,7 +2385,7 @@ class GivexDriver:
                 closed = self._close_givex_submission_error_popup()
                 if closed and expected_fragment in self._driver.current_url:
                     return
-                raise _givex_submission_popup_error(closed)
+                raise _make_givex_submission_popup_error(closed)
             time.sleep(0.5)
         raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
 
@@ -4364,7 +4364,7 @@ class GivexDriver:
                 state = self._detect_non_popup_page_state()
                 if state is not None:
                     return state
-            raise _givex_submission_popup_error(closed)
+            raise _make_givex_submission_popup_error(closed)
 
         # 4 — ui_busy (spinner visible means active loading, not a stuck UI)
         if self.find_elements(SEL_UI_LOCK_SPINNER):
@@ -4383,13 +4383,14 @@ class GivexDriver:
                     state = self._detect_non_popup_page_state()
                     if state is not None:
                         return state
-                raise _givex_submission_popup_error(closed)
+                raise _make_givex_submission_popup_error(closed)
             if self.find_elements(SEL_UI_LOCK_SPINNER):
                 return "ui_busy"
         # After 3s with no spinner/state change → treat as stuck ui_lock
         return "ui_lock"
 
     def _detect_non_popup_page_state(self) -> Optional[str]:
+        """Return success/vbv_3ds/declined, or None without handling Fancybox."""
         current_url = self._driver.current_url
         if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
             return "success"
