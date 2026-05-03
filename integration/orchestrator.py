@@ -29,7 +29,6 @@ from modules.common.exceptions import (
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
-from modules.cdp.driver import SubmissionErrorPopupDetected
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
 # Import fails gracefully so orchestrator works before that PR lands.
 try:
@@ -1640,7 +1639,10 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 lambda: cdp.detect_page_state(worker_id)
             )
             if _page_state in _FSM_STATES:
-                fsm.transition_for_worker(worker_id, _page_state)
+                state = fsm.transition_for_worker(worker_id, _page_state)
+                if _page_state == "declined":
+                    watchdog.reset_session(worker_id)
+                    return state, None
             else:
                 _logger.info(
                     "[trace=%s] worker=%s post-submit state=%s is non-FSM; "
@@ -1652,22 +1654,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
                 "[trace=%s] FSM InvalidTransitionError after submit for worker=%s: %s",
                 _get_trace_id(), worker_id, _fsm_exc,
             )
-        except SubmissionErrorPopupDetected as _popup_exc:
-            if _popup_exc.popup_closed is False:
-                _logger.warning(
-                    "[trace=%s] GIVEX_SUBMISSION_ERROR_POPUP worker=%s reason=%s; "
-                    "popup close failed, aborting retry path",
-                    _get_trace_id(), worker_id, _popup_exc.reason,
-                )
-                raise CDPError("givex_fancybox_submission_error_close_failed") from _popup_exc
-            _logger.info(
-                "[trace=%s] GIVEX_SUBMISSION_ERROR_POPUP worker=%s reason=%s; "
-                "mapping to declined retry path (no submit confirmation)",
-                _get_trace_id(), worker_id, _popup_exc.reason,
-            )
-            state = fsm.transition_for_worker(worker_id, "declined")
-            watchdog.reset_session(worker_id)
-            return state, None
+        except CDPError:
+            raise
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.warning(
                 "[trace=%s] detect_page_state failed after submit for worker=%s — "

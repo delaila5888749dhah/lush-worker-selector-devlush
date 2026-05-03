@@ -55,7 +55,7 @@ from modules.cdp.driver import (
     SEL_SENDER_NAME,
     SEL_UI_LOCK_SPINNER,
     SEL_VBV_IFRAME,
-    SubmissionErrorPopupDetected,
+    _SubmissionErrorPopupDetected,
     URL_BASE,
     URL_CART,
     URL_CHECKOUT,
@@ -402,10 +402,71 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
         with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
              patch.object(gd, "_close_givex_submission_error_popup") as close, \
              patch("modules.cdp.driver.time.sleep", return_value=None):
-            with self.assertRaises(SubmissionErrorPopupDetected):
+            with self.assertRaises(_SubmissionErrorPopupDetected):
                 gd._wait_for_url("/confirmation", timeout=1)
 
         close.assert_called_once()
+
+    def test_post_submit_wait_url_change_after_popup_close_wins_race(self):
+        selenium = _make_driver(current_url="https://example.com/payment.html")
+        gd = GivexDriver(selenium)
+
+        def _close_popup():
+            selenium.current_url = "https://example.com/confirmation"
+            return True
+
+        with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup", side_effect=_close_popup), \
+             patch("modules.cdp.driver.time.sleep", return_value=None):
+            gd._wait_for_url("/confirmation", timeout=1)
+
+    def test_detect_page_state_decline_after_popup_close_wins_race(self):
+        selenium = _make_driver(current_url=URL_PAYMENT)
+        body = selenium.find_element.return_value
+        gd = GivexDriver(selenium)
+
+        def _close_popup():
+            body.text = "Transaction failed"
+            return True
+
+        with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup", side_effect=_close_popup):
+            self.assertEqual(gd.detect_page_state(), "declined")
+
+    def test_detect_page_state_still_payment_after_popup_close_raises_retry_signal(self):
+        selenium = _make_driver(current_url=URL_PAYMENT)
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_detect_givex_submission_error_popup", return_value=True), \
+             patch.object(gd, "_close_givex_submission_error_popup", return_value=True):
+            with self.assertRaises(_SubmissionErrorPopupDetected):
+                gd.detect_page_state()
+
+    def test_public_detect_page_state_translates_popup_signal(self):
+        from modules.cdp import main as cdp_main
+
+        worker_id = "popup-public-translate"
+        cdp_main.register_driver(worker_id, MagicMock(
+            detect_page_state=MagicMock(side_effect=_SubmissionErrorPopupDetected())
+        ))
+        try:
+            self.assertEqual(cdp_main.detect_page_state(worker_id), "declined")
+        finally:
+            cdp_main.unregister_driver(worker_id)
+
+    def test_public_detect_page_state_close_failure_raises_cdp_error(self):
+        from modules.cdp import main as cdp_main
+
+        worker_id = "popup-public-close-failed"
+        cdp_main.register_driver(worker_id, MagicMock(
+            detect_page_state=MagicMock(
+                side_effect=_SubmissionErrorPopupDetected(popup_closed=False)
+            )
+        ))
+        try:
+            with self.assertRaises(CDPError):
+                cdp_main.detect_page_state(worker_id)
+        finally:
+            cdp_main.unregister_driver(worker_id)
 
     def test_post_submit_wait_url_change_wins_race(self):
         selenium = _make_driver(current_url="https://example.com/confirmation")
@@ -459,8 +520,7 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
             with patch.object(orch, "_get_idempotency_store", return_value=fake_store), \
                  patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
                  patch.object(orch.cdp, "_get_driver", return_value=fake_driver), \
-                 patch.object(orch.cdp, "detect_page_state",
-                              side_effect=SubmissionErrorPopupDetected()), \
+                 patch.object(orch.cdp, "detect_page_state", return_value="declined"), \
                  patch.object(orch, "_setup_network_total_listener"), \
                  patch.object(orch, "_notify_total_from_dom"), \
                  patch.object(orch, "_emit_billing_audit_event"), \
@@ -493,7 +553,9 @@ class TestGivexSubmissionErrorPopup(unittest.TestCase):
                  patch.object(orch, "_cdp_call_with_timeout", return_value=None), \
                  patch.object(orch.cdp, "_get_driver", return_value=fake_driver), \
                  patch.object(orch.cdp, "detect_page_state",
-                              side_effect=SubmissionErrorPopupDetected(popup_closed=False)), \
+                              side_effect=CDPError(
+                                  "givex_fancybox_submission_error_close_failed"
+                              )), \
                  patch.object(orch, "_setup_network_total_listener"), \
                  patch.object(orch, "_notify_total_from_dom"), \
                  patch.object(orch, "_emit_billing_audit_event"), \

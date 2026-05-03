@@ -11,6 +11,8 @@ import signal
 import threading
 from typing import Dict, Optional
 
+from modules.common.exceptions import CDPError
+from modules.cdp.driver import _SubmissionErrorPopupDetected
 from modules.cdp.driver import handle_ui_lock_focus_shift as _driver_focus_shift
 from modules.cdp.driver import detect_popup_thank_you as _driver_detect_popup_thank_you
 from modules.common.sanitize import sanitize_error as _sanitize_error  # noqa: F401  # INV-PII-UNIFIED-01 — re-exported for tests
@@ -109,7 +111,12 @@ def detect_page_state(worker_id: str) -> str:
         PageStateError: if the driver detects a page state that cannot be
             mapped to a known FSM state (propagated from the driver).
     """
-    return _get_driver(worker_id).detect_page_state()
+    try:
+        return _get_driver(worker_id).detect_page_state()
+    except _SubmissionErrorPopupDetected as exc:
+        if exc.popup_closed is False:
+            raise CDPError("givex_fancybox_submission_error_close_failed") from exc
+        return "declined"
 
 
 def fill_card(card_info, worker_id: str) -> None:

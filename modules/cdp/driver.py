@@ -94,7 +94,7 @@ _GIVEX_FANCYBOX_CLOSE_TOTAL_BUDGET_S = 4.0
 _log = logging.getLogger(__name__)
 
 
-class SubmissionErrorPopupDetected(Exception):
+class _SubmissionErrorPopupDetected(Exception):
     """Internal signal for the Givex Fancybox submission-error popup."""
 
     def __init__(
@@ -2391,7 +2391,13 @@ class GivexDriver:
                 return
             if self._detect_givex_submission_error_popup():
                 closed = self._close_givex_submission_error_popup()
-                raise SubmissionErrorPopupDetected(popup_closed=closed)
+                try:
+                    current = self._driver.current_url
+                except Exception:
+                    current = ""
+                if closed and url_fragment in current:
+                    return
+                raise _SubmissionErrorPopupDetected(popup_closed=closed)
             time.sleep(0.5)
         raise PageStateError(f"url_wait expected={expected_short} last_seen={_sanitize_url_for_log(last_non_empty_url)} transitions={transitions}")
 
@@ -2473,7 +2479,7 @@ class GivexDriver:
                 _log.debug(
                     "GIVEX_FANCYBOX_CLOSE persisted after click selector_index=%d attempt=%d",
                     selector_index, attempt + 1,
-        )
+                )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _log.warning("GIVEX_FANCYBOX_CLOSE close budget exhausted before Escape")
@@ -4377,37 +4383,17 @@ class GivexDriver:
         Raises:
             PageStateError: if the page state cannot be determined.
         """
-        current_url = self._driver.current_url
+        state = self._detect_non_popup_page_state()
+        if state is not None:
+            return state
 
-        # 1 — success
-        if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
-            return "success"
-        # Gate DOM/text confirmation signals on the Givex host to avoid
-        # false-positives from generic CSS classes or marketing copy on
-        # unrelated pages.
-        on_givex_host = URL_CONFIRM_HOST in current_url.lower()
-        if on_givex_host and self.find_elements(SEL_CONFIRMATION_EL):
-            return "success"
-        # SPA fallback: DOM renders confirmation text without URL change
-        page_text = self._driver.find_element("tag name", "body").text.lower()
-        if on_givex_host and "thank you for your order" in page_text:
-            return "success"
-
-        # 2 — vbv_3ds
-        if self.find_elements(SEL_VBV_IFRAME):
-            return "vbv_3ds"
-
-        # 3 — declined
-        # Givex: error=vv là tín hiệu VBV/3DS thất bại (Verified by Visa / 3D Secure failed)
-        if "error=vv" in current_url.lower():
-            return "declined"
-        if self.find_elements(SEL_DECLINED_MSG):
-            return "declined"
-        if "declined" in page_text or "transaction failed" in page_text:
-            return "declined"
         if self._detect_givex_submission_error_popup():
             closed = self._close_givex_submission_error_popup()
-            raise SubmissionErrorPopupDetected(popup_closed=closed)
+            if closed:
+                state = self._detect_non_popup_page_state()
+                if state is not None:
+                    return state
+            raise _SubmissionErrorPopupDetected(popup_closed=closed)
 
         # 4 — ui_busy (spinner visible means active loading, not a stuck UI)
         if self.find_elements(SEL_UI_LOCK_SPINNER):
@@ -4417,20 +4403,40 @@ class GivexDriver:
         deadline = time.time() + 3.0
         while time.time() < deadline:
             time.sleep(0.3)
-            current_url = self._driver.current_url
-            if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
-                return "success"
-            if self.find_elements(SEL_VBV_IFRAME):
-                return "vbv_3ds"
-            if "error=vv" in current_url:
-                return "declined"
+            state = self._detect_non_popup_page_state()
+            if state is not None:
+                return state
             if self._detect_givex_submission_error_popup():
                 closed = self._close_givex_submission_error_popup()
-                raise SubmissionErrorPopupDetected(popup_closed=closed)
+                if closed:
+                    state = self._detect_non_popup_page_state()
+                    if state is not None:
+                        return state
+                raise _SubmissionErrorPopupDetected(popup_closed=closed)
             if self.find_elements(SEL_UI_LOCK_SPINNER):
                 return "ui_busy"
         # After 3s with no spinner/state change → treat as stuck ui_lock
         return "ui_lock"
+
+    def _detect_non_popup_page_state(self) -> str | None:
+        current_url = self._driver.current_url
+        if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
+            return "success"
+        on_givex_host = URL_CONFIRM_HOST in current_url.lower()
+        if on_givex_host and self.find_elements(SEL_CONFIRMATION_EL):
+            return "success"
+        page_text = self._driver.find_element("tag name", "body").text.lower()
+        if on_givex_host and "thank you for your order" in page_text:
+            return "success"
+        if self.find_elements(SEL_VBV_IFRAME):
+            return "vbv_3ds"
+        if "error=vv" in current_url.lower():
+            return "declined"
+        if self.find_elements(SEL_DECLINED_MSG):
+            return "declined"
+        if "declined" in page_text or "transaction failed" in page_text:
+            return "declined"
+        return None
 
     # ── Split-phase orchestrator helpers ─────────────────────────────────────
 
