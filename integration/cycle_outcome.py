@@ -24,13 +24,36 @@ class CycleDidNotCompleteError(RuntimeError):
         )
 
 
+KNOWN_RUN_CYCLE_ACTIONS = frozenset({
+    "complete",
+    "abort_cycle",
+    "await_3ds",
+    "retry",
+    "retry_new_card",
+})
+
+
 def normalize_action(action) -> str:
-    """Return canonical string action regardless of tuple form.
+    """Return canonical action token; fail loud on malformed action values.
 
     ``run_cycle()`` may return ``action`` as a plain string (e.g.
     ``"complete"``) or as a tuple like ``("retry_new_card", CardInfo)``.
-    Normalise to the leading string token for comparisons.
+    Normalize to the leading string token for comparisons.
+
+    Do not stringify arbitrary objects, because repr/str may contain
+    sensitive context and would turn a contract bug into loggable data.
     """
-    if isinstance(action, tuple) and action:
-        return str(action[0])
-    return str(action)
+    if isinstance(action, tuple):
+        if not action or not isinstance(action[0], str):
+            raise ValueError("malformed run_cycle action tuple")
+        token = action[0]
+        if token != "retry_new_card":
+            raise ValueError("malformed run_cycle tuple action")
+    elif isinstance(action, str):
+        token = action
+    else:
+        raise ValueError("malformed run_cycle action type")
+
+    if token not in KNOWN_RUN_CYCLE_ACTIONS:
+        raise ValueError("unknown run_cycle action token")
+    return token

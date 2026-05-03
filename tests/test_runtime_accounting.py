@@ -75,11 +75,6 @@ class TestTaskFnNormalization(unittest.TestCase):
         result = self._run_with_action("complete")
         self.assertIsNone(result)
 
-    def test_failure_action_raises(self):
-        with self.assertRaises(CycleDidNotCompleteError) as cm:
-            self._run_with_action("failure")
-        self.assertEqual(cm.exception.action, "failure")
-
     def test_abort_cycle_action_raises(self):
         with self.assertRaises(CycleDidNotCompleteError) as cm:
             self._run_with_action("abort_cycle")
@@ -102,6 +97,20 @@ class TestTaskFnNormalization(unittest.TestCase):
             self._run_with_action(("retry_new_card", sentinel_card))
         # Normalised to leading string token.
         self.assertEqual(cm.exception.action, "retry_new_card")
+
+    def test_unknown_action_fails_loud(self):
+        with self.assertRaises(ValueError) as cm:
+            self._run_with_action("completed")
+        self.assertEqual(str(cm.exception), "unknown run_cycle action token")
+
+    def test_malformed_action_type_fails_loud(self):
+        class SensitiveAction:
+            def __str__(self):
+                raise AssertionError("normalize_action must not stringify arbitrary objects")
+
+        with self.assertRaises(ValueError) as cm:
+            self._run_with_action(SensitiveAction())
+        self.assertEqual(str(cm.exception), "malformed run_cycle action type")
 
 
 class TestRuntimeAccounting(unittest.TestCase):
@@ -175,10 +184,10 @@ class TestRuntimeAccounting(unittest.TestCase):
         runtime._state = "INIT"
         return wid
 
-    def test_failure_action_records_error(self):
+    def test_retry_action_records_error(self):
         from modules.monitor import main as monitor
 
-        self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
+        self._run_one_cycle(CycleDidNotCompleteError(action="retry"))
         m = monitor.get_metrics()
         self.assertEqual(m["success_count"], 0)
         self.assertEqual(m["error_count"], 1)
@@ -216,7 +225,7 @@ class TestRuntimeAccounting(unittest.TestCase):
 
         mock_autoscaler = MagicMock()
         with patch.object(runtime, "get_autoscaler", return_value=mock_autoscaler):
-            self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
+            self._run_one_cycle(CycleDidNotCompleteError(action="retry"))
         mock_autoscaler.record_failure.assert_not_called()
         # And it must not have been recorded as success either.
         mock_autoscaler.record_success.assert_not_called()
@@ -229,6 +238,16 @@ class TestRuntimeAccounting(unittest.TestCase):
             runtime._consecutive_billing_failures = 1
         self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
         self.assertEqual(runtime._consecutive_billing_failures, 0)
+
+    def test_non_complete_resets_restart_delay(self):
+        """CycleDidNotCompleteError must clear stale crash restart backoff."""
+        from integration import runtime
+
+        with runtime._lock:
+            runtime._restart_delay = 8
+        self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
+        with runtime._lock:
+            self.assertEqual(runtime._restart_delay, 0)
 
     def test_non_complete_does_not_increment_pending_restarts(self):
         """CycleDidNotCompleteError is an expected per-cycle outcome — NOT a
@@ -263,7 +282,7 @@ class TestRuntimeAccounting(unittest.TestCase):
             # Mirror real run_cycle: autoscaler accounting before "return".
             get_autoscaler().record_failure(worker_id)
             recorded_wid.append(worker_id)
-            raise CycleDidNotCompleteError(action="failure")
+            raise CycleDidNotCompleteError(action="retry")
 
         import threading
         runtime._state = "RUNNING"

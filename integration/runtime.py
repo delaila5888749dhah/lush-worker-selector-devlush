@@ -299,8 +299,10 @@ def _worker_fn(worker_id, task_fn, persona):
                 # run_cycle() already accounted autoscaler failure for non-complete
                 # outcomes — do NOT double-count here.
                 # Non-complete cycle is not a billing failure — it breaks the
-                # billing circuit-breaker consecutive streak.
+                # billing circuit-breaker consecutive streak. It is also a
+                # healthy runtime cycle, so clear stale crash restart backoff.
                 with _lock:
+                    _restart_delay = 0
                     _consecutive_billing_failures = 0
                 err_data: dict = {"error": _sanitize_error(exc), "action": exc.action}
                 if persona_type_tag is not None:
