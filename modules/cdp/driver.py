@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -87,7 +87,7 @@ except ImportError:
 
 _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 _GIVEX_CART_STATE_POLL_DEFAULT_S = 18.0
-_GIVEX_FANCYBOX_CLICK_ATTEMPTS = 1
+_GIVEX_FANCYBOX_CLICK_ATTEMPTS = 1  # bounded: 4 selectors + Escape at 0.8s each
 _GIVEX_FANCYBOX_CLOSE_VERIFY_S = 0.8
 _GIVEX_SUBMISSION_ERROR = "givex_fancybox_submission_error"
 _GIVEX_SUBMISSION_ERROR_CLOSE_FAILED = "givex_fancybox_submission_error_close_failed"
@@ -2353,7 +2353,8 @@ class GivexDriver:
         deadline = time.monotonic() + timeout
         last_url = last_non_empty_url = ""
         transitions = 0
-        expected_short = _short_url(url_fragment)
+        expected_fragment = url_fragment or ""
+        expected_short = _short_url(expected_fragment)
         started = time.monotonic()
         while time.monotonic() < deadline:
             current = ""
@@ -2370,7 +2371,7 @@ class GivexDriver:
                     )
                     last_non_empty_url = current
                 last_url = current
-            if url_fragment in current:
+            if expected_fragment in current:
                 _log.info(
                     "_wait_for_url[%s]: matched after %d transitions, %.1fs elapsed",
                     expected_short, transitions, time.monotonic() - started,
@@ -2378,7 +2379,7 @@ class GivexDriver:
                 return
             if self._detect_givex_submission_error_popup():
                 closed = self._close_givex_submission_error_popup()
-                if closed and url_fragment in self._driver.current_url:
+                if closed and expected_fragment in self._driver.current_url:
                     return
                 raise PageStateError(
                     _GIVEX_SUBMISSION_ERROR if closed
@@ -4393,7 +4394,7 @@ class GivexDriver:
         # After 3s with no spinner/state change → treat as stuck ui_lock
         return "ui_lock"
 
-    def _detect_non_popup_page_state(self) -> str | None:
+    def _detect_non_popup_page_state(self) -> Optional[str]:
         current_url = self._driver.current_url
         if any(frag in current_url for frag in URL_CONFIRM_FRAGMENTS):
             return "success"
