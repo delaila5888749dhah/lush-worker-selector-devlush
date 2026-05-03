@@ -643,13 +643,14 @@ def _find_matching_option_index(
     )
 
     for idx, (value, text) in enumerate(option_pairs):
-        if value == requested_text or text.strip() == requested_text:
-            if (
-                is_expiry_month
-                and requested_month_for_conflict is not None
-                and _has_conflicting_month_name(value, text, requested_month_for_conflict)
-            ):
-                continue
+        exact_match = value == requested_text or text.strip() == requested_text
+        conflicting_month = (
+            exact_match
+            and is_expiry_month
+            and requested_month_for_conflict is not None
+            and _has_conflicting_month_name(value, text, requested_month_for_conflict)
+        )
+        if exact_match and not conflicting_month:
             return idx
 
     if (requested_numeric := _numeric_option_key(requested_text)) is not None:

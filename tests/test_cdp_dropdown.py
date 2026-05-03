@@ -278,7 +278,7 @@ class TestCdpSelectOption(unittest.TestCase):
 
     def test_wait_for_select_options_unexpected_error_propagates(self):
         selenium = _make_driver()
-        selenium.execute_script.side_effect = RuntimeError("driver bug")
+        selenium.execute_script.side_effect = RuntimeError("unexpected_selenium_error")
         gd = GivexDriver(selenium, strict=False)
 
         with self.assertRaises(RuntimeError):
