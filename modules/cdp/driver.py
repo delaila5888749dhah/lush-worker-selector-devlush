@@ -2357,8 +2357,7 @@ class GivexDriver:
         deadline = time.monotonic() + timeout
         last_url = last_non_empty_url = ""
         transitions = 0
-        expected_fragment = url_fragment
-        expected_short = _short_url(expected_fragment)
+        expected_short = _short_url(url_fragment)
         started = time.monotonic()
         while time.monotonic() < deadline:
             current = ""
@@ -2375,7 +2374,7 @@ class GivexDriver:
                     )
                     last_non_empty_url = current
                 last_url = current
-            if expected_fragment in current:
+            if url_fragment in current:
                 _log.info(
                     "_wait_for_url[%s]: matched after %d transitions, %.1fs elapsed",
                     expected_short, transitions, time.monotonic() - started,
@@ -2383,7 +2382,7 @@ class GivexDriver:
                 return
             if self._detect_givex_submission_error_popup():
                 closed = self._close_givex_submission_error_popup()
-                if closed and expected_fragment in self._driver.current_url:
+                if closed and url_fragment in self._driver.current_url:
                     return
                 raise _make_givex_submission_popup_error(closed)
             time.sleep(0.5)
