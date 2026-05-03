@@ -4316,7 +4316,13 @@ class GivexDriver:
         return False
 
     def wait_for_post_submit_outcome(self, timeout: float = 15.0) -> str:
-        """Resolve success, decline, VBV, popup, or ui_lock post-submit outcome."""
+        """Resolve post-submit outcome within *timeout* seconds.
+
+        Returns one of: "success", "declined", "vbv_3ds",
+        "submission_error_popup", or "ui_lock" (timeout fallback).
+        Raises PageStateError("givex_fancybox_submission_error_close_failed")
+        if the Fancybox popup could not be dismissed.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self._safe_detect_non_popup_state()

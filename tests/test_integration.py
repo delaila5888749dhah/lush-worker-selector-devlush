@@ -314,7 +314,7 @@ class RunPaymentStepTests(unittest.TestCase):
         mock_next.assert_not_called()
         self.assertIn("GIVEX_POPUP_RECOVERED during fallback", "\n".join(logs.output))
 
-    def test_close_failure_aborts_safely_without_unconfirmed_mark(self):
+    def test_close_failure_aborts_safely_with_unconfirmed_mark(self):
         store = MagicMock()
         exc = PageStateError("givex_fancybox_submission_error_close_failed")
         with (
@@ -330,7 +330,7 @@ class RunPaymentStepTests(unittest.TestCase):
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
         mock_watchdog.reset_session.assert_called_once_with("default")
-        store.mark_unconfirmed.assert_not_called()
+        store.mark_unconfirmed.assert_called_once()
         mock_next.assert_not_called()
 
     def test_non_close_page_state_error_still_resets_watchdog(self):
@@ -348,7 +348,7 @@ class RunPaymentStepTests(unittest.TestCase):
                 run_payment_step(_make_task())
         mock_watchdog.reset_session.assert_called_once_with("default")
 
-    def test_fallback_close_failure_propagates_without_retry(self):
+    def test_fallback_close_failure_propagates_with_unconfirmed_mark(self):
         store = MagicMock()
         exc = PageStateError("givex_fancybox_submission_error_close_failed")
         with (
@@ -365,7 +365,7 @@ class RunPaymentStepTests(unittest.TestCase):
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
         mock_watchdog.reset_session.assert_called_once_with("default")
-        store.mark_unconfirmed.assert_not_called()
+        store.mark_unconfirmed.assert_called_once()
 
     def test_fallback_non_close_pagestateerror_resets_and_propagates(self):
         exc = PageStateError("unexpected_state")

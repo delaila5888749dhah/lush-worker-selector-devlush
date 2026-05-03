@@ -1694,13 +1694,8 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             total = None
     except SessionFlaggedError as exc:
         _task_id_log = getattr(task, "task_id", None)
-        if (
-            isinstance(exc, PageStateError)
-            and exc.detected == "givex_fancybox_submission_error_close_failed"
-        ):
+        if isinstance(exc, PageStateError) and exc.detected == "givex_fancybox_submission_error_close_failed":
             _logger.error("[trace=%s] worker=%s GIVEX_POPUP close failure: aborting", _get_trace_id(), worker_id)
-            watchdog.reset_session(worker_id)
-            raise
         try:
             _alerting.send_alert(
                 f"Watchdog timeout worker={worker_id} task_id={_task_id_log}"
@@ -1771,10 +1766,15 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             if _page_exc.detected == "givex_fancybox_submission_error_close_failed":
                 _logger.error("[trace=%s] worker=%s GIVEX_POPUP fallback close failure", _get_trace_id(), worker_id)
             else:
-                _logger.warning(
-                    "[trace=%s] FSM fallback PageStateError for worker=%s reason=%s",
-                    _get_trace_id(), worker_id, _page_exc.detected,
-                )
+                _logger.warning("[trace=%s] FSM fallback PageStateError for worker=%s reason=%s", _get_trace_id(), worker_id, _page_exc.detected)
+            _task_id_fb = getattr(task, "task_id", None)
+            if _task_id_fb is not None:
+                try:
+                    _get_idempotency_store().mark_unconfirmed(_task_id_fb, ttl_seconds=_UNCONFIRMED_TTL_SECONDS)
+                except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+                    _logger.error("Failed to mark task_id=%s as unconfirmed", _task_id_fb, exc_info=True)
+            watchdog.reset_session(worker_id)
+            raise
             watchdog.reset_session(worker_id)
             raise
         except Exception:  # noqa: BLE001  # pylint: disable=broad-except
