@@ -729,15 +729,10 @@ SEL_DECLINED_MSG    = ".payment-error, .error-message, div[data-error]"
 SEL_UI_LOCK_SPINNER = ".loading-overlay, .spinner, div[aria-busy='true']"
 SEL_VBV_IFRAME      = "iframe[src*='3dsecure'], iframe[src*='adyen'], iframe[id*='threeds']"
 _GIVEX_FANCYBOX_CLOSE_VERIFY_S = 0.8
-_GIVEX_FANCYBOX_SELECTORS = (
-    ".fancybox-wrap.fancybox-opened",
-    ".fancybox-wrap.fancybox-type-html",
-)
+_GIVEX_FANCYBOX_SELECTORS = (".fancybox-wrap.fancybox-opened", ".fancybox-wrap.fancybox-type-html")
 _GIVEX_FANCYBOX_CLOSE_SELECTORS = (
     ".fancybox-wrap.fancybox-opened .fancybox-item.fancybox-close",
-    ".fancybox-opened .fancybox-close",
-    "a.fancybox-close",
-    ".fancybox-close",
+    ".fancybox-opened .fancybox-close", "a.fancybox-close", ".fancybox-close",
 )
 # VBV/3DS cancel button selectors in priority order (Phase 4 audit [D6]).
 # Evaluated one-by-one via :meth:`GivexDriver._find_vbv_cancel_button`; first
