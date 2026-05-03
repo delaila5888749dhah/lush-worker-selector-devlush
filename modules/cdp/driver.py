@@ -4316,6 +4316,7 @@ class GivexDriver:
         return False
 
     def wait_for_post_submit_outcome(self, timeout: float = 15.0) -> str:
+        """Resolve success, decline, VBV, popup, or ui_lock post-submit outcome."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self._safe_detect_non_popup_state()
