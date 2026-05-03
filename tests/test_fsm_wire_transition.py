@@ -57,7 +57,7 @@ class TestFSMPrimaryTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.watchdog") as mock_watchdog,
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.return_value = page_state
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.return_value = page_state
             mock_fsm.transition_for_worker.return_value = State(page_state)
             mock_fsm.get_current_state_for_worker.return_value = State(page_state)
             mock_watchdog.wait_for_total.return_value = 49.99
@@ -71,28 +71,28 @@ class TestFSMPrimaryTransitionPath(unittest.TestCase):
         """Mock DOM /confirmation → FSM state becomes success."""
         state, _total = self._run("success")
         self.assertEqual(state.name, "success")
-        self._mock_cdp.wait_for_post_submit_outcome.assert_called_with("default")
+        self._mock_cdp._get_driver.assert_called_with("default")
         self._mock_fsm.transition_for_worker.assert_called_with("default", "success")
 
     def test_declined_state_detect_then_transition(self):
         """Mock DOM declined → FSM state becomes declined."""
         state, _total = self._run("declined")
         self.assertEqual(state.name, "declined")
-        self._mock_cdp.wait_for_post_submit_outcome.assert_called_with("default")
+        self._mock_cdp._get_driver.assert_called_with("default")
         self._mock_fsm.transition_for_worker.assert_called_with("default", "declined")
 
     def test_vbv_3ds_state_detect_then_transition(self):
         """Mock DOM iframe 3dsecure → FSM state becomes vbv_3ds."""
         state, _total = self._run("vbv_3ds")
         self.assertEqual(state.name, "vbv_3ds")
-        self._mock_cdp.wait_for_post_submit_outcome.assert_called_with("default")
+        self._mock_cdp._get_driver.assert_called_with("default")
         self._mock_fsm.transition_for_worker.assert_called_with("default", "vbv_3ds")
 
     def test_ui_lock_state_detect_then_transition(self):
         """Mock DOM spinner → FSM state becomes ui_lock."""
         state, _total = self._run("ui_lock")
         self.assertEqual(state.name, "ui_lock")
-        self._mock_cdp.wait_for_post_submit_outcome.assert_called_with("default")
+        self._mock_cdp._get_driver.assert_called_with("default")
         self._mock_fsm.transition_for_worker.assert_called_with("default", "ui_lock")
 
     def test_wait_for_post_submit_outcome_called_after_submit_purchase(self):
@@ -107,7 +107,7 @@ class TestFSMPrimaryTransitionPath(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_cdp.submit_purchase.side_effect = lambda **kw: call_order.append("submit")
-            mock_cdp.wait_for_post_submit_outcome.side_effect = lambda _w_id: (
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = lambda: (
                 call_order.append("detect"), "success"
             )[1]
             mock_fsm.transition_for_worker.return_value = State("success")
@@ -126,7 +126,7 @@ class TestFSMPrimaryTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.watchdog") as mock_watchdog,
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.return_value = "success"
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.return_value = "success"
             mock_fsm.transition_for_worker.side_effect = InvalidTransitionError("bad")
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_watchdog.wait_for_total.return_value = 49.99
@@ -145,7 +145,7 @@ class TestFSMPrimaryTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.watchdog") as mock_watchdog,
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.side_effect = RuntimeError("page gone")
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = RuntimeError("page gone")
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_watchdog.wait_for_total.return_value = 49.99
             state, total = run_payment_step(task)
@@ -169,7 +169,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
         task = _make_task()
         detect_calls = []
 
-        def _detect_side_effect(_w_id):
+        def _detect_side_effect():
             detect_calls.append(len(detect_calls))
             if len(detect_calls) == 1:
                 raise RuntimeError("primary outcome failed")
@@ -182,7 +182,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.watchdog") as mock_watchdog,
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.side_effect = _detect_side_effect
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = _detect_side_effect
             mock_fsm.transition_for_worker.return_value = State(page_state)
             # Primary path failed → state is None → fallback must run
             mock_fsm.get_current_state_for_worker.return_value = None
@@ -226,7 +226,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
         task = _make_task()
         detect_calls = []
 
-        def _detect_side_effect(_w_id):
+        def _detect_side_effect():
             detect_calls.append(1)
             if len(detect_calls) == 1:
                 raise RuntimeError("primary outcome failed")
@@ -239,7 +239,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.watchdog") as mock_watchdog,
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.side_effect = _detect_side_effect
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = _detect_side_effect
             mock_fsm.transition_for_worker.side_effect = InvalidTransitionError("bad")
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_watchdog.wait_for_total.return_value = 49.99
@@ -257,7 +257,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.time.sleep"),
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.return_value = "ui_lock"
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.return_value = "ui_lock"
             mock_fsm.transition_for_worker.return_value = State("ui_lock")
             mock_fsm.get_current_state_for_worker.return_value = State("ui_lock")
             mock_watchdog.wait_for_total.return_value = 49.99
@@ -278,7 +278,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.time.sleep"),
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.return_value = "ui_busy"
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.return_value = "ui_busy"
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_watchdog.wait_for_total.return_value = 49.99
             state, _total = run_payment_step(task)
@@ -292,7 +292,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
         # then sees ui_lock.
         detect_calls = {"n": 0}
 
-        def _detect(_w_id):
+        def _detect():
             detect_calls["n"] += 1
             if detect_calls["n"] == 1:
                 raise RuntimeError("primary outcome failed")
@@ -306,7 +306,7 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.time.sleep"),
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.side_effect = _detect
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = _detect
             mock_fsm.transition_for_worker.return_value = State("ui_lock")
             mock_fsm.get_current_state_for_worker.return_value = None
             mock_watchdog.wait_for_total.return_value = 49.99
@@ -325,8 +325,8 @@ class TestFSMFallbackTransitionPath(unittest.TestCase):
             patch("integration.orchestrator.watchdog") as mock_watchdog,
         ):
             mock_billing.select_profile.return_value = MagicMock()
-            mock_cdp.wait_for_post_submit_outcome.side_effect = (
-                lambda _w_id: (detect_call_count.append(1), "success")[1]
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = (
+                lambda: (detect_call_count.append(1), "success")[1]
             )
             mock_fsm.transition_for_worker.return_value = State("success")
             # Primary state is non-None → fallback must NOT run

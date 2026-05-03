@@ -112,21 +112,6 @@ def detect_page_state(worker_id: str) -> str:
     return _get_driver(worker_id).detect_page_state()
 
 
-def wait_for_post_submit_outcome(worker_id: str, timeout: float = 15.0) -> str:
-    """Resolve post-submit outcome via the registered driver.
-    Args:
-        worker_id: Registered worker identifier.
-        timeout: Maximum seconds to wait.
-    Returns:
-        Resolved outcome string.
-    Raises:
-        RuntimeError: if no driver is registered.
-        SelectorTimeoutError: propagated from the driver.
-        PageStateError: propagated from driver, including Givex popup close failure.
-    """
-    return _get_driver(worker_id).wait_for_post_submit_outcome(timeout=timeout)
-
-
 def fill_card(card_info, worker_id: str) -> None:
     """Fill card form fields via the registered driver.
 

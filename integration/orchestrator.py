@@ -1624,7 +1624,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
             _get_trace_id(), worker_id,
         )
         try:
-            _page_state = cdp.wait_for_post_submit_outcome(worker_id)
+            _page_state = cdp._get_driver(worker_id).wait_for_post_submit_outcome()  # pylint: disable=protected-access
             if _page_state == "submission_error_popup":
                 _logger.info(
                     "[trace=%s] worker=%s GIVEX_POPUP_RECOVERED; technical retry path",
@@ -1753,7 +1753,7 @@ def run_payment_step(task, zip_code=None, worker_id: str = "default", _profile=N
     state = fsm.get_current_state_for_worker(worker_id)
     if state is None:
         try:
-            _page_state = cdp.wait_for_post_submit_outcome(worker_id)
+            _page_state = cdp._get_driver(worker_id).wait_for_post_submit_outcome()  # pylint: disable=protected-access
             if _page_state == "submission_error_popup":
                 _logger.info("[trace=%s] worker=%s GIVEX_POPUP_RECOVERED during fallback; technical retry path", _get_trace_id(), worker_id)
                 state = fsm.transition_for_worker(worker_id, "ui_lock")

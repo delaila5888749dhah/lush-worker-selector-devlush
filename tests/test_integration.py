@@ -276,7 +276,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.return_value = "submission_error_popup"
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.return_value = "submission_error_popup"
             mock_fsm.transition_for_worker.return_value = State("ui_lock")
             with self.assertLogs("integration.orchestrator", level="INFO") as logs:
                 state, total = run_payment_step(task)
@@ -299,7 +299,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.side_effect = [
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = [
                 "still_loading",
                 "submission_error_popup",
             ]
@@ -326,7 +326,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.side_effect = exc
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = exc
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
         mock_watchdog.reset_session.assert_called_once_with("default")
@@ -343,7 +343,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.side_effect = exc
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = exc
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
         mock_watchdog.reset_session.assert_called_once_with("default")
@@ -360,7 +360,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.side_effect = ["still_loading", exc]
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = ["still_loading", exc]
             mock_fsm.get_current_state_for_worker.return_value = None
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
@@ -377,7 +377,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.side_effect = [RuntimeError("transient"), exc]
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = [RuntimeError("transient"), exc]
             mock_fsm.get_current_state_for_worker.return_value = None
             with self.assertRaises(PageStateError):
                 run_payment_step(_make_task())
@@ -392,7 +392,7 @@ class RunPaymentStepTests(unittest.TestCase):
         ):
             mock_billing.select_profile.return_value = MagicMock()
             mock_watchdog.wait_for_total.return_value = 49.99
-            mock_cdp.wait_for_post_submit_outcome.return_value = "declined"
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.return_value = "declined"
             mock_fsm.transition_for_worker.return_value = State("declined")
             state, total = run_payment_step(_make_task())
         self.assertIsNone(total)
@@ -489,7 +489,7 @@ class RunCycleTests(unittest.TestCase):
             # that state remains None and handle_outcome returns "retry" (P0-1).
             # With the P0-2 retry loop, persistent "retry" outcomes are capped at
             # 2 attempts and converted to "abort_cycle".
-            mock_cdp.wait_for_post_submit_outcome.side_effect = RuntimeError("page not detected")
+            mock_cdp._get_driver.return_value.wait_for_post_submit_outcome.side_effect = RuntimeError("page not detected")
             action, state, total = run_cycle(_make_task())
         # Retry loop: "retry" × 2 → "abort_cycle"
         self.assertIn(action, ("retry", "abort_cycle"))
