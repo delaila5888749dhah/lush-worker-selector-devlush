@@ -4351,9 +4351,9 @@ class GivexDriver:
                     state = self._safe_detect_non_popup_state()
                     if state in {"success", "declined", "vbv_3ds"}:
                         return state
-                    time.sleep(min(0.2, max(0.0, settle_deadline - time.monotonic())))
+                    time.sleep(min(0.2, settle_deadline - time.monotonic()))
                 return "submission_error_popup"
-            time.sleep(min(0.4, max(0.0, deadline - time.monotonic())))
+            time.sleep(min(0.4, deadline - time.monotonic()))
         return "ui_lock"
 
     def detect_page_state(self) -> str:
