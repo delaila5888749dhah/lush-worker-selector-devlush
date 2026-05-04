@@ -21,11 +21,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.common.exceptions import CDPError, InvalidTransitionError, PageStateError, SessionFlaggedError, SessionLostError
+from modules.common.exceptions import CDPError, InvalidTransitionError, PageStateError, SessionFlaggedError
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
 from modules.cdp.session_health import classify_session_loss, session_alive
+from integration.session_outcome import SessionLostError
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
 # Import fails gracefully so orchestrator works before that PR lands.
 try:
@@ -463,6 +464,10 @@ class _IdempotencyStore:
         """Record that payment was submitted for task_id (but not yet confirmed)."""
         raise NotImplementedError
 
+    def is_submitted(self, task_id: str) -> bool:
+        """Return True if task_id has a submitted-but-not-yet-resolved checkpoint."""
+        raise NotImplementedError
+
     def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
         """Track *task_id* as submitted-but-unconfirmed for ``ttl_seconds`` (see ``reconcile_unconfirmed``)."""
         raise NotImplementedError
@@ -513,6 +518,10 @@ class _FileIdempotencyStore(_IdempotencyStore):
         with _idempotency_lock:
             _submitted_task_ids[task_id] = time.monotonic()
             _save_idempotency_store()
+
+    def is_submitted(self, task_id: str) -> bool:
+        with _idempotency_lock:
+            return task_id in _submitted_task_ids
 
     def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
         ttl = float(ttl_seconds) if ttl_seconds is not None else float(_UNCONFIRMED_TTL_SECONDS)
@@ -598,6 +607,16 @@ class _RedisIdempotencyStore(_IdempotencyStore):
                 "RedisIdempotencyStore.mark_submitted failed for task_id=%s: %s", task_id, exc,
             )
             raise
+
+    def is_submitted(self, task_id: str) -> bool:
+        try:
+            return self._redis.get(self._key(task_id)) == "submitted"
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.error(
+                "RedisIdempotencyStore.is_submitted failed for task_id=%s: %s",
+                task_id, exc,
+            )
+            return False
 
     def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
         ttl = int(ttl_seconds) if ttl_seconds is not None else int(_UNCONFIRMED_TTL_SECONDS)
@@ -1990,7 +2009,15 @@ def _mark_unconfirmed_after_session_loss(task_id, worker_id: str) -> None:
     if task_id is None:
         return
     try:
-        _get_idempotency_store().mark_unconfirmed(
+        store = _get_idempotency_store()
+        if not store.is_submitted(task_id):
+            _logger.warning(
+                "Session loss after handle_outcome for worker=%s task_id=%s skipped "
+                "mark_unconfirmed because no submitted checkpoint exists",
+                worker_id, task_id,
+            )
+            return
+        store.mark_unconfirmed(
             task_id, ttl_seconds=_UNCONFIRMED_TTL_SECONDS,
         )
     except Exception:  # noqa: BLE001  # pylint: disable=broad-except

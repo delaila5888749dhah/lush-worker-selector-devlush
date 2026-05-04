@@ -103,6 +103,13 @@ class MarkUnconfirmedFileStoreTests(_IsolatedStoreTestCase):
         self.assertNotIn("task-D", orch._submitted_task_ids)
         self.assertIn("task-D", orch._unconfirmed_task_ids)
 
+    def test_is_submitted_tracks_submitted_checkpoint_only(self) -> None:
+        self.assertFalse(self.store.is_submitted("task-E"))
+        self.store.mark_submitted("task-E")
+        self.assertTrue(self.store.is_submitted("task-E"))
+        self.store.mark_unconfirmed("task-E", ttl_seconds=60)
+        self.assertFalse(self.store.is_submitted("task-E"))
+
     def test_list_unconfirmed(self) -> None:
         self.store.mark_unconfirmed("t1", ttl_seconds=60)
         self.store.mark_unconfirmed("t2", ttl_seconds=60)

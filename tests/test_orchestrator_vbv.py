@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import integration.orchestrator as orch
-from modules.common.exceptions import SessionLostError
+from integration.session_outcome import SessionLostError
 from modules.common.types import State
 
 
