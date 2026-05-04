@@ -909,8 +909,9 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
                 make_task_fn()(self.worker_id)
 
     def test_run_cycle_called_with_zip_code(self):
-        """make_task_fn forwards MaxMind-resolved zip to run_cycle."""
+        """make_task_fn forwards BitBrowser proxy MaxMind zip to run_cycle."""
         bb_client, selenium_drv, givex_drv = self._make_mocks()
+        bb_client.get_profile_proxy.return_value = {"host": "203.0.113.10", "port": 8000}
         run_cycle_kwargs: list[dict] = []
 
         def capture_run_cycle(_task, zip_code=None, worker_id="default", ctx=None, **_kwargs):
@@ -930,10 +931,10 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
         ), patch(
             "integration.runtime.probe_cdp_listener_support"
         ), patch(
-            "integration.worker_task._get_current_ip_best_effort",
-            return_value="1.2.3.4",
+            "integration.worker_task.maxmind_lookup_geo",
+            return_value={"zip": "10001", "city": None, "state": None},
         ), patch(
-            "integration.worker_task.maxmind_lookup_zip", return_value="10001"
+            "integration.worker_task._lookup_maxmind_utc_offset", return_value=0.0
         ), patch(
             "integration.orchestrator.run_cycle",
             side_effect=capture_run_cycle,
