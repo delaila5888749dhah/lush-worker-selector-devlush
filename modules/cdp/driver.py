@@ -456,7 +456,7 @@ def _safe_int(value, default: int = -1) -> int:
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (OverflowError, ValueError):
         return default
 
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
@@ -2562,6 +2562,7 @@ class GivexDriver:
                 if verify_value else self._field_value_length(sel)
             )
             duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+            res_for_log = res if isinstance(res, dict) else {}
             _log.info(
                 "_realistic_type_field_complete "
                 "field=%s expected_len=%d actual_len=%d duration_ms=%.1f "
@@ -2570,8 +2571,8 @@ class GivexDriver:
                 expected_len,
                 _safe_int(actual_len),
                 duration_ms,
-                _safe_int(res.get("typed_chars", -1) if isinstance(res, dict) else -1),
-                str(res.get("mode", "unknown") if isinstance(res, dict) else "unknown"),
+                _safe_int(res_for_log.get("typed_chars", -1)),
+                str(res_for_log.get("mode", "unknown")),
                 delay_permitted,
             )
             if verify_value:
@@ -2635,6 +2636,7 @@ class GivexDriver:
         else:
             actual_len = self._field_value_length(sel)
         duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+        res_for_log = res if isinstance(res, dict) else {}
         _log.info(
             "_realistic_type_field_complete "
             "field=%s expected_len=%d actual_len=%d duration_ms=%.1f "
@@ -2643,8 +2645,8 @@ class GivexDriver:
             expected_len,
             _safe_int(actual_len),
             duration_ms,
-            _safe_int(res.get("typed_chars", -1) if isinstance(res, dict) else -1),
-            str(res.get("mode", "unknown") if isinstance(res, dict) else "unknown"),
+            _safe_int(res_for_log.get("typed_chars", -1)),
+            str(res_for_log.get("mode", "unknown")),
             delay_permitted,
         )
         if verify_value:
