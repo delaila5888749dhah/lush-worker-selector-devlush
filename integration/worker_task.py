@@ -21,16 +21,22 @@ enforced by the caller (``app/__main__.py``).  This module does **not** read
 the flag itself so that tests can import and exercise it freely.
 """
 import importlib
+import hashlib
+import ipaddress
 import logging
 import threading
+import urllib.parse
 import uuid
 import zlib
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
 from modules.cdp.driver import (
+    _get_proxy_ip,
     _get_current_ip_best_effort,
     _lookup_maxmind_utc_offset,
+    maxmind_lookup_geo,
     maxmind_lookup_zip,
 )
 from modules.cdp.fingerprint import (
@@ -47,6 +53,17 @@ _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 # P1-5: Task-level abort registry.
 _abort_lock: threading.Lock = threading.Lock()
 _abort_flags: "dict[str, threading.Event]" = {}
+
+
+@dataclass(frozen=True)
+class ProxyGeoResult:
+    zip_code: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    utc_offset: float = 0.0
+    reason: str = "profile_no_proxy"
+    proxy_source: str = "UNKNOWN"
+    detected_ip_hash: Optional[str] = None
 
 
 def abort_task(worker_id: str) -> None:
@@ -75,6 +92,90 @@ def _register_abort(worker_id: str) -> None:
 def _clear_abort(worker_id: str) -> None:
     with _abort_lock:
         _abort_flags.pop(worker_id, None)
+
+
+def _proxy_endpoint_from_metadata(proxy_metadata: object) -> Optional[str]:
+    """Extract only proxy host/endpoint fields; credentials are ignored."""
+    if isinstance(proxy_metadata, str):
+        return proxy_metadata.strip() or None
+    if not isinstance(proxy_metadata, dict):
+        return None
+    nested = proxy_metadata.get("proxy")
+    if isinstance(nested, (dict, str)):
+        nested_endpoint = _proxy_endpoint_from_metadata(nested)
+        if nested_endpoint:
+            return nested_endpoint
+    for key in (
+        "proxyServer",
+        "proxy_server",
+        "server",
+        "proxy",
+        "host",
+        "ip",
+        "proxyHost",
+        "proxy_host",
+    ):
+        value = proxy_metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            port = proxy_metadata.get("port") or proxy_metadata.get("proxyPort")
+            if key in {"host", "ip", "proxyHost", "proxy_host"} and port:
+                return f"{value.strip()}:{port}"
+            return value.strip()
+    return None
+
+
+def _resolve_bitbrowser_proxy_geo(client: object, profile_id: str) -> ProxyGeoResult:
+    """Resolve assigned BitBrowser profile proxy through local DNS + MaxMind."""
+    try:
+        get_proxy = getattr(client, "get_profile_proxy")
+        proxy_metadata = get_proxy(profile_id)
+    except Exception:  # pylint: disable=broad-except
+        return ProxyGeoResult(reason="bitbrowser_api_error")
+
+    proxy_endpoint = _proxy_endpoint_from_metadata(proxy_metadata)
+    if not proxy_endpoint:
+        return ProxyGeoResult(reason="profile_no_proxy")
+
+    proxy_source = "BITBROWSER_PROFILE"
+    raw = proxy_endpoint
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        host = urllib.parse.urlparse(raw).hostname or ""
+        if host:
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                proxy_source = "BITBROWSER_PROFILE_HOSTNAME_DNS"
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    detected_ip = _get_proxy_ip(proxy_endpoint)
+    if not detected_ip:
+        return ProxyGeoResult(
+            reason="profile_proxy_unreachable",
+            proxy_source=proxy_source,
+        )
+
+    # Issue contract requires the first 12 SHA-256 hex chars; never log raw IPs.
+    ip_hash = hashlib.sha256(detected_ip.encode("utf-8")).hexdigest()[:12]
+    geo = maxmind_lookup_geo(detected_ip)
+    zip_code = geo.get("zip") if isinstance(geo, dict) else None
+    city = geo.get("city") if isinstance(geo, dict) else None
+    state = geo.get("state") if isinstance(geo, dict) else None
+    offset = _lookup_maxmind_utc_offset(detected_ip)
+    reason = "ok"
+    if not zip_code:
+        reason = "maxmind_zip_missing" if (city or state) else "maxmind_geo_incomplete"
+    return ProxyGeoResult(
+        zip_code=zip_code,
+        city=city,
+        state=state,
+        utc_offset=float(offset) if offset is not None else 0.0,
+        reason=reason,
+        proxy_source=proxy_source,
+        detected_ip_hash=ip_hash,
+    )
 
 
 def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable[[str], None]:
@@ -151,23 +252,10 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 # NOT delete the profile, legacy mode runs close+delete).
                 givex_driver.preflight_geo_check()
 
-                # Resolve proxy IP → zip code via MaxMind (F-07).
-                # The proxy IP is extracted from the PROXY_SERVER env var or
-                # the driver's proxy attribute — no external HTTP calls.
-                zip_code: Optional[str] = None
-                # Phase 5B Task 1: also resolve UTC offset for Temporal Layer.
-                utc_offset: float = 0.0
-                try:
-                    detected_ip = _get_current_ip_best_effort()
-                    if detected_ip:
-                        zip_code = maxmind_lookup_zip(detected_ip)
-                        offset_hours = _lookup_maxmind_utc_offset(detected_ip)
-                        if offset_hours is not None:
-                            utc_offset = float(offset_hours)
-                except Exception as exc:  # pylint: disable=broad-except
-                    _log.debug(
-                        "worker=%s zip derivation error: %s", worker_id, exc
-                    )
+                # Resolve BitBrowser profile proxy → local MaxMind geo (F-07).
+                geo_result = _resolve_bitbrowser_proxy_geo(bb_client, profile_id)
+                zip_code = geo_result.zip_code
+                utc_offset = geo_result.utc_offset
 
                 # Propagate UTC offset to TemporalModel via ContextVar so all
                 # delay computations on this worker thread see the proxy-derived
@@ -207,6 +295,11 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                         action, _state, _total = run_cycle(
                             task, zip_code=zip_code, worker_id=worker_id,
                             ctx=ctx,
+                            proxy_city=geo_result.city,
+                            proxy_state=geo_result.state,
+                            proxy_geo_reason=geo_result.reason,
+                            proxy_source=geo_result.proxy_source,
+                            detected_ip_hash=geo_result.detected_ip_hash,
                             abort_check=lambda: is_task_aborted(worker_id),
                         )
                         normalized = normalize_action(action)

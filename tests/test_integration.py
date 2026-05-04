@@ -35,6 +35,7 @@ from integration.orchestrator import (
     _load_idempotency_store,
     _make_profile_id,
     _save_idempotency_store,
+    _select_profile_with_audit,
     get_cdp_metrics,
     handle_outcome,
     initialize_cycle,
@@ -1637,6 +1638,74 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
         event = _json.loads(captured[0])
         self.assertEqual(event["selection_method"], "round_robin")
         self.assertEqual(event["requested_zip"], "   ")
+
+    def test_proxy_geo_resolution_audit_schema_and_order(self):
+        """Per-worker selection emits proxy_geo_resolution before billing_selection."""
+        profile = self._make_profile(zip_code="10001")
+        captured = []
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit,
+        ):
+            mock_billing.select_profile.return_value = profile
+            mock_billing.select_profile_for_geo.return_value = profile
+            mock_billing.get_last_selection_method.return_value = "zip_match"
+            mock_billing.get_last_match_level.return_value = "exact_zip_match"
+            mock_billing.get_last_selection_reason.return_value = "ok"
+            mock_billing.get_pool_size.return_value = 3
+            mock_billing.SELECTION_METHOD_UNKNOWN = "unknown"
+            mock_audit.info.side_effect = lambda label, payload: captured.append((label, _json.loads(payload)))
+
+            selected = _select_profile_with_audit(  # pylint: disable=protected-access
+                "10001",
+                worker_id="worker-geo",
+                task_id="task-geo",
+                include_worker_id=True,
+                city="New York",
+                state="NY",
+                proxy_geo_reason="ok",
+                proxy_source="BITBROWSER_PROFILE",
+                detected_ip_hash="abcdef123456",
+            )
+
+        self.assertIs(selected, profile)
+        self.assertEqual([event["event_type"] for _label, event in captured], [
+            "proxy_geo_resolution",
+            "billing_selection",
+        ])
+        proxy_event = captured[0][1]
+        self.assertEqual(proxy_event["worker_id"], "worker-geo")
+        self.assertEqual(proxy_event["proxy_source"], "BITBROWSER_PROFILE")
+        self.assertEqual(proxy_event["detected_ip_hash"], "abcdef123456")
+        self.assertTrue(proxy_event["maxmind_zip_present"])
+        self.assertTrue(proxy_event["maxmind_city_present"])
+        self.assertTrue(proxy_event["maxmind_state_present"])
+        self.assertEqual(proxy_event["billing_pool_size"], 3)
+        self.assertEqual(proxy_event["match_level"], "exact_zip_match")
+        self.assertEqual(proxy_event["reason"], "ok")
+
+    def test_proxy_geo_audit_failure_does_not_block_selection(self):
+        profile = self._make_profile()
+        with (
+            patch("integration.orchestrator.billing") as mock_billing,
+            patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit,
+        ):
+            mock_billing.select_profile.return_value = profile
+            mock_billing.get_last_selection_method.return_value = "round_robin"
+            mock_billing.get_last_match_level.return_value = "fallback"
+            mock_billing.get_last_selection_reason.return_value = "no_geo_match_in_pool"
+            mock_billing.get_pool_size.return_value = object()
+            mock_billing.SELECTION_METHOD_UNKNOWN = "unknown"
+            mock_audit.info.side_effect = RuntimeError("audit down")
+
+            selected = _select_profile_with_audit(  # pylint: disable=protected-access
+                None,
+                worker_id="worker-geo",
+                task_id="task-geo",
+                include_worker_id=True,
+            )
+
+        self.assertIs(selected, profile)
 
     def test_profile_id_is_anonymized(self):
         """profile_id must be a SHA-256 hex hash — not raw first_name or last_name."""

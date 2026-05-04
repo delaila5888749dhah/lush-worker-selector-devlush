@@ -209,6 +209,32 @@ class BitBrowserClient:
             raise RuntimeError("BitBrowser launch_profile response payload must be dict")
         return data
 
+    def get_profile_detail(self, profile_id: str) -> Dict[str, object]:
+        """Return BitBrowser profile metadata for an existing profile id."""
+        last_exc: BaseException | None = None
+        for path in ("/browser/detail", "/api/v1/browser/detail"):
+            try:
+                data = self._post(path, {"id": profile_id}, timeout=10)
+                if not isinstance(data, dict):
+                    raise RuntimeError("BitBrowser profile detail response payload must be dict")
+                return data
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code == 404:
+                    continue
+                raise
+            except (urllib.error.URLError, OSError, RuntimeError) as exc:
+                last_exc = exc
+                continue
+        raise RuntimeError("BitBrowser profile detail request failed") from last_exc
+
+    def get_profile_proxy(self, profile_id: str) -> object:
+        """Return configured proxy metadata from BitBrowser profile detail."""
+        detail = self.get_profile_detail(profile_id)
+        if "proxy" in detail:
+            return detail["proxy"]
+        return detail
+
     def close_profile(self, profile_id: str) -> None:
         """POST /api/v1/browser/close. No-op if request fails."""
         try:

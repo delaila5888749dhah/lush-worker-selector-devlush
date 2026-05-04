@@ -1129,12 +1129,84 @@ def _emit_billing_audit_event(
         )
 
 
+def _emit_proxy_geo_resolution_audit_event(
+    *,
+    worker_id: str,
+    proxy_source: str,
+    detected_ip_hash: str | None,
+    proxy_zip: str | int | None,
+    proxy_city: str | None,
+    proxy_state: str | None,
+    billing_pool_size: int,
+    match_level: str | None,
+    reason: str | None,
+) -> None:
+    """Emit PII-safe proxy geo/billing match observability; never interferes."""
+    try:
+        safe_match_level = match_level if isinstance(match_level, str) else "fallback"
+        safe_reason = reason if isinstance(reason, str) else "no_geo_match_in_pool"
+        event = {
+            "event_type": "proxy_geo_resolution",
+            "worker_id": worker_id,
+            "trace_id": _get_trace_id(),
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "proxy_source": (
+                proxy_source
+                if proxy_source in {"BITBROWSER_PROFILE", "BITBROWSER_PROFILE_HOSTNAME_DNS", "UNKNOWN"}
+                else "UNKNOWN"
+            ),
+            "detected_ip_hash": detected_ip_hash if isinstance(detected_ip_hash, str) else None,
+            "maxmind_zip_present": bool(proxy_zip),
+            "maxmind_city_present": bool(proxy_city),
+            "maxmind_state_present": bool(proxy_state),
+            "billing_pool_size": int(billing_pool_size),
+            "match_level": safe_match_level,
+            "reason": safe_reason,
+        }
+        _AUDIT_LOGGER.info(
+            "proxy_geo_resolution %s", json.dumps(event, ensure_ascii=False)
+        )
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning(
+            "[trace=%s] Failed to emit proxy geo audit event for worker=%s: %s",
+            _get_trace_id(),
+            worker_id,
+            exc,
+        )
+
+
+def _coerce_proxy_geo_reason(
+    geo_reason: str | None,
+    selection_reason: str | None,
+) -> str:
+    if geo_reason is None and selection_reason is None:
+        return "profile_no_proxy"
+    if selection_reason == "no_geo_match_in_pool" and geo_reason in (None, "ok"):
+        return "no_geo_match_in_pool"
+    if geo_reason in {
+        "ok",
+        "profile_no_proxy",
+        "bitbrowser_api_error",
+        "profile_proxy_unreachable",
+        "maxmind_zip_missing",
+        "maxmind_geo_incomplete",
+        "no_geo_match_in_pool",
+    }:
+        return geo_reason
+    return selection_reason if selection_reason in {"ok", "no_geo_match_in_pool"} else "ok"
+
+
 def _select_profile_with_audit(
     zip_code: str | int | None,
     worker_id: str,
     task_id: str | None,
     *,
     include_worker_id: bool,
+    city: str | None = None,
+    state: str | None = None,
+    proxy_geo_reason: str | None = None,
+    proxy_source: str = "UNKNOWN",
+    detected_ip_hash: str | None = None,
 ):
     """Select a billing profile and emit the audit event exactly once.
 
@@ -1161,9 +1233,17 @@ def _select_profile_with_audit(
             "continuing without pre-clear (expected for some test mocks)."
         )
     if include_worker_id:
-        profile = billing.select_profile(zip_code, worker_id=worker_id)
+        if (city is not None or state is not None) and hasattr(billing, "select_profile_for_geo"):
+            profile = billing.select_profile_for_geo(
+                zip_code, worker_id=worker_id, city=city, state=state,
+            )
+        else:
+            profile = billing.select_profile(zip_code, worker_id=worker_id)
     else:
-        profile = billing.select_profile(zip_code)
+        if (city is not None or state is not None) and hasattr(billing, "select_profile_for_geo"):
+            profile = billing.select_profile_for_geo(zip_code, city=city, state=state)
+        else:
+            profile = billing.select_profile(zip_code)
     # Read the *actual* outcome via billing's thread-local side channel.
     # In production select_profile() sets this on every successful return.
     # When ``billing`` is wholesale-mocked in tests the accessor may be
@@ -1176,6 +1256,32 @@ def _select_profile_with_audit(
     except AttributeError:
         raw_method = None
     selection_method = raw_method if isinstance(raw_method, str) else None
+    try:
+        raw_match_level = billing.get_last_match_level()
+    except AttributeError:
+        raw_match_level = None
+    match_level = raw_match_level if isinstance(raw_match_level, str) else None
+    try:
+        raw_reason = billing.get_last_selection_reason()
+    except AttributeError:
+        raw_reason = None
+    selection_reason = raw_reason if isinstance(raw_reason, str) else None
+    try:
+        billing_pool_size = billing.get_pool_size(worker_id if include_worker_id else None)
+    except Exception:  # pylint: disable=broad-except
+        billing_pool_size = 0
+    if include_worker_id:
+        _emit_proxy_geo_resolution_audit_event(
+            worker_id=worker_id,
+            proxy_source=proxy_source,
+            detected_ip_hash=detected_ip_hash,
+            proxy_zip=zip_code,
+            proxy_city=city,
+            proxy_state=state,
+            billing_pool_size=billing_pool_size,
+            match_level=match_level,
+            reason=_coerce_proxy_geo_reason(proxy_geo_reason, selection_reason),
+        )
     _emit_billing_audit_event(
         profile=profile,
         worker_id=worker_id,
@@ -2170,7 +2276,18 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     return "retry"
 
 
-def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_check=None):
+def run_cycle(
+    task,
+    zip_code=None,
+    worker_id: str = "default",
+    ctx=None,
+    abort_check=None,
+    proxy_city=None,
+    proxy_state=None,
+    proxy_geo_reason=None,
+    proxy_source="UNKNOWN",
+    detected_ip_hash=None,
+):
     """Run a full payment cycle for a WorkerTask.
 
     Initializes the FSM, executes one payment attempt, and returns the
@@ -2241,6 +2358,11 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             worker_id=worker_id,
             task_id=task_id,
             include_worker_id=True,
+            city=proxy_city,
+            state=proxy_state,
+            proxy_geo_reason=proxy_geo_reason,
+            proxy_source=proxy_source,
+            detected_ip_hash=detected_ip_hash,
         )
 
     try:
@@ -2275,14 +2397,14 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
         ui_lock_retry_count = 0  # P0-4 — separate cap for UI lock focus-shift retries
         # Cap: len(order_queue) card-swap slots + 2 buffer for ui_lock retries.
         max_iters = len(ctx.task.order_queue) + 2
-        # action is str for simple outcomes or (str, CardInfo) for retry_new_card.
-        action: str | tuple = "abort_cycle"
+        # retry_action is str for simple outcomes or (str, CardInfo) for retry_new_card.
+        retry_action: str | tuple = "abort_cycle"
         state = None
         total = None
 
         for _loop_iter in range(max_iters):
             if abort_check is not None and abort_check():
-                action = "abort_cycle"
+                retry_action = "abort_cycle"
                 break
             initialize_cycle(worker_id)
             # Build an effective task that carries the current (possibly swapped) card.
@@ -2376,13 +2498,13 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                     )
 
             try:
-                action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+                retry_action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
             except SessionLostError:
                 _mark_unconfirmed_after_session_loss(task_id, worker_id)
                 watchdog.reset_session(worker_id)
                 raise
 
-            _action_key = action[0] if isinstance(action, tuple) else action
+            _action_key = retry_action[0] if isinstance(retry_action, tuple) else retry_action
 
             # P1-2 — Clear/refill after "Thank you" popup.
             # When the payment was successful and more cards remain in the queue,
@@ -2412,8 +2534,8 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             if _action_key in ("complete", "abort_cycle", "await_3ds"):
                 break
 
-            if isinstance(action, tuple) and _action_key == "retry_new_card":
-                _, new_card = action
+            if isinstance(retry_action, tuple) and _action_key == "retry_new_card":
+                _, new_card = retry_action
                 # CDP card-swap: clear existing card fields then fill with new card.
                 # P1-4: a CDPError from clear_card_fields_cdp means the field may
                 # still hold stale card data — abort the cycle instead of resubmitting
@@ -2429,7 +2551,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                         "— aborting cycle to avoid double-charge",
                         _get_trace_id(), worker_id, _sanitize_error(_cdp_exc),
                     )
-                    action = "abort_cycle"
+                    retry_action = "abort_cycle"
                     break
                 except Exception as _swap_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
@@ -2439,21 +2561,21 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                 current_card = new_card
                 retry_count = 0  # reset general retry counter after a card swap
                 ui_lock_retry_count = 0  # P0-4 — reset ui_lock counter after card swap
-            elif action == "retry_new_card":
+            elif retry_action == "retry_new_card":
                 # Legacy path (ctx=None): no card info available — abort.
-                action = "abort_cycle"
+                retry_action = "abort_cycle"
                 break
-            elif action == "retry":
+            elif retry_action == "retry":
                 retry_count += 1
                 if retry_count >= 2:
-                    action = "abort_cycle"
+                    retry_action = "abort_cycle"
                     break
             # Unknown actions: continue loop (guards against future outcome additions).
         else:
             # Loop cap exhausted without a terminal break — treat as abort.
-            action = "abort_cycle"
+            retry_action = "abort_cycle"
 
-        if action == "complete":
+        if retry_action == "complete":
             success = True
             _record_autoscaler_success(worker_id)
             # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
@@ -2462,7 +2584,7 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                 _get_idempotency_store().mark_completed(task_id)
         else:
             _record_autoscaler_failure(worker_id)
-        return action, state, total
+        return retry_action, state, total
     except SessionFlaggedError as exc:
         _logger.error(
             "[trace=%s] worker=%s, task_id=%s SessionFlaggedError: %s",

@@ -7,6 +7,7 @@ import os
 import random
 import re
 import threading
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -21,6 +22,8 @@ _local_fill_rng = threading.local()  # pylint: disable=invalid-name
 # outcome (zip_match / round_robin) so callers (e.g., audit pipeline) can label
 # events based on what really happened, not just on request intent (Blueprint §12).
 _last_selection_method = threading.local()  # pylint: disable=invalid-name
+_last_match_level = threading.local()  # pylint: disable=invalid-name
+_last_selection_reason = threading.local()  # pylint: disable=invalid-name
 _profiles: "collections.deque[BillingProfile]" = collections.deque()
 _logger = logging.getLogger(__name__)
 _reload_requested: bool = False  # pylint: disable=invalid-name
@@ -58,6 +61,14 @@ class WorkerBillingState:
 # via zip-affinity match or via the round-robin sequential pointer fallback.
 SELECTION_METHOD_ZIP_MATCH = "zip_match"
 SELECTION_METHOD_ROUND_ROBIN = "round_robin"
+SELECTION_METHOD_CITY_MATCH = "city_match"
+SELECTION_METHOD_STATE_MATCH = "state_match"
+MATCH_LEVEL_EXACT_ZIP = "exact_zip_match"
+MATCH_LEVEL_CITY = "city_match"
+MATCH_LEVEL_STATE = "state_match"
+MATCH_LEVEL_FALLBACK = "fallback"
+SELECTION_REASON_OK = "ok"
+SELECTION_REASON_NO_GEO_MATCH = "no_geo_match_in_pool"
 # Sentinel used by the audit pipeline when no actual selection outcome was
 # propagated by the caller (e.g., direct callers that did not invoke
 # select_profile).  Distinct from any real selection strategy so observability
@@ -70,6 +81,60 @@ _PHONE_OTHER_DIGITS = "0123456789"
 _HEX_CHARS = "0123456789abcdef"
 # Mix persona seed into a dedicated RNG stream used only for billing field fills.
 _FILL_RNG_XOR_MASK = 0xDEAD_BEEF
+
+_STATE_NAME_TO_CODE = {
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "district of columbia": "DC",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
+}
 
 
 def _get_max_billing_profiles() -> int:
@@ -265,6 +330,25 @@ def _normalize_zip(zip_code: str | int | None) -> str:
     if isinstance(zip_code, str):
         return zip_code.strip()
     raise ValueError("zip_code must be str or int")
+
+
+def _normalize_text(value: str | None) -> str:
+    """Lowercase/strip text and collapse punctuation/diacritics for matching."""
+    if value is None:
+        return ""
+    # NFKD decomposes accents so "San José" and "San Jose" compare equally.
+    normalized = unicodedata.normalize("NFKD", str(value).strip().lower())
+    ascii_text = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", " ", ascii_text).strip()
+
+
+def _normalize_billing_state(value: str | None) -> str:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return ""
+    if len(normalized) == 2 and normalized.isalpha():
+        return normalized.upper()
+    return _STATE_NAME_TO_CODE.get(normalized, normalized.upper())
 
 
 def _parse_profile_line(line: str) -> BillingProfile | None:
@@ -516,6 +600,17 @@ def select_profile(
     zip_code: str | int | None = None,
     worker_id: Optional[str] = None,
 ) -> BillingProfile:
+    """Select a billing profile from the pool."""
+    return select_profile_for_geo(zip_code, worker_id=worker_id)
+
+
+def select_profile_for_geo(
+    zip_code: str | int | None = None,
+    worker_id: Optional[str] = None,
+    *,
+    city: str | None = None,
+    state: str | None = None,
+) -> BillingProfile:
     """Select a billing profile from the pool.
 
     When *worker_id* is ``None`` (default), the legacy global-deque path is
@@ -527,11 +622,15 @@ def select_profile(
 
     Per-worker selection algorithm:
       1. Search from ``state.index`` forward (with wrap-around) for a profile
-         whose ``zip_code`` matches the requested *zip_code*.
-      2. If found: return it **without** advancing ``state.index`` (blueprint
-         rule — the pointer is reserved for the sequential fallback).
-      3. If not found: return ``state.profiles[state.index]``, then advance
-         ``state.index = (state.index + 1) % len(state.profiles)``.
+         whose ``zip_code`` matches the requested *zip_code*; if no ZIP match
+         exists, scan city, then state.
+      2. If found at index ``i``: advance
+         ``state.index = (i + 1) % len(state.profiles)``.
+      3. If no geo match exists: return ``state.profiles[state.index]``, then
+         advance ``state.index = (state.index + 1) % len(state.profiles)``.
+
+    Pointer advances after every match level (zip/city/state/fallback) to
+    preserve eligible-set no-repeat rotation across cycles.
 
     Args:
         zip_code: Optional zip/postal code for affinity matching.
@@ -555,10 +654,15 @@ def select_profile(
         zip was requested but no profile in the pool matched it.
     """
     if worker_id is not None:
-        profile, method = _select_profile_per_worker(zip_code, worker_id)
+        state_filter = state
+        profile, method, match_level, reason = _select_profile_per_worker(
+            zip_code, worker_id, city=city, state_filter=state_filter,
+        )
     else:
-        profile, method = _select_profile_legacy(zip_code)
+        profile, method, match_level, reason = _select_profile_legacy(zip_code)
     _last_selection_method.value = method
+    _last_match_level.value = match_level
+    _last_selection_reason.value = reason
     return profile
 
 
@@ -588,12 +692,46 @@ def clear_last_selection_method() -> None:
         del _last_selection_method.value
     except AttributeError:
         pass
+    try:
+        del _last_match_level.value
+    except AttributeError:
+        pass
+    try:
+        del _last_selection_reason.value
+    except AttributeError:
+        pass
+
+
+def get_last_match_level() -> Optional[str]:
+    """Return the strict geo match level from the last selection on this thread."""
+    return getattr(_last_match_level, "value", None)
+
+
+def get_last_selection_reason() -> Optional[str]:
+    """Return the fallback/selection reason from the last selection on this thread."""
+    return getattr(_last_selection_reason, "value", None)
+
+
+def get_pool_size(worker_id: Optional[str] = None) -> int:
+    """Return the current billing pool size without exposing profile contents."""
+    if worker_id is not None:
+        state = get_worker_state(worker_id)
+        with _WORKER_STATES_LOCK:
+            return len(state.profiles)
+    with _lock:
+        if _profiles:
+            return len(_profiles)
+    with _MASTER_POOL_LOCK:
+        return len(_MASTER_POOL)
 
 
 def _select_profile_per_worker(
     zip_code: str | int | None,
     worker_id: str,
-) -> Tuple[BillingProfile, str]:
+    *,
+    city: str | None = None,
+    state_filter: str | None = None,
+) -> Tuple[BillingProfile, str, str, str]:
     """Per-worker profile selection with independent shuffled list + index pointer.
 
     Returns a ``(profile, selection_method)`` tuple where ``selection_method``
@@ -603,10 +741,12 @@ def _select_profile_per_worker(
     the pool matched it).
     """
     normalized_zip = _normalize_zip(zip_code)
-    state = get_worker_state(worker_id)
+    normalized_city = _normalize_text(city)
+    normalized_state = _normalize_billing_state(state_filter)
+    worker_state = get_worker_state(worker_id)
 
     with _WORKER_STATES_LOCK:
-        profiles = state.profiles
+        profiles = worker_state.profiles
         if not profiles:
             pool_dir = _pool_dir()
             raise CycleExhaustedError(
@@ -623,25 +763,67 @@ def _select_profile_per_worker(
         # Search from state.index forward for a profile matching zip_code.
         if normalized_zip:
             for offset in range(n):
-                i = (state.index + offset) % n
+                i = (worker_state.index + offset) % n
                 if _normalize_zip(profiles[i].zip_code) == normalized_zip:
                     profile = profiles[i]
                     if profile.phone is None or profile.email is None:
                         profile = _fill_missing(profile)
                         profiles[i] = profile
-                    # Do NOT advance state.index (blueprint rule).
-                    return profile, SELECTION_METHOD_ZIP_MATCH
+                    worker_state.index = (i + 1) % n
+                    return (
+                        profile,
+                        SELECTION_METHOD_ZIP_MATCH,
+                        MATCH_LEVEL_EXACT_ZIP,
+                        SELECTION_REASON_OK,
+                    )
+
+        if normalized_city:
+            for offset in range(n):
+                i = (worker_state.index + offset) % n
+                if _normalize_text(profiles[i].city) == normalized_city:
+                    profile = profiles[i]
+                    if profile.phone is None or profile.email is None:
+                        profile = _fill_missing(profile)
+                        profiles[i] = profile
+                    worker_state.index = (i + 1) % n
+                    return (
+                        profile,
+                        SELECTION_METHOD_CITY_MATCH,
+                        MATCH_LEVEL_CITY,
+                        SELECTION_REASON_OK,
+                    )
+
+        if normalized_state:
+            for offset in range(n):
+                i = (worker_state.index + offset) % n
+                if _normalize_billing_state(profiles[i].state) == normalized_state:
+                    profile = profiles[i]
+                    if profile.phone is None or profile.email is None:
+                        profile = _fill_missing(profile)
+                        profiles[i] = profile
+                    worker_state.index = (i + 1) % n
+                    return (
+                        profile,
+                        SELECTION_METHOD_STATE_MATCH,
+                        MATCH_LEVEL_STATE,
+                        SELECTION_REASON_OK,
+                    )
 
         # No zip match (or no zip requested): use sequential pointer, advance it.
-        profile = profiles[state.index]
+        profile = profiles[worker_state.index]
         if profile.phone is None or profile.email is None:
             profile = _fill_missing(profile)
-            profiles[state.index] = profile
-        state.index = (state.index + 1) % n
-        return profile, SELECTION_METHOD_ROUND_ROBIN
+            profiles[worker_state.index] = profile
+        worker_state.index = (worker_state.index + 1) % n
+        return (
+            profile,
+            SELECTION_METHOD_ROUND_ROBIN,
+            MATCH_LEVEL_FALLBACK,
+            SELECTION_REASON_NO_GEO_MATCH,
+        )
 
 
-def _select_profile_legacy(zip_code: str | int | None) -> Tuple[BillingProfile, str]:
+def _select_profile_legacy(zip_code: str | int | None) -> Tuple[BillingProfile, str, str, str]:
     """Legacy global-deque profile selection (unchanged behaviour).
 
     Returns a ``(profile, selection_method)`` tuple where ``selection_method``
@@ -703,11 +885,21 @@ def _select_profile_legacy(zip_code: str | int | None) -> Tuple[BillingProfile, 
             if profile.phone is None or profile.email is None:
                 profile = _fill_missing(profile)
             _profiles.append(profile)
-            return profile, SELECTION_METHOD_ROUND_ROBIN
+            return (
+                profile,
+                SELECTION_METHOD_ROUND_ROBIN,
+                MATCH_LEVEL_FALLBACK,
+                SELECTION_REASON_NO_GEO_MATCH,
+            )
 
         profile = _profiles[index]
         del _profiles[index]
         if profile.phone is None or profile.email is None:
             profile = _fill_missing(profile)
         _profiles.append(profile)
-        return profile, SELECTION_METHOD_ZIP_MATCH
+        return (
+            profile,
+            SELECTION_METHOD_ZIP_MATCH,
+            MATCH_LEVEL_EXACT_ZIP,
+            SELECTION_REASON_OK,
+        )

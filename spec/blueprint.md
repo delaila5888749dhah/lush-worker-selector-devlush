@@ -215,7 +215,7 @@ first_name|last_name|address|city|state|zip|phone|email
 
 · Khi cần chọn billing cho cycle hiện tại, đầu tiên tìm trong billing_list (theo thứ tự ưu tiên từ vị trí con trỏ trở đi) profile có zip khớp với zip từ MaxMind.
 
-· Nếu tìm thấy profile khớp zip, lấy profile đó và không thay đổi con trỏ (vì con trỏ chỉ dùng cho cơ chế tuần tự mặc định). Có thể dùng thêm một bộ đếm riêng để tránh lặp lại các profile đã dùng gần đây nếu cần.
+· Nếu tìm thấy profile khớp zip, lấy profile đó và cập nhật con trỏ đến vị trí ngay sau profile đã chọn (vòng quanh khi hết danh sách). Quy tắc này áp dụng cho mọi mức match đủ điều kiện (zip/city/state) để tránh lặp lại trong tập profile đủ điều kiện cho đến khi tập đó đã được duyệt hết.
 
 · Nếu không có profile nào khớp zip, lấy profile tại vị trí con trỏ hiện tại (theo cơ chế tuần tự) và sử dụng zip của profile đó (bỏ qua zip proxy).
 

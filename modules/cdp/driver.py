@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -78,8 +78,8 @@ try:
     from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
     from modules.delay.config import MAX_STEP_DELAY as _MAX_STEP_DELAY  # type: ignore
 except ImportError:
-    _BiometricProfile = _TemporalModel = None
-    _BehaviorStateMachine = _DelayEngine = None
+    _BiometricProfile = _TemporalModel = None  # type: ignore[assignment,misc]
+    _BehaviorStateMachine = _DelayEngine = None  # type: ignore[assignment,misc]
     _MAX_STEP_DELAY = 7.0
     _get_current_sm = None  # type: ignore[assignment]
 
@@ -1045,6 +1045,40 @@ def maxmind_lookup_zip(ip_addr: str) -> str | None:
     return None
 
 
+def maxmind_lookup_geo(ip_addr: str) -> dict:
+    """Look up postal/city/state for an IP using the loaded GeoLite2 City DB."""
+    result = {"zip": None, "city": None, "state": None}
+    reader = _MAXMIND_READER
+    if reader is None:
+        mmdb_path = _resolve_mmdb_path()
+        if not os.path.exists(mmdb_path):
+            return result
+        try:
+            geoip2_database = importlib.import_module("geoip2.database")
+        except ImportError:
+            return result
+        try:
+            with geoip2_database.Reader(mmdb_path) as _reader:
+                record = _reader.city(ip_addr)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug("MaxMind geo lookup failed: %s", exc)
+            return result
+    else:
+        try:
+            record = reader.city(ip_addr)
+        except Exception as exc:  # pylint: disable=broad-except
+            _log.debug("MaxMind geo lookup failed: %s", exc)
+            return result
+    postal = getattr(getattr(record, "postal", None), "code", None)
+    city = getattr(getattr(record, "city", None), "name", None)
+    subdivision = getattr(getattr(record, "subdivisions", None), "most_specific", None)
+    state = getattr(subdivision, "iso_code", None) or getattr(subdivision, "name", None)
+    result["zip"] = postal or None
+    result["city"] = city or None
+    result["state"] = state or None
+    return result
+
+
 def _safe_cdp_cmd(driver, command: str, params: dict) -> object:
     """Execute a CDP command with structured exception detection and logging.
 
@@ -1158,6 +1192,11 @@ def _get_proxy_ip(proxy_str: str | None = None) -> str | None:
         raw = os.environ.get("PROXY_SERVER", "").strip()
     if not raw:
         return None
+    try:
+        ipaddress.ip_address(raw)
+        return raw
+    except ValueError:
+        pass
     # Ensure urlparse receives a scheme so hostname is parsed correctly.
     if "://" not in raw:
         raw = "http://" + raw
@@ -1172,10 +1211,20 @@ def _get_proxy_ip(proxy_str: str | None = None) -> str | None:
             return host
         except ValueError:
             pass
-        # Resolve hostname via local DNS (no external geo API involved).
-        return socket.gethostbyname(host)
+        # Resolve hostname via local DNS (no external geo API involved).  Use
+        # the OS resolver order so IPv4/IPv6 preference matches host config.
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        for family, _socktype, _proto, _canonname, sockaddr in infos:
+            if family in (socket.AF_INET, socket.AF_INET6) and sockaddr:
+                return cast(str, sockaddr[0])
+        return None
     except Exception as exc:  # pylint: disable=broad-except
-        _log.debug("_get_proxy_ip: could not extract IP from proxy '%s': %s", proxy_str, exc)
+        safe_host = None
+        try:
+            safe_host = urllib.parse.urlparse(raw).hostname
+        except Exception:  # pylint: disable=broad-except
+            safe_host = None
+        _log.debug("_get_proxy_ip: could not resolve proxy host '%s': %s", safe_host, exc)
         return None
 
 
@@ -1919,7 +1968,7 @@ class GivexDriver:
             silently falling back.
     """
 
-    def __init__(self, driver: object, persona=None, *, strict: bool = True) -> None:
+    def __init__(self, driver: Any, persona=None, *, strict: bool = True) -> None:
         """Initialize a Givex driver wrapper.
 
         Args:

@@ -15,6 +15,7 @@ Covers F-01 (entrypoint), F-03 (CDP driver registration), and F-04
   - app/__main__.py production path (flag on): runtime.start receives make_task_fn result.
 """
 
+import socket
 import unittest
 from unittest.mock import MagicMock, call, patch
 
@@ -237,6 +238,73 @@ class TestMakeTaskFnBitBrowserUnavailable(unittest.TestCase):
         self.assertIn("BitBrowser client unavailable", str(ctx.exception))
         mock_cdp.register_driver.assert_not_called()
         mock_cdp.unregister_driver.assert_not_called()
+
+
+class TestProxyGeoResolution(unittest.TestCase):
+    """BitBrowser profile proxy metadata is the source for MaxMind geo."""
+
+    def test_literal_ipv4_proxy_resolves_geo_without_env_proxy(self):
+        from integration.worker_task import _resolve_bitbrowser_proxy_geo
+
+        client = MagicMock()
+        client.get_profile_proxy.return_value = {
+            "host": "203.0.113.10",
+            "port": 8000,
+            "username": "secret-user",
+            "password": "secret-pass",
+        }
+        with (
+            patch("integration.worker_task.maxmind_lookup_geo") as mock_geo,
+            patch("integration.worker_task._lookup_maxmind_utc_offset", return_value=-5),
+        ):
+            mock_geo.return_value = {"zip": "10001", "city": "New York", "state": "NY"}
+            result = _resolve_bitbrowser_proxy_geo(client, "profile-1")
+
+        mock_geo.assert_called_once_with("203.0.113.10")
+        self.assertEqual(result.zip_code, "10001")
+        self.assertEqual(result.city, "New York")
+        self.assertEqual(result.state, "NY")
+        self.assertEqual(result.reason, "ok")
+        self.assertEqual(result.proxy_source, "BITBROWSER_PROFILE")
+        self.assertEqual(len(result.detected_ip_hash), 12)
+
+    def test_hostname_proxy_uses_dns_source(self):
+        from integration.worker_task import _resolve_bitbrowser_proxy_geo
+
+        client = MagicMock()
+        client.get_profile_proxy.return_value = {"host": "proxy.example.test", "port": 9000}
+        with (
+            patch("modules.cdp.driver.socket.getaddrinfo") as mock_getaddrinfo,
+            patch("integration.worker_task.maxmind_lookup_geo") as mock_geo,
+            patch("integration.worker_task._lookup_maxmind_utc_offset", return_value=None),
+        ):
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.11", 0)),
+            ]
+            mock_geo.return_value = {"zip": None, "city": "Testville", "state": "CA"}
+            result = _resolve_bitbrowser_proxy_geo(client, "profile-1")
+
+        mock_geo.assert_called_once_with("203.0.113.11")
+        self.assertEqual(result.proxy_source, "BITBROWSER_PROFILE_HOSTNAME_DNS")
+        self.assertEqual(result.reason, "maxmind_zip_missing")
+        self.assertEqual(result.city, "Testville")
+
+    def test_no_proxy_and_api_failure_reasons(self):
+        from integration.worker_task import _resolve_bitbrowser_proxy_geo
+
+        no_proxy_client = MagicMock()
+        no_proxy_client.get_profile_proxy.return_value = {}
+        self.assertEqual(
+            _resolve_bitbrowser_proxy_geo(no_proxy_client, "profile-1").reason,
+            "profile_no_proxy",
+        )
+
+        failing_client = MagicMock()
+        failing_client.get_profile_proxy.side_effect = RuntimeError("api down")
+        self.assertEqual(
+            _resolve_bitbrowser_proxy_geo(failing_client, "profile-1").reason,
+            "bitbrowser_api_error",
+        )
 
 
 class TestMakeTaskFnBitBrowserLifecycle(unittest.TestCase):
@@ -873,6 +941,9 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
     ):
         """Run task_fn with a mock task_source and return the mock run_cycle."""
         bb_client = _make_bitbrowser_client()
+        bb_client.get_profile_proxy.return_value = (
+            {"host": mock_ip, "port": 8080} if mock_ip else {}
+        )
         selenium_drv = _make_selenium_driver()
         givex_drv = MagicMock()
 
@@ -893,12 +964,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp") as mock_cdp,
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value=mock_ip,
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value=mock_zip,
+                "integration.worker_task.maxmind_lookup_geo",
+                return_value={"zip": mock_zip, "city": None, "state": None},
             ),
             patch(
                 "integration.worker_task._lookup_maxmind_utc_offset",
@@ -954,6 +1021,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
     def test_run_cycle_not_called_when_task_source_returns_none(self):
         """run_cycle is skipped if task_source returns None (no pending task)."""
         bb_client = _make_bitbrowser_client()
+        bb_client.get_profile_proxy.return_value = {"host": "1.2.3.4", "port": 8080}
         selenium_drv = _make_selenium_driver()
         givex_drv = MagicMock()
 
@@ -970,12 +1038,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="1.2.3.4",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="10001",
+                "integration.worker_task.maxmind_lookup_geo",
+                return_value={"zip": "10001", "city": None, "state": None},
             ),
             patch("integration.orchestrator.run_cycle") as mock_run_cycle,
         ):
@@ -986,6 +1050,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
     def test_run_cycle_not_called_without_task_source(self):
         """run_cycle is not called when make_task_fn() is invoked with no task_source."""
         bb_client = _make_bitbrowser_client()
+        bb_client.get_profile_proxy.return_value = {"host": "1.2.3.4", "port": 8080}
         selenium_drv = _make_selenium_driver()
         givex_drv = MagicMock()
 
@@ -1002,12 +1067,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="1.2.3.4",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="10001",
+                "integration.worker_task.maxmind_lookup_geo",
+                return_value={"zip": "10001", "city": None, "state": None},
             ),
             patch("integration.orchestrator.run_cycle") as mock_run_cycle,
         ):
@@ -1018,6 +1079,7 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
     def test_unregister_still_called_when_run_cycle_raises(self):
         """cdp.unregister_driver is called even when run_cycle raises."""
         bb_client = _make_bitbrowser_client()
+        bb_client.get_profile_proxy.return_value = {"host": "1.2.3.4", "port": 8080}
         selenium_drv = _make_selenium_driver()
         givex_drv = MagicMock()
 
@@ -1034,12 +1096,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp") as mock_cdp,
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="1.2.3.4",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="10001",
+                "integration.worker_task.maxmind_lookup_geo",
+                return_value={"zip": "10001", "city": None, "state": None},
             ),
             patch(
                 "integration.orchestrator.run_cycle",
@@ -1056,9 +1114,10 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
         _, mock_task_source, _, _ = self._run(worker_id="worker-99")
         mock_task_source.assert_called_once_with("worker-99")
 
-    def test_maxmind_lookup_zip_receives_detected_ip_address(self):
-        """maxmind_lookup_zip is called with the IP returned by _get_current_ip_best_effort."""
+    def test_maxmind_lookup_geo_receives_bitbrowser_proxy_ip_address(self):
+        """maxmind_lookup_geo is called with the BitBrowser profile proxy IP."""
         bb_client = _make_bitbrowser_client()
+        bb_client.get_profile_proxy.return_value = {"host": "203.0.113.5", "port": 8080}
         selenium_drv = _make_selenium_driver()
         givex_drv = MagicMock()
         task = MagicMock()
@@ -1076,18 +1135,14 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="203.0.113.5",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="90210",
-            ) as mock_zip_lookup,
+                "integration.worker_task.maxmind_lookup_geo",
+                return_value={"zip": "90210", "city": None, "state": None},
+            ) as mock_geo_lookup,
             patch("integration.orchestrator.run_cycle", return_value=("complete", None, None)),
         ):
             from integration.worker_task import make_task_fn
             make_task_fn(task_source=MagicMock(return_value=task))("w")
-        mock_zip_lookup.assert_called_once_with("203.0.113.5")
+        mock_geo_lookup.assert_called_once_with("203.0.113.5")
 
 
 class TestMakeTaskFnPersonaInjection(unittest.TestCase):
@@ -1212,6 +1267,10 @@ class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
         call_log: list[str] = []
 
         bb_client = _make_bitbrowser_client()
+        bb_client.get_profile_proxy.side_effect = lambda _pid: (
+            call_log.append("get_profile_proxy"),
+            {"host": "1.2.3.4", "port": 8080},
+        )[-1]
         selenium_drv = _make_selenium_driver(pid=12345)
         givex_drv = MagicMock()
 
@@ -1243,12 +1302,11 @@ class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
                 side_effect=_record("probe_cdp_listener"),
             ),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                side_effect=_record("get_current_ip"),
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                side_effect=_record("maxmind_lookup_zip"),
+                "integration.worker_task.maxmind_lookup_geo",
+                side_effect=lambda _ip: (
+                    call_log.append("maxmind_lookup_geo"),
+                    {"zip": None, "city": None, "state": None},
+                )[-1],
             ),
             patch(
                 "integration.worker_task._lookup_maxmind_utc_offset",
@@ -1268,7 +1326,7 @@ class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
         self.assertIn("probe_cdp_listener", call_log)
         self.assertIn("preflight_geo_check", call_log)
         # MaxMind helpers run after geo-check on the success path.
-        self.assertIn("get_current_ip", call_log)
+        self.assertIn("get_profile_proxy", call_log)
         self.assertLess(
             call_log.index("probe_cdp_listener"),
             call_log.index("preflight_geo_check"),
@@ -1276,7 +1334,7 @@ class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
         )
         self.assertLess(
             call_log.index("preflight_geo_check"),
-            call_log.index("get_current_ip"),
+            call_log.index("get_profile_proxy"),
             "geo-check must run BEFORE MaxMind IP resolution",
         )
 
@@ -1294,8 +1352,8 @@ class TestMakeTaskFnGeoCheckOrdering(unittest.TestCase):
 
         # Geo-check was attempted; MaxMind work was NOT.
         givex_drv.preflight_geo_check.assert_called_once()
-        self.assertNotIn("get_current_ip", call_log)
-        self.assertNotIn("maxmind_lookup_zip", call_log)
+        self.assertNotIn("get_profile_proxy", call_log)
+        self.assertNotIn("maxmind_lookup_geo", call_log)
         # task_source must not have been touched (run_cycle never reached).
         task_source.assert_not_called()
         # POOL-NO-DELETE in legacy mode means close + delete still run via
