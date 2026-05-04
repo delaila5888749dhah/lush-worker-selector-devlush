@@ -42,11 +42,15 @@ class TestProbeCdpListenerSupport(unittest.TestCase):
     def setUp(self):
         # Ensure ALLOW_DOM_ONLY_WATCHDOG is not leaked from another test.
         self._prev_env = os.environ.pop("ALLOW_DOM_ONLY_WATCHDOG", None)
+        self._prev_pool_mode = os.environ.pop("BITBROWSER_POOL_MODE", None)
 
     def tearDown(self):
         os.environ.pop("ALLOW_DOM_ONLY_WATCHDOG", None)
+        os.environ.pop("BITBROWSER_POOL_MODE", None)
         if self._prev_env is not None:
             os.environ["ALLOW_DOM_ONLY_WATCHDOG"] = self._prev_env
+        if self._prev_pool_mode is not None:
+            os.environ["BITBROWSER_POOL_MODE"] = self._prev_pool_mode
 
     def test_passes_for_callable_add_cdp_listener(self):
         """probe returns True when driver has callable add_cdp_listener."""
@@ -85,8 +89,8 @@ class TestProbeCdpListenerSupport(unittest.TestCase):
         self.assertFalse(result)
         joined = "\n".join(cm.output)
         self.assertIn("ALLOW_DOM_ONLY_WATCHDOG", joined)
-        self.assertIn("Phase A", joined)
-        self.assertIn("Phase C", joined)
+        self.assertIn("DOM-polling fallback", joined)
+        self.assertIn("selenium-wire==5.1.0", joined)
 
     def test_fallback_env_accepts_true_yes(self):
         """ALLOW_DOM_ONLY_WATCHDOG accepts 1/true/yes (case-insensitive)."""
