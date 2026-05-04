@@ -806,6 +806,8 @@ def _is_attach_mode(driver_obj: object, hint: bool | None = None) -> bool:
 
     Prefer the explicit caller hint, then driver capabilities
     (``goog:chromeOptions.debuggerAddress``), then the BitBrowser pool env.
+
+    Returns ``True`` when attach mode is detected, ``False`` otherwise.
     """
     if hint is not None:
         return hint
