@@ -75,8 +75,10 @@ class GeoResolution:
 
 
 def _safe_proxy_host(host: str | None) -> str | None:
+    if host is None:
+        return None
     try:
-        ipaddress.ip_address(host or "")
+        ipaddress.ip_address(host)
         return None
     except ValueError:
         return host
@@ -86,7 +88,10 @@ def _parse_proxy_host(raw_proxy: str) -> str | None:
     raw = raw_proxy.strip()
     if "://" not in raw:
         raw = "http://" + raw
-    return urllib.parse.urlparse(raw).hostname
+    try:
+        return urllib.parse.urlparse(raw).hostname
+    except Exception:  # pylint: disable=broad-except
+        return None
 
 
 def _resolve_proxy_host_ip(host: str | None) -> str | None:
