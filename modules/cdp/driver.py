@@ -1946,6 +1946,7 @@ class GivexDriver:
         # then skipped (preserves legacy callers and unit tests that drive
         # ``submit_purchase`` directly without a Phase A capture).
         self._expected_total: decimal.Decimal | None = None
+        self._last_cdp_error: str | None = None
         if persona is not None and _BehaviorStateMachine is not None:
             # Phase 5A Task 1: prefer the SM published by the behaviour
             # wrapper (via :func:`modules.delay.state.set_current_sm`)
@@ -2004,6 +2005,7 @@ class GivexDriver:
         # is observable instead of silently swallowed; the CS flag still
         # applies regardless so iframe interaction stays delay-safe.
         result: str = "error"
+        self._last_cdp_error = None
         if self._sm is not None:
             if not self._sm.transition("VBV"):
                 _log.warning(
@@ -2039,6 +2041,7 @@ class GivexDriver:
                 result = "iframe_missing"
                 return result
             except WebDriverException as exc:
+                self._last_cdp_error = str(exc)
                 _log.warning("handle_vbv_challenge CDP fail: %s", _sanitize_error(str(exc)))
                 result = "cdp_fail"
                 return result

@@ -25,6 +25,8 @@ from modules.common.exceptions import CDPError, InvalidTransitionError, PageStat
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
+from modules.cdp.session_health import classify_session_loss, session_alive
+from integration.session_outcome import SessionLostError
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
 # Import fails gracefully so orchestrator works before that PR lands.
 try:
@@ -462,6 +464,10 @@ class _IdempotencyStore:
         """Record that payment was submitted for task_id (but not yet confirmed)."""
         raise NotImplementedError
 
+    def is_submitted(self, task_id: str) -> bool:
+        """Return True if task_id has a submitted-but-not-yet-resolved checkpoint."""
+        raise NotImplementedError
+
     def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
         """Track *task_id* as submitted-but-unconfirmed for ``ttl_seconds`` (see ``reconcile_unconfirmed``)."""
         raise NotImplementedError
@@ -512,6 +518,10 @@ class _FileIdempotencyStore(_IdempotencyStore):
         with _idempotency_lock:
             _submitted_task_ids[task_id] = time.monotonic()
             _save_idempotency_store()
+
+    def is_submitted(self, task_id: str) -> bool:
+        with _idempotency_lock:
+            return task_id in _submitted_task_ids
 
     def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
         ttl = float(ttl_seconds) if ttl_seconds is not None else float(_UNCONFIRMED_TTL_SECONDS)
@@ -597,6 +607,19 @@ class _RedisIdempotencyStore(_IdempotencyStore):
                 "RedisIdempotencyStore.mark_submitted failed for task_id=%s: %s", task_id, exc,
             )
             raise
+
+    def is_submitted(self, task_id: str) -> bool:
+        try:
+            value = self._redis.get(self._key(task_id))
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            return value == "submitted"
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            _logger.error(
+                "RedisIdempotencyStore.is_submitted failed for task_id=%s: %s",
+                task_id, exc,
+            )
+            return False
 
     def mark_unconfirmed(self, task_id: str, ttl_seconds: float | None = None) -> None:
         ttl = int(ttl_seconds) if ttl_seconds is not None else int(_UNCONFIRMED_TTL_SECONDS)
@@ -1985,6 +2008,36 @@ def _record_fork_safe(branch: str) -> None:
         _logger.debug("monitor.record_fork(%s) failed", branch, exc_info=True)
 
 
+def _mark_unconfirmed_after_session_loss(task_id, worker_id: str) -> None:
+    if task_id is None:
+        return
+    try:
+        store = _get_idempotency_store()
+        if not store.is_submitted(task_id):
+            _logger.warning(
+                "Session loss after handle_outcome for worker=%s task_id=%s skipped "
+                "mark_unconfirmed because no submitted checkpoint exists",
+                worker_id, task_id,
+            )
+            return
+        store.mark_unconfirmed(
+            task_id, ttl_seconds=_UNCONFIRMED_TTL_SECONDS,
+        )
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.error(
+            "Failed to mark task_id=%s as unconfirmed after session loss for worker=%s",
+            task_id, worker_id, exc_info=True,
+        )
+
+
+def _raise_session_lost_from_vbv_cdp_fail(driver, worker_id: str) -> None:
+    last_err = getattr(driver, "_last_cdp_error", None) or "unknown"
+    loss_reason = classify_session_loss(last_err)
+    if loss_reason:
+        _logger.error("SESSION_LOST reason=%s worker=%s", loss_reason, worker_id)
+        raise SessionLostError(loss_reason)
+
+
 def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     """Determine the next action based on the current FSM state.
 
@@ -2055,14 +2108,19 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         )
         _record_fork_safe("ui_lock")
         return "retry"
-    if state.name == "vbv_3ds":
+    state_name = getattr(state, "name", None)
+    if state_name == "vbv_3ds":
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
-            _get_trace_id(), state.name, worker_id, _swap,
+            _get_trace_id(), state_name, worker_id, _swap,
         )
         _record_fork_safe("vbv_3ds")
         try:
             driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+            if not session_alive(driver):
+                reason = "session_probe_failed_pre_vbv"
+                _logger.error("SESSION_LOST reason=%s worker=%s", reason, worker_id)
+                raise SessionLostError(reason)
             result = driver.handle_vbv_challenge()
             if result in ("cancelled", "iframe_missing"):
                 post_state = driver.detect_page_state()
@@ -2081,8 +2139,11 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
                     worker_id=worker_id, ctx=ctx,
                 )
             elif result == "cdp_fail":
+                _raise_session_lost_from_vbv_cdp_fail(driver, worker_id)
                 # retry once on CDP/WebDriver failure
                 result = driver.handle_vbv_challenge()
+                if result == "cdp_fail":
+                    _raise_session_lost_from_vbv_cdp_fail(driver, worker_id)
                 if result in ("cancelled", "iframe_missing"):
                     post_state = driver.detect_page_state()
                     if post_state == "vbv_3ds":
@@ -2094,6 +2155,8 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
                         State(next_state), order_queue,
                         worker_id=worker_id, ctx=ctx,
                     )
+        except SessionLostError:
+            raise
         except Exception as exc:
             _logger.warning(
                 "[trace=%s] VBV challenge handling failed for worker=%s: %s",
@@ -2188,7 +2251,12 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             state, total = run_payment_step(
                 task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
             )
-            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            try:
+                action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            except SessionLostError:
+                _mark_unconfirmed_after_session_loss(task_id, worker_id)
+                watchdog.reset_session(worker_id)
+                raise
             if action == "complete":
                 success = True
                 _record_autoscaler_success(worker_id)
@@ -2307,7 +2375,12 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                         _get_trace_id(), worker_id, _MAX_UI_LOCK_RETRIES,
                     )
 
-            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            try:
+                action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            except SessionLostError:
+                _mark_unconfirmed_after_session_loss(task_id, worker_id)
+                watchdog.reset_session(worker_id)
+                raise
 
             _action_key = action[0] if isinstance(action, tuple) else action
 
