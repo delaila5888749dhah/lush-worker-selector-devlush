@@ -1211,7 +1211,8 @@ def _get_proxy_ip(proxy_str: str | None = None) -> str | None:
             return host
         except ValueError:
             pass
-        # Resolve hostname via local DNS (no external geo API involved).
+        # Resolve hostname via local DNS (no external geo API involved).  Use
+        # the OS resolver order so IPv4/IPv6 preference matches host config.
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
         for family, _socktype, _proto, _canonname, sockaddr in infos:
             if family in (socket.AF_INET, socket.AF_INET6) and sockaddr:

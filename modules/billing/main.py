@@ -336,6 +336,7 @@ def _normalize_text(value: str | None) -> str:
     """Lowercase/strip text and collapse punctuation/diacritics for matching."""
     if value is None:
         return ""
+    # NFKD decomposes accents so "San José" and "San Jose" compare equally.
     normalized = unicodedata.normalize("NFKD", str(value).strip().lower())
     ascii_text = "".join(ch for ch in normalized if not unicodedata.combining(ch))
     return re.sub(r"[^a-z0-9]+", " ", ascii_text).strip()

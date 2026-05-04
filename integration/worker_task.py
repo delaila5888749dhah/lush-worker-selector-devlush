@@ -157,6 +157,7 @@ def _resolve_bitbrowser_proxy_geo(client: object, profile_id: str) -> ProxyGeoRe
             proxy_source=proxy_source,
         )
 
+    # Issue contract requires the first 12 SHA-256 hex chars; never log raw IPs.
     ip_hash = hashlib.sha256(detected_ip.encode("utf-8")).hexdigest()[:12]
     geo = maxmind_lookup_geo(detected_ip)
     zip_code = geo.get("zip") if isinstance(geo, dict) else None
