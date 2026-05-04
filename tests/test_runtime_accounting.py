@@ -23,6 +23,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from integration.cycle_outcome import CycleDidNotCompleteError, normalize_action
+from integration.worker_task import GeoResolution, GeoResolutionReason
 from modules.common.types import CardInfo
 
 
@@ -46,8 +47,10 @@ def _patches():
             patch("modules.cdp.driver.GivexDriver", return_value=MagicMock()),
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
-            patch("integration.worker_task._get_current_ip_best_effort", return_value=None),
-            patch("integration.worker_task.maxmind_lookup_zip", return_value=None),
+            patch(
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, None, "NONE", None, None, GeoResolutionReason.PROXY_NOT_CONFIGURED),
+            ),
         ],
     )
 

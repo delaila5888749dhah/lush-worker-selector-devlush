@@ -48,9 +48,6 @@ from modules.delay.temporal import set_utc_offset
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 _GEO_AUDIT_LOGGER = logging.getLogger("integration.orchestrator.audit")
-_get_current_ip_best_effort = cdp_driver._get_current_ip_best_effort
-_lookup_maxmind_utc_offset = cdp_driver._lookup_maxmind_utc_offset
-maxmind_lookup_zip = cdp_driver.maxmind_lookup_zip
 
 # P1-5: Task-level abort registry.
 _abort_lock: threading.Lock = threading.Lock()
@@ -77,17 +74,9 @@ class GeoResolution:
     reason: str
 
 
-def _hash_ip(ip_addr: str | None) -> str | None:
-    if not ip_addr:
-        return None
-    return hashlib.sha256(ip_addr.encode("utf-8")).hexdigest()[:12]
-
-
 def _safe_proxy_host(host: str | None) -> str | None:
-    if not host:
-        return None
     try:
-        ipaddress.ip_address(host)
+        ipaddress.ip_address(host or "")
         return None
     except ValueError:
         return host
@@ -95,72 +84,51 @@ def _safe_proxy_host(host: str | None) -> str | None:
 
 def _parse_proxy_host(raw_proxy: str) -> str | None:
     raw = raw_proxy.strip()
-    if not raw:
-        return None
     if "://" not in raw:
         raw = "http://" + raw
-    try:
-        return urllib.parse.urlparse(raw).hostname
-    except Exception:  # pylint: disable=broad-except
-        return None
+    return urllib.parse.urlparse(raw).hostname
 
 
 def _resolve_proxy_host_ip(host: str | None) -> str | None:
     if not host:
         return None
     try:
-        return socket.gethostbyname(host)
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None)
     except OSError:
         return None
+    for family, _type, _proto, _canon, sockaddr in infos:
+        if family in (socket.AF_INET, socket.AF_INET6):
+            return sockaddr[0]
+    return None
 
 
 def _open_maxmind_reader():
     reader = getattr(cdp_driver, "_MAXMIND_READER", None)
     if reader is not None:
-        return reader, None
+        return reader, False
     try:
         mmdb_path = cdp_driver._resolve_mmdb_path()  # pylint: disable=protected-access
-    except Exception:  # pylint: disable=broad-except
-        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
-    if not os.path.exists(mmdb_path):
-        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
-    try:
+        if not os.path.exists(mmdb_path):
+            return None, False
         geoip2_database = importlib.import_module("geoip2.database")
-    except ImportError:
-        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
-    try:
-        return geoip2_database.Reader(mmdb_path), None
+        return geoip2_database.Reader(mmdb_path), True
     except Exception:  # pylint: disable=broad-except
-        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
-
-
-def _utc_offset_from_record(record) -> float | None:
-    zone_info = getattr(cdp_driver, "_ZoneInfo", None)
-    if zone_info is None:
-        return None
-    tz_name = getattr(getattr(record, "location", None), "time_zone", None)
-    if not tz_name:
-        return None
-    try:
-        tz_info = zone_info(tz_name)
-        offset = datetime.datetime.now(tz_info).utcoffset()
-        if offset is None:
-            return None
-        return offset.total_seconds() / 3600.0
-    except Exception:  # pylint: disable=broad-except
-        return None
+        return None, False
 
 
 def _maxmind_geo_for_ip(ip_addr: str) -> tuple[str | None, float | None, str | None]:
-    """Return ``(postal_code, utc_offset, reason)`` for a resolved proxy IP."""
-    reader, reason = _open_maxmind_reader()
+    reader, close_reader = _open_maxmind_reader()
     if reader is None:
-        return None, None, reason
-    close_reader = getattr(cdp_driver, "_MAXMIND_READER", None) is None
+        return None, None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
     try:
         record = reader.city(ip_addr)
         postal_code = getattr(getattr(record, "postal", None), "code", None)
-        utc_offset = _utc_offset_from_record(record)
+        utc_offset = cdp_driver._lookup_maxmind_utc_offset(ip_addr)  # pylint: disable=protected-access
         if postal_code:
             return postal_code, utc_offset, GeoResolutionReason.OK
         return None, utc_offset, GeoResolutionReason.MAXMIND_ZIP_MISSING
@@ -175,60 +143,33 @@ def _maxmind_geo_for_ip(ip_addr: str) -> tuple[str | None, float | None, str | N
 
 
 def resolve_proxy_geo(worker_id: str) -> GeoResolution:
-    """Resolve proxy geo with explicit reason for any miss.
-
-    Returns a :class:`GeoResolution` containing a hashed detected IP, safe
-    proxy source metadata, optional MaxMind ZIP, optional fractional UTC offset,
-    and one of the ``GeoResolutionReason`` values.
-    """
+    """Resolve proxy geo with explicit reason for any miss."""
     del worker_id  # Reserved for future worker-scoped proxy sources.
     raw_proxy = os.environ.get("PROXY_SERVER", "").strip()
     if not raw_proxy:
-        return GeoResolution(
-            ip_hash=None,
-            proxy_host=None,
-            proxy_source="NONE",
-            maxmind_zip=None,
-            utc_offset=None,
-            reason=GeoResolutionReason.PROXY_NOT_CONFIGURED,
-        )
+        return GeoResolution(None, None, "NONE", None, None, GeoResolutionReason.PROXY_NOT_CONFIGURED)
 
     proxy_host = _parse_proxy_host(raw_proxy)
     if not proxy_host:
-        return GeoResolution(
-            ip_hash=None,
-            proxy_host=None,
-            proxy_source="PROXY_SERVER",
-            maxmind_zip=None,
-            utc_offset=None,
-            reason=GeoResolutionReason.IP_FETCH_FAILED,
-        )
+        return GeoResolution(None, None, "PROXY_SERVER", None, None, GeoResolutionReason.IP_FETCH_FAILED)
 
     detected_ip = _resolve_proxy_host_ip(proxy_host)
     if detected_ip is None:
-        return GeoResolution(
-            ip_hash=None,
-            proxy_host=proxy_host,
-            proxy_source="PROXY_SERVER",
-            maxmind_zip=None,
-            utc_offset=None,
-            reason=GeoResolutionReason.DNS_FAILED,
-        )
+        return GeoResolution(None, proxy_host, "PROXY_SERVER", None, None, GeoResolutionReason.DNS_FAILED)
 
     zip_code, utc_offset, reason = _maxmind_geo_for_ip(detected_ip)
-    return GeoResolution(
-        ip_hash=_hash_ip(detected_ip),
-        proxy_host=proxy_host,
-        proxy_source="PROXY_SERVER",
-        maxmind_zip=zip_code,
-        utc_offset=utc_offset,
-        reason=reason or GeoResolutionReason.OK,
-    )
+    ip_hash = hashlib.sha256(detected_ip.encode("utf-8")).hexdigest()[:12]
+    return GeoResolution(ip_hash, proxy_host, "PROXY_SERVER", zip_code, utc_offset, reason or GeoResolutionReason.OK)
 
 
 def _emit_geo_resolution_event(resolution: GeoResolution, worker_id: str) -> None:
+    try:
+        from integration.runtime import get_trace_id  # noqa: PLC0415
+        trace_id = get_trace_id() or "no-trace"
+    except Exception:  # pylint: disable=broad-except
+        trace_id = "no-trace"
     event = {
-        "event": "proxy_geo_resolution",
+        "event_type": "proxy_geo_resolution",
         "worker_id": worker_id,
         "proxy_source": resolution.proxy_source,
         "proxy_host": _safe_proxy_host(resolution.proxy_host),
@@ -236,6 +177,8 @@ def _emit_geo_resolution_event(resolution: GeoResolution, worker_id: str) -> Non
         "maxmind_zip_present": resolution.maxmind_zip is not None,
         "utc_offset_present": resolution.utc_offset is not None,
         "reason": resolution.reason,
+        "trace_id": trace_id,
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     _GEO_AUDIT_LOGGER.info(
         "proxy_geo_resolution %s",

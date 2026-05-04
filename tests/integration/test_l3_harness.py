@@ -68,7 +68,7 @@ from modules.fsm.main import (  # noqa: E402  pylint: disable=wrong-import-posit
 )
 from modules.watchdog.main import reset as _reset_watchdog  # noqa: E402  pylint: disable=wrong-import-position
 
-from integration.worker_task import make_task_fn  # noqa: E402  pylint: disable=wrong-import-position
+from integration.worker_task import GeoResolution, GeoResolutionReason, make_task_fn  # noqa: E402  pylint: disable=wrong-import-position
 from _integration_harness import (  # noqa: E402  pylint: disable=wrong-import-position,wrong-import-order
     _IntegrationBase,
     _StubGivexDriver,
@@ -889,8 +889,8 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
         ), patch(
             "integration.runtime.probe_cdp_listener_support"
         ), patch(
-            "integration.worker_task._get_current_ip_best_effort",
-            return_value=None,
+            "integration.worker_task.resolve_proxy_geo",
+            return_value=GeoResolution(None, None, "NONE", None, None, GeoResolutionReason.PROXY_NOT_CONFIGURED),
         ):
             task_source = MagicMock(return_value=_make_task())
             # Patch run_cycle in the dynamically-imported orchestrator module.
@@ -930,10 +930,8 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
         ), patch(
             "integration.runtime.probe_cdp_listener_support"
         ), patch(
-            "integration.worker_task._get_current_ip_best_effort",
-            return_value="1.2.3.4",
-        ), patch(
-            "integration.worker_task.maxmind_lookup_zip", return_value="10001"
+            "integration.worker_task.resolve_proxy_geo",
+            return_value=GeoResolution(None, "proxy.example", "PROXY_SERVER", "10001", None, GeoResolutionReason.OK),
         ), patch(
             "integration.orchestrator.run_cycle",
             side_effect=capture_run_cycle,

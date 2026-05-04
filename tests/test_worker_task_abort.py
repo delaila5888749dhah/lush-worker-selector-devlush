@@ -3,6 +3,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from integration.worker_task import GeoResolution, GeoResolutionReason
+
 
 def _make_selenium_driver():
     drv = MagicMock()
@@ -94,8 +96,10 @@ class TestAbortCheckWiredIntoRunCycle(unittest.TestCase):
             patch("modules.cdp.driver.GivexDriver", return_value=MagicMock()),
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
-            patch("integration.worker_task._get_current_ip_best_effort", return_value=None),
-            patch("integration.worker_task.maxmind_lookup_zip", return_value=None),
+            patch(
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, None, "NONE", None, None, GeoResolutionReason.PROXY_NOT_CONFIGURED),
+            ),
             patch("integration.orchestrator.run_cycle", return_value=("complete", None, None)) as mock_run_cycle,
         ):
             make_task_fn(task_source=MagicMock(return_value=task))("w1")
@@ -175,8 +179,10 @@ class TestAbortCycleReturn(unittest.TestCase):
             patch("modules.cdp.driver.GivexDriver", return_value=MagicMock()),
             patch("integration.worker_task.cdp") as mock_cdp,
             patch("integration.runtime.probe_cdp_listener_support"),
-            patch("integration.worker_task._get_current_ip_best_effort", return_value=None),
-            patch("integration.worker_task.maxmind_lookup_zip", return_value=None),
+            patch(
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, None, "NONE", None, None, GeoResolutionReason.PROXY_NOT_CONFIGURED),
+            ),
             patch(
                 "integration.orchestrator.run_cycle",
                 return_value=("abort_cycle", None, None),

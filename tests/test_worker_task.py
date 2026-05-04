@@ -884,9 +884,12 @@ class TestResolveProxyGeo(unittest.TestCase):
                     patch_kwargs.get("reader"),
                 ),
                 patch(
-                    "integration.worker_task.socket.gethostbyname",
+                    "integration.worker_task.socket.getaddrinfo",
                     side_effect=patch_kwargs.get("dns_side_effect"),
-                    return_value=patch_kwargs.get("dns_return", "203.0.113.5"),
+                    return_value=patch_kwargs.get(
+                        "dns_return",
+                        [(2, None, None, "", ("203.0.113.5", 0))],
+                    ),
                 ),
                 patch(
                     "integration.worker_task.cdp_driver._resolve_mmdb_path",
@@ -988,11 +991,18 @@ class TestResolveProxyGeo(unittest.TestCase):
         result = self._resolve_with_env(
             "http://user:pass@proxy.example:8080",
             reader=reader,
-            dns_return="203.0.113.5",
+            dns_return=[(2, None, None, "", ("203.0.113.5", 0))],
         )
         self.assertEqual(result.ip_hash, hashlib.sha256(b"203.0.113.5").hexdigest()[:12])
         self.assertIsInstance(result.utc_offset, float)
         self.assertEqual(result.proxy_host, "proxy.example")
+
+    def test_literal_ipv6_proxy_is_not_dns_failed(self):
+        reader = MagicMock()
+        reader.city.return_value = _geo_record(zip_code="10001", time_zone="UTC")
+        result = self._resolve_with_env("http://[2001:db8::1]:8080", reader=reader)
+        self.assertEqual(result.reason, GeoResolutionReason.OK)
+        self.assertEqual(result.ip_hash, hashlib.sha256(b"2001:db8::1").hexdigest()[:12])
 
     def test_geo_resolution_event_is_json_and_pii_safe(self):
         from integration.worker_task import _emit_geo_resolution_event
@@ -1011,10 +1021,12 @@ class TestResolveProxyGeo(unittest.TestCase):
         rendered = logs.output[0]
         self.assertIn("proxy_geo_resolution ", rendered)
         payload = json.loads(rendered.split("proxy_geo_resolution ", 1)[1])
-        self.assertEqual(payload["event"], "proxy_geo_resolution")
+        self.assertEqual(payload["event_type"], "proxy_geo_resolution")
         self.assertEqual(payload["detected_ip_hash"], resolution.ip_hash)
         self.assertTrue(payload["utc_offset_present"])
         self.assertFalse(payload["maxmind_zip_present"])
+        self.assertIn("trace_id", payload)
+        self.assertIn("timestamp_utc", payload)
         self.assertIsNone(payload["proxy_host"])
         self.assertNotIn("203.0.113.5", rendered)
         self.assertNotIn("user:pass", rendered)
@@ -1134,12 +1146,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="1.2.3.4",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="10001",
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, "proxy.example", "PROXY_SERVER", "10001", None, GeoResolutionReason.OK),
             ),
             patch("integration.orchestrator.run_cycle") as mock_run_cycle,
         ):
@@ -1166,12 +1174,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp"),
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="1.2.3.4",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="10001",
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, "proxy.example", "PROXY_SERVER", "10001", None, GeoResolutionReason.OK),
             ),
             patch("integration.orchestrator.run_cycle") as mock_run_cycle,
         ):
@@ -1198,12 +1202,8 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             patch("integration.worker_task.cdp") as mock_cdp,
             patch("integration.runtime.probe_cdp_listener_support"),
             patch(
-                "integration.worker_task._get_current_ip_best_effort",
-                return_value="1.2.3.4",
-            ),
-            patch(
-                "integration.worker_task.maxmind_lookup_zip",
-                return_value="10001",
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, "proxy.example", "PROXY_SERVER", "10001", None, GeoResolutionReason.OK),
             ),
             patch(
                 "integration.orchestrator.run_cycle",
@@ -1255,6 +1255,40 @@ class TestMakeTaskFnZipWiring(unittest.TestCase):
             from integration.worker_task import make_task_fn
             make_task_fn(task_source=MagicMock(return_value=task))("w")
         mock_resolve.assert_called_once_with("w")
+
+    def test_proxy_geo_resolution_audit_precedes_billing_selection_audit(self):
+        """proxy_geo_resolution is emitted before the later billing audit."""
+        bb_client = _make_bitbrowser_client()
+        selenium_drv = _make_selenium_driver()
+        givex_drv = MagicMock()
+        task = MagicMock()
+
+        def fake_run_cycle(*_args, **_kwargs):
+            import logging
+            logging.getLogger("integration.orchestrator.audit").info(
+                'billing_selection {"event_type": "billing_selection"}'
+            )
+            return "complete", None, None
+
+        with (
+            patch("integration.worker_task.get_bitbrowser_client", return_value=bb_client),
+            patch("integration.worker_task._build_remote_driver", return_value=selenium_drv),
+            patch("modules.cdp.driver.GivexDriver", return_value=givex_drv),
+            patch("integration.worker_task.cdp"),
+            patch("integration.runtime.probe_cdp_listener_support"),
+            patch(
+                "integration.worker_task.resolve_proxy_geo",
+                return_value=GeoResolution(None, "proxy.example", "PROXY_SERVER", None, None, GeoResolutionReason.MAXMIND_ZIP_MISSING),
+            ),
+            patch("integration.orchestrator.run_cycle", side_effect=fake_run_cycle),
+            self.assertLogs("integration.orchestrator.audit", level="INFO") as logs,
+        ):
+            from integration.worker_task import make_task_fn
+            make_task_fn(task_source=MagicMock(return_value=task))("w")
+
+        geo_index = next(i for i, line in enumerate(logs.output) if "proxy_geo_resolution" in line)
+        billing_index = next(i for i, line in enumerate(logs.output) if "billing_selection" in line)
+        self.assertLess(geo_index, billing_index)
 
 
 class TestMakeTaskFnPersonaInjection(unittest.TestCase):
