@@ -6,6 +6,8 @@ between :mod:`integration.worker_task` and :mod:`integration.runtime`,
 not a public spec contract.
 """
 
+from modules.common.types import CardInfo
+
 
 class CycleDidNotCompleteError(RuntimeError):
     """Raised when ``run_cycle()`` returned a non-complete action.
@@ -19,18 +21,50 @@ class CycleDidNotCompleteError(RuntimeError):
     def __init__(self, action: str, reason: str = ""):
         self.action = action
         self.reason = reason
-        super().__init__(
-            f"cycle did not complete: action={action} reason={reason}"
-        )
+        msg = f"cycle did not complete: action={action}"
+        if reason:
+            msg += " reason=<redacted>"
+        super().__init__(msg)
+
+
+KNOWN_RUN_CYCLE_ACTIONS = frozenset({
+    "complete",
+    "abort_cycle",
+    "await_3ds",
+    "retry",
+    "retry_new_card",
+})
+
+KNOWN_RUN_CYCLE_TUPLE_ACTIONS = frozenset({"retry_new_card"})
 
 
 def normalize_action(action) -> str:
-    """Return canonical string action regardless of tuple form.
+    """Return canonical action token; fail loud on malformed action values.
 
     ``run_cycle()`` may return ``action`` as a plain string (e.g.
     ``"complete"``) or as a tuple like ``("retry_new_card", CardInfo)``.
-    Normalise to the leading string token for comparisons.
+    Normalize to the leading string token for comparisons.
+
+    Do not stringify arbitrary objects, because repr/str may contain
+    sensitive context and would turn a contract bug into loggable data.
     """
-    if isinstance(action, tuple) and action:
-        return str(action[0])
-    return str(action)
+    if isinstance(action, tuple):
+        if len(action) != 2:
+            raise ValueError("run_cycle action tuple must be exactly (action, payload)")
+        if not isinstance(action[0], str):
+            raise ValueError("run_cycle action tuple must start with string token")
+        token = action[0]
+        if token not in KNOWN_RUN_CYCLE_ACTIONS:
+            raise ValueError("unknown run_cycle tuple action token")
+        if token not in KNOWN_RUN_CYCLE_TUPLE_ACTIONS:
+            raise ValueError("run_cycle action token does not support tuple form")
+        if not isinstance(action[1], CardInfo):
+            raise ValueError("retry_new_card action payload must be CardInfo")
+    elif isinstance(action, str):
+        token = action
+    else:
+        raise ValueError("malformed run_cycle action type")
+
+    if token not in KNOWN_RUN_CYCLE_ACTIONS:
+        raise ValueError("unknown run_cycle action token")
+    return token

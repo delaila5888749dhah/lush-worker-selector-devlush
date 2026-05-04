@@ -22,7 +22,8 @@ See issue: P0 success_count contamination on non-complete cycles.
 import unittest
 from unittest.mock import MagicMock, patch
 
-from integration.cycle_outcome import CycleDidNotCompleteError
+from integration.cycle_outcome import CycleDidNotCompleteError, normalize_action
+from modules.common.types import CardInfo
 
 
 def _make_bb_client():
@@ -51,6 +52,16 @@ def _patches():
     )
 
 
+def _make_card():
+    return CardInfo(
+        card_number="4111111111111111",
+        exp_month="12",
+        exp_year="2030",
+        cvv="123",
+        card_name="Test User",
+    )
+
+
 class TestTaskFnNormalization(unittest.TestCase):
     """task_fn must raise CycleDidNotCompleteError on non-complete actions."""
 
@@ -75,10 +86,15 @@ class TestTaskFnNormalization(unittest.TestCase):
         result = self._run_with_action("complete")
         self.assertIsNone(result)
 
-    def test_failure_action_raises(self):
-        with self.assertRaises(CycleDidNotCompleteError) as cm:
-            self._run_with_action("failure")
-        self.assertEqual(cm.exception.action, "failure")
+    def test_normalize_accepts_complete_action(self):
+        self.assertEqual(normalize_action("complete"), "complete")
+
+    def test_cycle_did_not_complete_message_redacts_reason(self):
+        sensitive_reason = "card=4111111111111111 cvv=123"
+        exc = CycleDidNotCompleteError(action="retry", reason=sensitive_reason)
+        self.assertEqual(str(exc), "cycle did not complete: action=retry reason=<redacted>")
+        self.assertNotIn(sensitive_reason, str(exc))
+        self.assertEqual(exc.reason, sensitive_reason)
 
     def test_abort_cycle_action_raises(self):
         with self.assertRaises(CycleDidNotCompleteError) as cm:
@@ -97,11 +113,55 @@ class TestTaskFnNormalization(unittest.TestCase):
 
     def test_tuple_action_normalized(self):
         """Tuple-form actions like ('retry_new_card', card) must be normalized."""
-        sentinel_card = object()
+        sentinel_card = _make_card()
         with self.assertRaises(CycleDidNotCompleteError) as cm:
             self._run_with_action(("retry_new_card", sentinel_card))
         # Normalised to leading string token.
         self.assertEqual(cm.exception.action, "retry_new_card")
+
+    def test_string_token_in_unsupported_tuple_form_fails_loud(self):
+        with self.assertRaises(ValueError) as cm:
+            normalize_action(("retry", object()))
+        self.assertEqual(
+            str(cm.exception),
+            "run_cycle action token does not support tuple form",
+        )
+
+    def test_tuple_action_wrong_arity_fails_loud(self):
+        card = _make_card()
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card",))
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", card, "extra"))
+
+    def test_tuple_action_invalid_payload_fails_loud(self):
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", None))
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", object()))
+        with self.assertRaises(ValueError):
+            normalize_action(("retry_new_card", "not-a-card"))
+
+    def test_unknown_action_fails_loud(self):
+        with self.assertRaises(ValueError) as cm:
+            self._run_with_action("completed")
+        # Do not echo invalid action tokens; keep malformed contract errors
+        # free of arbitrary runtime data.
+        self.assertEqual(str(cm.exception), "unknown run_cycle action token")
+
+    def test_malformed_action_type_fails_loud(self):
+        class UnstringifiableAction:
+            stringified = False
+
+            def __str__(self):
+                self.stringified = True
+                raise AssertionError("normalize_action must not stringify arbitrary objects")
+
+        action = UnstringifiableAction()
+        with self.assertRaises(ValueError) as cm:
+            self._run_with_action(action)
+        self.assertEqual(str(cm.exception), "malformed run_cycle action type")
+        self.assertFalse(action.stringified)
 
 
 class TestRuntimeAccounting(unittest.TestCase):
@@ -175,10 +235,10 @@ class TestRuntimeAccounting(unittest.TestCase):
         runtime._state = "INIT"
         return wid
 
-    def test_failure_action_records_error(self):
+    def test_retry_action_records_error(self):
         from modules.monitor import main as monitor
 
-        self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
+        self._run_one_cycle(CycleDidNotCompleteError(action="retry"))
         m = monitor.get_metrics()
         self.assertEqual(m["success_count"], 0)
         self.assertEqual(m["error_count"], 1)
@@ -216,7 +276,7 @@ class TestRuntimeAccounting(unittest.TestCase):
 
         mock_autoscaler = MagicMock()
         with patch.object(runtime, "get_autoscaler", return_value=mock_autoscaler):
-            self._run_one_cycle(CycleDidNotCompleteError(action="failure"))
+            self._run_one_cycle(CycleDidNotCompleteError(action="retry"))
         mock_autoscaler.record_failure.assert_not_called()
         # And it must not have been recorded as success either.
         mock_autoscaler.record_success.assert_not_called()
@@ -229,6 +289,16 @@ class TestRuntimeAccounting(unittest.TestCase):
             runtime._consecutive_billing_failures = 1
         self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
         self.assertEqual(runtime._consecutive_billing_failures, 0)
+
+    def test_non_complete_resets_restart_delay(self):
+        """CycleDidNotCompleteError must clear stale crash restart backoff."""
+        from integration import runtime
+
+        with runtime._lock:
+            runtime._restart_delay = 8
+        self._run_one_cycle(CycleDidNotCompleteError(action="abort_cycle"))
+        with runtime._lock:
+            self.assertEqual(runtime._restart_delay, 0)
 
     def test_non_complete_does_not_increment_pending_restarts(self):
         """CycleDidNotCompleteError is an expected per-cycle outcome — NOT a
@@ -244,6 +314,29 @@ class TestRuntimeAccounting(unittest.TestCase):
 
         with runtime._lock:
             self.assertEqual(runtime._pending_restarts, 0)
+
+    def test_non_complete_log_payload_does_not_include_reason_text(self):
+        from integration import runtime
+
+        sensitive_reason = "card=4111111111111111 cvv=123"
+        events = []
+
+        def capture_log(*args):
+            events.append(args)
+
+        with patch.object(runtime, "_log_event", side_effect=capture_log):
+            self._run_one_cycle(
+                CycleDidNotCompleteError(action="abort_cycle", reason=sensitive_reason)
+            )
+
+        cycle_events = [event for event in events if len(event) >= 3 and event[2] == "cycle_not_complete"]
+        self.assertEqual(len(cycle_events), 1)
+        err_data = cycle_events[0][3]
+        self.assertEqual(err_data["error_type"], "CycleDidNotCompleteError")
+        self.assertEqual(err_data["action"], "abort_cycle")
+        self.assertIs(err_data["reason_present"], True)
+        self.assertNotIn("error", err_data)
+        self.assertNotIn(sensitive_reason, repr(err_data))
 
     def test_real_path_no_double_count(self):
         """End-to-end: worker_task → run_cycle → runtime must increment
@@ -263,7 +356,7 @@ class TestRuntimeAccounting(unittest.TestCase):
             # Mirror real run_cycle: autoscaler accounting before "return".
             get_autoscaler().record_failure(worker_id)
             recorded_wid.append(worker_id)
-            raise CycleDidNotCompleteError(action="failure")
+            raise CycleDidNotCompleteError(action="retry")
 
         import threading
         runtime._state = "RUNNING"
