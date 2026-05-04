@@ -2528,7 +2528,6 @@ class GivexDriver:
         if not els: raise SelectorTimeoutError(sel, 0)  # noqa: E701
         selector_name = _selector_name(sel)
         expected_len = len(str(val))
-        start_ns = time.monotonic_ns()
         delay_permitted = (
             self._engine is None or self._engine.is_delay_permitted()
         )
@@ -2546,6 +2545,7 @@ class GivexDriver:
         if _type_value is None:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
+            start_ns = time.monotonic_ns()
             self._send_keys_fallback(sel, val)
             res = {}
             actual_len = (
@@ -2610,6 +2610,7 @@ class GivexDriver:
             dl = self._bio.generate_burst_pattern(len(val))
         else:
             dl = None
+        start_ns = time.monotonic_ns()
         res = _type_value(
             self._driver, els[0], val, self._get_rng(),
             typo_rate=typo_prob, delays=dl, strict=self._strict,
