@@ -15,6 +15,7 @@ Covers F-01 (entrypoint), F-03 (CDP driver registration), and F-04
   - app/__main__.py production path (flag on): runtime.start receives make_task_fn result.
 """
 
+import socket
 import unittest
 from unittest.mock import MagicMock, call, patch
 
@@ -267,7 +268,7 @@ class TestProxyGeoResolution(unittest.TestCase):
         self.assertEqual(result.proxy_source, "BITBROWSER_PROFILE")
         self.assertEqual(len(result.detected_ip_hash), 12)
 
-    def test_hostname_proxy_uses_dns_source_and_ipv6_supported(self):
+    def test_hostname_proxy_uses_dns_source(self):
         from integration.worker_task import _resolve_bitbrowser_proxy_geo
 
         client = MagicMock()
@@ -278,12 +279,12 @@ class TestProxyGeoResolution(unittest.TestCase):
             patch("integration.worker_task._lookup_maxmind_utc_offset", return_value=None),
         ):
             mock_getaddrinfo.return_value = [
-                (10, 1, 6, "", ("2001:db8::10", 0, 0, 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.11", 0)),
             ]
             mock_geo.return_value = {"zip": None, "city": "Testville", "state": "CA"}
             result = _resolve_bitbrowser_proxy_geo(client, "profile-1")
 
-        mock_geo.assert_called_once_with("2001:db8::10")
+        mock_geo.assert_called_once_with("203.0.113.11")
         self.assertEqual(result.proxy_source, "BITBROWSER_PROFILE_HOSTNAME_DNS")
         self.assertEqual(result.reason, "maxmind_zip_missing")
         self.assertEqual(result.city, "Testville")

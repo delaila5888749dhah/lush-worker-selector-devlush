@@ -35,6 +35,7 @@ from integration.orchestrator import (
     _load_idempotency_store,
     _make_profile_id,
     _save_idempotency_store,
+    _select_profile_with_audit,
     get_cdp_metrics,
     handle_outcome,
     initialize_cycle,
@@ -1655,8 +1656,7 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             mock_billing.SELECTION_METHOD_UNKNOWN = "unknown"
             mock_audit.info.side_effect = lambda label, payload: captured.append((label, _json.loads(payload)))
 
-            import integration.orchestrator as orch
-            selected = orch._select_profile_with_audit(  # pylint: disable=protected-access
+            selected = _select_profile_with_audit(  # pylint: disable=protected-access
                 "10001",
                 worker_id="worker-geo",
                 task_id="task-geo",
@@ -1698,8 +1698,7 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             mock_billing.SELECTION_METHOD_UNKNOWN = "unknown"
             mock_audit.info.side_effect = RuntimeError("audit down")
 
-            import integration.orchestrator as orch
-            selected = orch._select_profile_with_audit(  # pylint: disable=protected-access
+            selected = _select_profile_with_audit(  # pylint: disable=protected-access
                 None,
                 worker_id="worker-geo",
                 task_id="task-geo",

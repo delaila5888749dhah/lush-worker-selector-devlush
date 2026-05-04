@@ -2397,14 +2397,14 @@ def run_cycle(
         ui_lock_retry_count = 0  # P0-4 — separate cap for UI lock focus-shift retries
         # Cap: len(order_queue) card-swap slots + 2 buffer for ui_lock retries.
         max_iters = len(ctx.task.order_queue) + 2
-        # action is str for simple outcomes or (str, CardInfo) for retry_new_card.
-        action: str | tuple = "abort_cycle"
+        # retry_action is str for simple outcomes or (str, CardInfo) for retry_new_card.
+        retry_action: str | tuple = "abort_cycle"
         state = None
         total = None
 
         for _loop_iter in range(max_iters):
             if abort_check is not None and abort_check():
-                action = "abort_cycle"
+                retry_action = "abort_cycle"
                 break
             initialize_cycle(worker_id)
             # Build an effective task that carries the current (possibly swapped) card.
@@ -2498,13 +2498,13 @@ def run_cycle(
                     )
 
             try:
-                action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+                retry_action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
             except SessionLostError:
                 _mark_unconfirmed_after_session_loss(task_id, worker_id)
                 watchdog.reset_session(worker_id)
                 raise
 
-            _action_key = action[0] if isinstance(action, tuple) else action
+            _action_key = retry_action[0] if isinstance(retry_action, tuple) else retry_action
 
             # P1-2 — Clear/refill after "Thank you" popup.
             # When the payment was successful and more cards remain in the queue,
@@ -2534,8 +2534,8 @@ def run_cycle(
             if _action_key in ("complete", "abort_cycle", "await_3ds"):
                 break
 
-            if isinstance(action, tuple) and _action_key == "retry_new_card":
-                _, new_card = action
+            if isinstance(retry_action, tuple) and _action_key == "retry_new_card":
+                _, new_card = retry_action
                 # CDP card-swap: clear existing card fields then fill with new card.
                 # P1-4: a CDPError from clear_card_fields_cdp means the field may
                 # still hold stale card data — abort the cycle instead of resubmitting
@@ -2551,7 +2551,7 @@ def run_cycle(
                         "— aborting cycle to avoid double-charge",
                         _get_trace_id(), worker_id, _sanitize_error(_cdp_exc),
                     )
-                    action = "abort_cycle"
+                    retry_action = "abort_cycle"
                     break
                 except Exception as _swap_exc:  # noqa: BLE001  # pylint: disable=broad-except
                     _logger.warning(
@@ -2561,21 +2561,21 @@ def run_cycle(
                 current_card = new_card
                 retry_count = 0  # reset general retry counter after a card swap
                 ui_lock_retry_count = 0  # P0-4 — reset ui_lock counter after card swap
-            elif action == "retry_new_card":
+            elif retry_action == "retry_new_card":
                 # Legacy path (ctx=None): no card info available — abort.
-                action = "abort_cycle"
+                retry_action = "abort_cycle"
                 break
-            elif action == "retry":
+            elif retry_action == "retry":
                 retry_count += 1
                 if retry_count >= 2:
-                    action = "abort_cycle"
+                    retry_action = "abort_cycle"
                     break
             # Unknown actions: continue loop (guards against future outcome additions).
         else:
             # Loop cap exhausted without a terminal break — treat as abort.
-            action = "abort_cycle"
+            retry_action = "abort_cycle"
 
-        if action == "complete":
+        if retry_action == "complete":
             success = True
             _record_autoscaler_success(worker_id)
             # Ngã rẽ 2: Screenshot + Blur + Telegram (Blueprint §6)
@@ -2584,7 +2584,7 @@ def run_cycle(
                 _get_idempotency_store().mark_completed(task_id)
         else:
             _record_autoscaler_failure(worker_id)
-        return action, state, total
+        return retry_action, state, total
     except SessionFlaggedError as exc:
         _logger.error(
             "[trace=%s] worker=%s, task_id=%s SessionFlaggedError: %s",

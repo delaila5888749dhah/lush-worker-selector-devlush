@@ -622,11 +622,15 @@ def select_profile_for_geo(
 
     Per-worker selection algorithm:
       1. Search from ``state.index`` forward (with wrap-around) for a profile
-         whose ``zip_code`` matches the requested *zip_code*.
-      2. If found: return it **without** advancing ``state.index`` (blueprint
-         rule — the pointer is reserved for the sequential fallback).
-      3. If not found: return ``state.profiles[state.index]``, then advance
-         ``state.index = (state.index + 1) % len(state.profiles)``.
+         whose ``zip_code`` matches the requested *zip_code*; if no ZIP match
+         exists, scan city, then state.
+      2. If found at index ``i``: advance
+         ``state.index = (i + 1) % len(state.profiles)``.
+      3. If no geo match exists: return ``state.profiles[state.index]``, then
+         advance ``state.index = (state.index + 1) % len(state.profiles)``.
+
+    Pointer advances after every match level (zip/city/state/fallback) to
+    preserve eligible-set no-repeat rotation across cycles.
 
     Args:
         zip_code: Optional zip/postal code for affinity matching.
@@ -651,7 +655,7 @@ def select_profile_for_geo(
     """
     if worker_id is not None:
         profile, method, match_level, reason = _select_profile_per_worker(
-            zip_code, worker_id, city=city, state=state,
+            zip_code, worker_id, city=city, state_filter=state,
         )
     else:
         profile, method, match_level, reason = _select_profile_legacy(zip_code)
@@ -725,7 +729,7 @@ def _select_profile_per_worker(
     worker_id: str,
     *,
     city: str | None = None,
-    state: str | None = None,
+    state_filter: str | None = None,
 ) -> Tuple[BillingProfile, str, str, str]:
     """Per-worker profile selection with independent shuffled list + index pointer.
 
@@ -737,11 +741,11 @@ def _select_profile_per_worker(
     """
     normalized_zip = _normalize_zip(zip_code)
     normalized_city = _normalize_text(city)
-    normalized_state = _normalize_billing_state(state)
-    state = get_worker_state(worker_id)
+    normalized_state = _normalize_billing_state(state_filter)
+    worker_state = get_worker_state(worker_id)
 
     with _WORKER_STATES_LOCK:
-        profiles = state.profiles
+        profiles = worker_state.profiles
         if not profiles:
             pool_dir = _pool_dir()
             raise CycleExhaustedError(
@@ -758,13 +762,13 @@ def _select_profile_per_worker(
         # Search from state.index forward for a profile matching zip_code.
         if normalized_zip:
             for offset in range(n):
-                i = (state.index + offset) % n
+                i = (worker_state.index + offset) % n
                 if _normalize_zip(profiles[i].zip_code) == normalized_zip:
                     profile = profiles[i]
                     if profile.phone is None or profile.email is None:
                         profile = _fill_missing(profile)
                         profiles[i] = profile
-                    state.index = (i + 1) % n
+                    worker_state.index = (i + 1) % n
                     return (
                         profile,
                         SELECTION_METHOD_ZIP_MATCH,
@@ -774,13 +778,13 @@ def _select_profile_per_worker(
 
         if normalized_city:
             for offset in range(n):
-                i = (state.index + offset) % n
+                i = (worker_state.index + offset) % n
                 if _normalize_text(profiles[i].city) == normalized_city:
                     profile = profiles[i]
                     if profile.phone is None or profile.email is None:
                         profile = _fill_missing(profile)
                         profiles[i] = profile
-                    state.index = (i + 1) % n
+                    worker_state.index = (i + 1) % n
                     return (
                         profile,
                         SELECTION_METHOD_CITY_MATCH,
@@ -790,13 +794,13 @@ def _select_profile_per_worker(
 
         if normalized_state:
             for offset in range(n):
-                i = (state.index + offset) % n
+                i = (worker_state.index + offset) % n
                 if _normalize_billing_state(profiles[i].state) == normalized_state:
                     profile = profiles[i]
                     if profile.phone is None or profile.email is None:
                         profile = _fill_missing(profile)
                         profiles[i] = profile
-                    state.index = (i + 1) % n
+                    worker_state.index = (i + 1) % n
                     return (
                         profile,
                         SELECTION_METHOD_STATE_MATCH,
@@ -805,11 +809,11 @@ def _select_profile_per_worker(
                     )
 
         # No zip match (or no zip requested): use sequential pointer, advance it.
-        profile = profiles[state.index]
+        profile = profiles[worker_state.index]
         if profile.phone is None or profile.email is None:
             profile = _fill_missing(profile)
-            profiles[state.index] = profile
-        state.index = (state.index + 1) % n
+            profiles[worker_state.index] = profile
+        worker_state.index = (worker_state.index + 1) % n
         return (
             profile,
             SELECTION_METHOD_ROUND_ROBIN,

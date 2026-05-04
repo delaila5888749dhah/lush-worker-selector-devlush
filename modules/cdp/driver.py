@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from typing import NoReturn
+from typing import NoReturn, cast
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -1216,7 +1216,7 @@ def _get_proxy_ip(proxy_str: str | None = None) -> str | None:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
         for family, _socktype, _proto, _canonname, sockaddr in infos:
             if family in (socket.AF_INET, socket.AF_INET6) and sockaddr:
-                return sockaddr[0]
+                return cast(str, sockaddr[0])
         return None
     except Exception as exc:  # pylint: disable=broad-except
         safe_host = None
