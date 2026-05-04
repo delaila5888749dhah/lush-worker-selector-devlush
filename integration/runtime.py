@@ -800,6 +800,10 @@ def is_dom_only_watchdog_allowed() -> bool:
 def _is_attach_mode(driver_obj: object, hint: bool | None = None) -> bool:
     """Best-effort attach-mode detection.
 
+    ``driver_obj`` is a Selenium-compatible driver; this helper only inspects
+    its optional ``capabilities`` mapping. ``hint`` is for callers that already
+    know whether the driver was created through an attach flow.
+
     Prefer the explicit caller hint, then driver capabilities
     (``goog:chromeOptions.debuggerAddress``), then the BitBrowser pool env.
     """
@@ -818,6 +822,11 @@ def probe_cdp_listener_support(
     attach_mode_hint: bool | None = None,
 ) -> bool:
     """Assert *driver_obj* exposes a callable ``add_cdp_listener`` method.
+
+    ``driver_obj`` is expected to be a Selenium-compatible driver object.
+    ``attach_mode_hint`` may be supplied by callers that know whether the
+    driver is attached to an externally managed browser; otherwise the probe
+    detects attach mode from driver capabilities and BitBrowser pool env.
 
     Returns ``True`` when the hook is callable. Returns ``False`` and logs a
     WARNING when the hook is missing **and** ``ALLOW_DOM_ONLY_WATCHDOG`` is

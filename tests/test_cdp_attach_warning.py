@@ -14,7 +14,7 @@ class _DriverMissingListener:
 class _DriverWithListener:
     """Driver with callable add_cdp_listener."""
 
-    def add_cdp_listener(self, event, callback):  # pragma: no cover
+    def add_cdp_listener(self, _event, _callback):  # pragma: no cover
         """Mock listener registration; no-op."""
 
 
