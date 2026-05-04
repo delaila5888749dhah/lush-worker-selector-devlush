@@ -1129,12 +1129,82 @@ def _emit_billing_audit_event(
         )
 
 
+def _emit_proxy_geo_resolution_audit_event(
+    *,
+    worker_id: str,
+    proxy_source: str,
+    detected_ip_hash: str | None,
+    proxy_zip: str | int | None,
+    proxy_city: str | None,
+    proxy_state: str | None,
+    billing_pool_size: int,
+    match_level: str | None,
+    reason: str | None,
+) -> None:
+    """Emit PII-safe proxy geo/billing match observability; never interferes."""
+    try:
+        safe_match_level = match_level if isinstance(match_level, str) else "fallback"
+        safe_reason = reason if isinstance(reason, str) else "no_geo_match_in_pool"
+        event = {
+            "event_type": "proxy_geo_resolution",
+            "worker_id": worker_id,
+            "trace_id": _get_trace_id(),
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "proxy_source": (
+                proxy_source
+                if proxy_source in {"BITBROWSER_PROFILE", "BITBROWSER_PROFILE_HOSTNAME_DNS", "UNKNOWN"}
+                else "UNKNOWN"
+            ),
+            "detected_ip_hash": detected_ip_hash if isinstance(detected_ip_hash, str) else None,
+            "maxmind_zip_present": bool(proxy_zip),
+            "maxmind_city_present": bool(proxy_city),
+            "maxmind_state_present": bool(proxy_state),
+            "billing_pool_size": int(billing_pool_size),
+            "match_level": safe_match_level,
+            "reason": safe_reason,
+        }
+        _AUDIT_LOGGER.info(
+            "proxy_geo_resolution %s", json.dumps(event, ensure_ascii=False)
+        )
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.warning(
+            "[trace=%s] Failed to emit proxy geo audit event for worker=%s: %s",
+            _get_trace_id(),
+            worker_id,
+            exc,
+        )
+
+
+def _coerce_proxy_geo_reason(
+    geo_reason: str | None,
+    selection_reason: str | None,
+) -> str:
+    if selection_reason == "no_geo_match_in_pool" and geo_reason in (None, "ok"):
+        return "no_geo_match_in_pool"
+    if geo_reason in {
+        "ok",
+        "profile_no_proxy",
+        "bitbrowser_api_error",
+        "profile_proxy_unreachable",
+        "maxmind_zip_missing",
+        "maxmind_geo_incomplete",
+        "no_geo_match_in_pool",
+    }:
+        return geo_reason
+    return selection_reason if selection_reason in {"ok", "no_geo_match_in_pool"} else "ok"
+
+
 def _select_profile_with_audit(
     zip_code: str | int | None,
     worker_id: str,
     task_id: str | None,
     *,
     include_worker_id: bool,
+    city: str | None = None,
+    state: str | None = None,
+    proxy_geo_reason: str | None = None,
+    proxy_source: str = "UNKNOWN",
+    detected_ip_hash: str | None = None,
 ):
     """Select a billing profile and emit the audit event exactly once.
 
@@ -1161,9 +1231,19 @@ def _select_profile_with_audit(
             "continuing without pre-clear (expected for some test mocks)."
         )
     if include_worker_id:
-        profile = billing.select_profile(zip_code, worker_id=worker_id)
+        kwargs = {"worker_id": worker_id}
+        if city is not None:
+            kwargs["city"] = city
+        if state is not None:
+            kwargs["state"] = state
+        profile = billing.select_profile(zip_code, **kwargs)
     else:
-        profile = billing.select_profile(zip_code)
+        kwargs = {}
+        if city is not None:
+            kwargs["city"] = city
+        if state is not None:
+            kwargs["state"] = state
+        profile = billing.select_profile(zip_code, **kwargs)
     # Read the *actual* outcome via billing's thread-local side channel.
     # In production select_profile() sets this on every successful return.
     # When ``billing`` is wholesale-mocked in tests the accessor may be
@@ -1176,6 +1256,32 @@ def _select_profile_with_audit(
     except AttributeError:
         raw_method = None
     selection_method = raw_method if isinstance(raw_method, str) else None
+    try:
+        raw_match_level = billing.get_last_match_level()
+    except AttributeError:
+        raw_match_level = None
+    match_level = raw_match_level if isinstance(raw_match_level, str) else None
+    try:
+        raw_reason = billing.get_last_selection_reason()
+    except AttributeError:
+        raw_reason = None
+    selection_reason = raw_reason if isinstance(raw_reason, str) else None
+    try:
+        billing_pool_size = billing.get_pool_size(worker_id if include_worker_id else None)
+    except Exception:  # pylint: disable=broad-except
+        billing_pool_size = 0
+    if include_worker_id:
+        _emit_proxy_geo_resolution_audit_event(
+            worker_id=worker_id,
+            proxy_source=proxy_source,
+            detected_ip_hash=detected_ip_hash,
+            proxy_zip=zip_code,
+            proxy_city=city,
+            proxy_state=state,
+            billing_pool_size=billing_pool_size,
+            match_level=match_level,
+            reason=_coerce_proxy_geo_reason(proxy_geo_reason, selection_reason),
+        )
     _emit_billing_audit_event(
         profile=profile,
         worker_id=worker_id,
@@ -2170,7 +2276,18 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     return "retry"
 
 
-def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_check=None):
+def run_cycle(
+    task,
+    zip_code=None,
+    worker_id: str = "default",
+    ctx=None,
+    abort_check=None,
+    proxy_city=None,
+    proxy_state=None,
+    proxy_geo_reason=None,
+    proxy_source="UNKNOWN",
+    detected_ip_hash=None,
+):
     """Run a full payment cycle for a WorkerTask.
 
     Initializes the FSM, executes one payment attempt, and returns the
@@ -2241,6 +2358,11 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             worker_id=worker_id,
             task_id=task_id,
             include_worker_id=True,
+            city=proxy_city,
+            state=proxy_state,
+            proxy_geo_reason=proxy_geo_reason,
+            proxy_source=proxy_source,
+            detected_ip_hash=detected_ip_hash,
         )
 
     try:

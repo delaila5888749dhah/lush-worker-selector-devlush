@@ -213,16 +213,16 @@ class TestGetProxyIp(unittest.TestCase):
         self.assertEqual(result, "192.168.1.1")
 
     def test_resolves_hostname_via_local_dns(self):
-        """Hostnames are resolved via socket.gethostbyname (no external HTTP)."""
-        with patch("modules.cdp.driver.socket.gethostbyname",
-                   return_value="10.0.0.1") as mock_dns:
+        """Hostnames are resolved via socket.getaddrinfo (no external HTTP)."""
+        with patch("modules.cdp.driver.socket.getaddrinfo",
+                   return_value=[(2, 1, 6, "", ("10.0.0.1", 0))]) as mock_dns:
             result = drv._get_proxy_ip("http://proxy.internal:8080")  # pylint: disable=protected-access
-        mock_dns.assert_called_once_with("proxy.internal")
+        mock_dns.assert_called_once_with("proxy.internal", None, type=drv.socket.SOCK_STREAM)
         self.assertEqual(result, "10.0.0.1")
 
     def test_returns_none_on_dns_failure(self):
         """Returns None gracefully when DNS resolution fails."""
-        with patch("modules.cdp.driver.socket.gethostbyname",
+        with patch("modules.cdp.driver.socket.getaddrinfo",
                    side_effect=OSError("DNS failure")):
             result = drv._get_proxy_ip("http://bad.host:8080")  # pylint: disable=protected-access
         self.assertIsNone(result)
@@ -294,8 +294,8 @@ class TestPerWorkerBillingState(unittest.TestCase):
         self.assertEqual(len(set(seen_first_names)), 3,
                          "Should have returned 3 distinct profiles in one traversal.")
 
-    def test_zip_match_does_not_advance_index(self):
-        """Zip match returns the matching profile without advancing the index pointer."""
+    def test_zip_match_advances_index_after_match(self):
+        """Zip match returns the matching profile and advances after its position."""
         profiles = [
             _make_profile("NoMatch1", "00001"),
             _make_profile("ZipMatch", "10001"),
@@ -310,12 +310,64 @@ class TestPerWorkerBillingState(unittest.TestCase):
             state = WorkerBillingState(profiles=list(profiles), index=0)
             billing._WORKER_STATES["zip-test-worker"] = state  # pylint: disable=protected-access
 
-        index_before = state.index
         result = billing.select_profile("10001", worker_id="zip-test-worker")
         self.assertEqual(result.first_name, "ZipMatch",
-                         "Should return the zip-matching profile.")
-        self.assertEqual(state.index, index_before,
-                         "Index must NOT advance on zip match (blueprint rule).")
+                          "Should return the zip-matching profile.")
+        self.assertEqual(state.index, 2,
+                         "Index must advance to the position after the match.")
+        self.assertEqual(billing.get_last_match_level(), "exact_zip_match")
+        self.assertEqual(billing.get_last_selection_reason(), "ok")
+
+    def test_zip_match_rotation_exhausts_eligible_set_before_reuse(self):
+        profiles = [
+            _make_profile("Z1", "10001"),
+            _make_profile("Other", "99999"),
+            _make_profile("Z2", "10001"),
+        ]
+        _set_master_pool(profiles)
+        billing._reset_state()  # pylint: disable=protected-access
+        _set_master_pool(profiles)
+
+        with billing._WORKER_STATES_LOCK:  # pylint: disable=protected-access
+            state = WorkerBillingState(profiles=list(profiles), index=0)
+            billing._WORKER_STATES["zip-rotate-worker"] = state  # pylint: disable=protected-access
+
+        first = billing.select_profile("10001", worker_id="zip-rotate-worker")
+        second = billing.select_profile("10001", worker_id="zip-rotate-worker")
+        third = billing.select_profile("10001", worker_id="zip-rotate-worker")
+        self.assertEqual([first.first_name, second.first_name, third.first_name], ["Z1", "Z2", "Z1"])
+
+    def test_city_then_state_then_fallback_priority(self):
+        profiles = [
+            BillingProfile("NYC", "L", "1 St", "New York", "NY", "10001", "1", "a@b.com"),
+            BillingProfile("Buffalo", "L", "2 St", "Buffalo", "NY", "14202", "1", "b@b.com"),
+            BillingProfile("CA", "L", "3 St", "Beverly Hills", "CA", "90210", "1", "c@b.com"),
+        ]
+        _set_master_pool(profiles)
+        billing._reset_state()  # pylint: disable=protected-access
+        _set_master_pool(profiles)
+
+        with billing._WORKER_STATES_LOCK:  # pylint: disable=protected-access
+            billing._WORKER_STATES["geo-worker"] = WorkerBillingState(  # pylint: disable=protected-access
+                profiles=list(profiles), index=0,
+            )
+
+        exact = billing.select_profile("10001", worker_id="geo-worker", city="New York", state="NY")
+        self.assertEqual(exact.zip_code, "10001")
+        self.assertEqual(billing.get_last_match_level(), "exact_zip_match")
+
+        city = billing.select_profile("10002", worker_id="geo-worker", city="New York", state="NY")
+        self.assertEqual(city.first_name, "NYC")
+        self.assertEqual(billing.get_last_match_level(), "city_match")
+
+        state_match = billing.select_profile("12345", worker_id="geo-worker", city="Albany", state="New York")
+        self.assertEqual(state_match.state, "NY")
+        self.assertEqual(billing.get_last_match_level(), "state_match")
+
+        fallback = billing.select_profile("59101", worker_id="geo-worker", city="Billings", state="MT")
+        self.assertEqual(fallback.first_name, "CA")
+        self.assertEqual(billing.get_last_match_level(), "fallback")
+        self.assertEqual(billing.get_last_selection_reason(), "no_geo_match_in_pool")
 
     def test_no_zip_match_advances_index(self):
         """No zip match uses profile at index and advances the pointer by 1."""
