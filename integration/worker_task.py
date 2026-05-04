@@ -20,19 +20,23 @@ Feature flag: ``ENABLE_PRODUCTION_TASK_FN`` (default OFF) — the gate is
 enforced by the caller (``app/__main__.py``).  This module does **not** read
 the flag itself so that tests can import and exercise it freely.
 """
+import dataclasses
+import datetime
+import hashlib
+import ipaddress
 import importlib
+import json
 import logging
+import os
+import socket
 import threading
+import urllib.parse
 import uuid
 import zlib
 from typing import Any, Callable, Optional
 
 from modules.cdp import main as cdp
-from modules.cdp.driver import (
-    _get_current_ip_best_effort,
-    _lookup_maxmind_utc_offset,
-    maxmind_lookup_zip,
-)
+from modules.cdp import driver as cdp_driver
 from modules.cdp.fingerprint import (
     BitBrowserLaunchEndpoint,
     BitBrowserSession,
@@ -43,10 +47,194 @@ from modules.delay.persona import PersonaProfile
 from modules.delay.temporal import set_utc_offset
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
+_GEO_AUDIT_LOGGER = logging.getLogger("integration.orchestrator.audit")
+_get_current_ip_best_effort = cdp_driver._get_current_ip_best_effort
+_lookup_maxmind_utc_offset = cdp_driver._lookup_maxmind_utc_offset
+maxmind_lookup_zip = cdp_driver.maxmind_lookup_zip
 
 # P1-5: Task-level abort registry.
 _abort_lock: threading.Lock = threading.Lock()
 _abort_flags: "dict[str, threading.Event]" = {}
+
+
+class GeoResolutionReason:
+    OK = "ok"
+    PROXY_NOT_CONFIGURED = "proxy_not_configured"
+    DNS_FAILED = "dns_failed"
+    IP_FETCH_FAILED = "ip_fetch_failed"
+    MAXMIND_ZIP_MISSING = "maxmind_zip_missing"
+    MAXMIND_DB_NOT_LOADED = "maxmind_db_not_loaded"
+    MAXMIND_LOOKUP_ERROR = "maxmind_lookup_error"
+
+
+@dataclasses.dataclass(frozen=True)
+class GeoResolution:
+    ip_hash: str | None
+    proxy_host: str | None
+    proxy_source: str
+    maxmind_zip: str | None
+    utc_offset: float | None
+    reason: str
+
+
+def _hash_ip(ip_addr: str | None) -> str | None:
+    if not ip_addr:
+        return None
+    return hashlib.sha256(ip_addr.encode("utf-8")).hexdigest()[:12]
+
+
+def _safe_proxy_host(host: str | None) -> str | None:
+    if not host:
+        return None
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        return host
+
+
+def _parse_proxy_host(raw_proxy: str) -> str | None:
+    raw = raw_proxy.strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        return urllib.parse.urlparse(raw).hostname
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def _resolve_proxy_host_ip(host: str | None) -> str | None:
+    if not host:
+        return None
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return None
+
+
+def _open_maxmind_reader():
+    reader = getattr(cdp_driver, "_MAXMIND_READER", None)
+    if reader is not None:
+        return reader, None
+    try:
+        mmdb_path = cdp_driver._resolve_mmdb_path()  # pylint: disable=protected-access
+    except Exception:  # pylint: disable=broad-except
+        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
+    if not os.path.exists(mmdb_path):
+        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
+    try:
+        geoip2_database = importlib.import_module("geoip2.database")
+    except ImportError:
+        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
+    try:
+        return geoip2_database.Reader(mmdb_path), None
+    except Exception:  # pylint: disable=broad-except
+        return None, GeoResolutionReason.MAXMIND_DB_NOT_LOADED
+
+
+def _utc_offset_from_record(record) -> float | None:
+    zone_info = getattr(cdp_driver, "_ZoneInfo", None)
+    if zone_info is None:
+        return None
+    tz_name = getattr(getattr(record, "location", None), "time_zone", None)
+    if not tz_name:
+        return None
+    try:
+        tz_info = zone_info(tz_name)
+        offset = datetime.datetime.now(tz_info).utcoffset()
+        if offset is None:
+            return None
+        return offset.total_seconds() / 3600.0
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def _maxmind_geo_for_ip(ip_addr: str) -> tuple[str | None, float | None, str | None]:
+    reader, reason = _open_maxmind_reader()
+    if reader is None:
+        return None, None, reason
+    close_reader = getattr(cdp_driver, "_MAXMIND_READER", None) is None
+    try:
+        record = reader.city(ip_addr)
+        postal_code = getattr(getattr(record, "postal", None), "code", None)
+        utc_offset = _utc_offset_from_record(record)
+        if postal_code:
+            return postal_code, utc_offset, GeoResolutionReason.OK
+        return None, utc_offset, GeoResolutionReason.MAXMIND_ZIP_MISSING
+    except Exception:  # pylint: disable=broad-except
+        return None, None, GeoResolutionReason.MAXMIND_LOOKUP_ERROR
+    finally:
+        if close_reader:
+            try:
+                reader.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+
+def resolve_proxy_geo(worker_id: str) -> GeoResolution:
+    """Resolve proxy geo with explicit reason for any miss."""
+    del worker_id  # Reserved for future worker-scoped proxy sources.
+    raw_proxy = os.environ.get("PROXY_SERVER", "").strip()
+    if not raw_proxy:
+        return GeoResolution(
+            ip_hash=None,
+            proxy_host=None,
+            proxy_source="NONE",
+            maxmind_zip=None,
+            utc_offset=None,
+            reason=GeoResolutionReason.PROXY_NOT_CONFIGURED,
+        )
+
+    proxy_host = _parse_proxy_host(raw_proxy)
+    if not proxy_host:
+        return GeoResolution(
+            ip_hash=None,
+            proxy_host=None,
+            proxy_source="PROXY_SERVER",
+            maxmind_zip=None,
+            utc_offset=None,
+            reason=GeoResolutionReason.IP_FETCH_FAILED,
+        )
+
+    detected_ip = _resolve_proxy_host_ip(proxy_host)
+    if detected_ip is None:
+        return GeoResolution(
+            ip_hash=None,
+            proxy_host=proxy_host,
+            proxy_source="PROXY_SERVER",
+            maxmind_zip=None,
+            utc_offset=None,
+            reason=GeoResolutionReason.DNS_FAILED,
+        )
+
+    zip_code, utc_offset, reason = _maxmind_geo_for_ip(detected_ip)
+    return GeoResolution(
+        ip_hash=_hash_ip(detected_ip),
+        proxy_host=proxy_host,
+        proxy_source="PROXY_SERVER",
+        maxmind_zip=zip_code,
+        utc_offset=utc_offset,
+        reason=reason or GeoResolutionReason.OK,
+    )
+
+
+def _emit_geo_resolution_event(resolution: GeoResolution, worker_id: str) -> None:
+    event = {
+        "event": "proxy_geo_resolution",
+        "worker_id": worker_id,
+        "proxy_source": resolution.proxy_source,
+        "proxy_host": _safe_proxy_host(resolution.proxy_host),
+        "detected_ip_hash": resolution.ip_hash,
+        "maxmind_zip_present": resolution.maxmind_zip is not None,
+        "utc_offset_present": resolution.utc_offset is not None,
+        "reason": resolution.reason,
+    }
+    _GEO_AUDIT_LOGGER.info(
+        "proxy_geo_resolution %s",
+        json.dumps(event, ensure_ascii=False, sort_keys=True),
+    )
 
 
 def abort_task(worker_id: str) -> None:
@@ -152,22 +340,17 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 givex_driver.preflight_geo_check()
 
                 # Resolve proxy IP → zip code via MaxMind (F-07).
-                # The proxy IP is extracted from the PROXY_SERVER env var or
-                # the driver's proxy attribute — no external HTTP calls.
-                zip_code: Optional[str] = None
+                # The proxy IP is extracted from PROXY_SERVER with local DNS
+                # only; raw IP and proxy credentials are never logged.
+                resolution = resolve_proxy_geo(worker_id)
+                _emit_geo_resolution_event(resolution, worker_id)
+                zip_code: Optional[str] = resolution.maxmind_zip
                 # Phase 5B Task 1: also resolve UTC offset for Temporal Layer.
-                utc_offset: float = 0.0
-                try:
-                    detected_ip = _get_current_ip_best_effort()
-                    if detected_ip:
-                        zip_code = maxmind_lookup_zip(detected_ip)
-                        offset_hours = _lookup_maxmind_utc_offset(detected_ip)
-                        if offset_hours is not None:
-                            utc_offset = float(offset_hours)
-                except Exception as exc:  # pylint: disable=broad-except
-                    _log.debug(
-                        "worker=%s zip derivation error: %s", worker_id, exc
-                    )
+                utc_offset: float = (
+                    float(resolution.utc_offset)
+                    if resolution.utc_offset is not None
+                    else 0.0
+                )
 
                 # Propagate UTC offset to TemporalModel via ContextVar so all
                 # delay computations on this worker thread see the proxy-derived
@@ -176,17 +359,18 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
 
                 if zip_code:
                     _log.info(
-                        "worker=%s zip_selection=zip_match zip=%s utc_offset=%+.1fh",
+                        "worker=%s zip_selection=zip_match "
+                        "maxmind_zip_present=True utc_offset_present=%s",
                         worker_id,
-                        zip_code,
-                        utc_offset,
+                        resolution.utc_offset is not None,
                     )
                 else:
                     _log.info(
                         "worker=%s zip_selection=round_robin "
-                        "(MaxMind zip unavailable) utc_offset=%+.1fh",
+                        "(MaxMind zip unavailable) "
+                        "maxmind_zip_present=False utc_offset_present=%s",
                         worker_id,
-                        utc_offset,
+                        resolution.utc_offset is not None,
                     )
 
                 # Run purchase cycle when a task source is wired (F-02/F-07).
