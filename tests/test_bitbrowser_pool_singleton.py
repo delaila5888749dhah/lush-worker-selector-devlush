@@ -55,7 +55,7 @@ class TestBitBrowserPoolSingleton(unittest.TestCase):
 
         self.assertIs(first, second)
 
-    def test_concurrent_threads_acquire_different_profiles_from_shared_pool(self):
+    def test_concurrent_threads_share_client_and_acquire_different_profiles(self):
         with patch.dict(
             os.environ,
             self._pool_env(endpoint="http://127.0.0.1:54348", ids="p1,p2"),
