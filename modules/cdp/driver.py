@@ -455,7 +455,7 @@ def _safe_int(value, default: int = -1) -> int:
     if not isinstance(value, (int, float, str)):
         return default
     try:
-        # Non-numeric strings intentionally fall back through ValueError.
+        # Floats intentionally use int() truncation; non-numeric strings fall back.
         return int(value)
     except (OverflowError, ValueError):
         return default

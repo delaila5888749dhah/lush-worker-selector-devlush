@@ -131,7 +131,7 @@ class TestTypingTelemetry(unittest.TestCase):
         }
         kwargs_seen = []
 
-        def flip_delay_permitted(*_args, **_kwargs):
+        def disable_delay_permission(*_args, **_kwargs):
             givex._engine.is_delay_permitted.return_value = False
 
         def capture_type_value(_driver, _element, _value, _rng, **kwargs):
@@ -142,7 +142,7 @@ class TestTypingTelemetry(unittest.TestCase):
         with patch.object(givex, "_human_scroll_to"), \
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
-             patch.object(givex, "_engine_aware_sleep", side_effect=flip_delay_permitted), \
+             patch.object(givex, "_engine_aware_sleep", side_effect=disable_delay_permission), \
              patch.object(givex, "_field_value_length", return_value=5), \
              patch("modules.cdp.driver._type_value", side_effect=capture_type_value), \
              patch("time.monotonic_ns", side_effect=[5_000_000_000, 5_001_000_000]), \
