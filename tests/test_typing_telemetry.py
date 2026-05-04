@@ -138,6 +138,7 @@ class TestTypingTelemetry(unittest.TestCase):
             kwargs_seen.append(kwargs)
             return typed
 
+        self.assertTrue(givex._engine.is_delay_permitted())
         with patch.object(givex, "_human_scroll_to"), \
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
