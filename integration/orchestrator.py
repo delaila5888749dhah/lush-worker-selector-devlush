@@ -21,10 +21,11 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.common.exceptions import CDPError, InvalidTransitionError, PageStateError, SessionFlaggedError
+from modules.common.exceptions import CDPError, InvalidTransitionError, PageStateError, SessionFlaggedError, SessionLostError
 from modules.common.types import State
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error
 from modules.common.sanitize import sanitize_redis_url as _sanitize_redis_url
+from modules.cdp.session_health import classify_session_loss, session_alive
 # Optional autoscaler integration — module is available once PR-P (SCALE-001) is merged.
 # Import fails gracefully so orchestrator works before that PR lands.
 try:
@@ -1985,6 +1986,28 @@ def _record_fork_safe(branch: str) -> None:
         _logger.debug("monitor.record_fork(%s) failed", branch, exc_info=True)
 
 
+def _mark_unconfirmed_after_session_loss(task_id, worker_id: str) -> None:
+    if task_id is None:
+        return
+    try:
+        _get_idempotency_store().mark_unconfirmed(
+            task_id, ttl_seconds=_UNCONFIRMED_TTL_SECONDS,
+        )
+    except Exception:  # noqa: BLE001  # pylint: disable=broad-except
+        _logger.error(
+            "Failed to mark task_id=%s as unconfirmed after session loss for worker=%s",
+            task_id, worker_id, exc_info=True,
+        )
+
+
+def _raise_session_lost_from_vbv_cdp_fail(driver, worker_id: str) -> None:
+    last_err = getattr(driver, "_last_cdp_error", None) or "unknown"
+    loss_reason = classify_session_loss(last_err)
+    if loss_reason:
+        _logger.error("SESSION_LOST reason=%s worker=%s", loss_reason, worker_id)
+        raise SessionLostError(loss_reason)
+
+
 def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
     """Determine the next action based on the current FSM state.
 
@@ -2055,7 +2078,7 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         )
         _record_fork_safe("ui_lock")
         return "retry"
-    if state.name == "vbv_3ds":
+    if getattr(state, "name", None) == "vbv_3ds":
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
             _get_trace_id(), state.name, worker_id, _swap,
@@ -2063,6 +2086,10 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         _record_fork_safe("vbv_3ds")
         try:
             driver = cdp._get_driver(worker_id)  # pylint: disable=protected-access
+            if not session_alive(driver):
+                reason = "session_probe_failed_pre_vbv"
+                _logger.error("SESSION_LOST reason=%s worker=%s", reason, worker_id)
+                raise SessionLostError(reason)
             result = driver.handle_vbv_challenge()
             if result in ("cancelled", "iframe_missing"):
                 post_state = driver.detect_page_state()
@@ -2081,8 +2108,11 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
                     worker_id=worker_id, ctx=ctx,
                 )
             elif result == "cdp_fail":
+                _raise_session_lost_from_vbv_cdp_fail(driver, worker_id)
                 # retry once on CDP/WebDriver failure
                 result = driver.handle_vbv_challenge()
+                if result == "cdp_fail":
+                    _raise_session_lost_from_vbv_cdp_fail(driver, worker_id)
                 if result in ("cancelled", "iframe_missing"):
                     post_state = driver.detect_page_state()
                     if post_state == "vbv_3ds":
@@ -2094,6 +2124,8 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
                         State(next_state), order_queue,
                         worker_id=worker_id, ctx=ctx,
                     )
+        except SessionLostError:
+            raise
         except Exception as exc:
             _logger.warning(
                 "[trace=%s] VBV challenge handling failed for worker=%s: %s",
@@ -2188,7 +2220,12 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
             state, total = run_payment_step(
                 task, zip_code, worker_id=worker_id, _profile=ctx.billing_profile,
             )
-            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            try:
+                action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            except SessionLostError:
+                _mark_unconfirmed_after_session_loss(task_id, worker_id)
+                watchdog.reset_session(worker_id)
+                raise
             if action == "complete":
                 success = True
                 _record_autoscaler_success(worker_id)
@@ -2307,7 +2344,12 @@ def run_cycle(task, zip_code=None, worker_id: str = "default", ctx=None, abort_c
                         _get_trace_id(), worker_id, _MAX_UI_LOCK_RETRIES,
                     )
 
-            action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            try:
+                action = handle_outcome(state, task.order_queue, worker_id=worker_id, ctx=ctx)
+            except SessionLostError:
+                _mark_unconfirmed_after_session_loss(task_id, worker_id)
+                watchdog.reset_session(worker_id)
+                raise
 
             _action_key = action[0] if isinstance(action, tuple) else action
 
