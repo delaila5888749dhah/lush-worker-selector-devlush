@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import warnings
-from typing import NoReturn, cast
+from typing import Any, NoReturn, cast
 
 try:
     from selenium.webdriver.common.action_chains import ActionChains as _ActionChains  # type: ignore[import]
@@ -78,8 +78,8 @@ try:
     from modules.delay.engine import DelayEngine as _DelayEngine  # type: ignore
     from modules.delay.config import MAX_STEP_DELAY as _MAX_STEP_DELAY  # type: ignore
 except ImportError:
-    _BiometricProfile = _TemporalModel = None
-    _BehaviorStateMachine = _DelayEngine = None
+    _BiometricProfile = _TemporalModel = None  # type: ignore[assignment,misc]
+    _BehaviorStateMachine = _DelayEngine = None  # type: ignore[assignment,misc]
     _MAX_STEP_DELAY = 7.0
     _get_current_sm = None  # type: ignore[assignment]
 
@@ -1968,7 +1968,7 @@ class GivexDriver:
             silently falling back.
     """
 
-    def __init__(self, driver: object, persona=None, *, strict: bool = True) -> None:
+    def __init__(self, driver: Any, persona=None, *, strict: bool = True) -> None:
         """Initialize a Givex driver wrapper.
 
         Args:
