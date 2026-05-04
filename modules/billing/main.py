@@ -654,8 +654,9 @@ def select_profile_for_geo(
         zip was requested but no profile in the pool matched it.
     """
     if worker_id is not None:
+        state_filter = state
         profile, method, match_level, reason = _select_profile_per_worker(
-            zip_code, worker_id, city=city, state_filter=state,
+            zip_code, worker_id, city=city, state_filter=state_filter,
         )
     else:
         profile, method, match_level, reason = _select_profile_legacy(zip_code)
