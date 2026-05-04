@@ -1647,6 +1647,7 @@ class TestBillingSelectionAuditEvent(unittest.TestCase):
             patch("integration.orchestrator._AUDIT_LOGGER") as mock_audit,
         ):
             mock_billing.select_profile.return_value = profile
+            mock_billing.select_profile_for_geo.return_value = profile
             mock_billing.get_last_selection_method.return_value = "zip_match"
             mock_billing.get_last_match_level.return_value = "exact_zip_match"
             mock_billing.get_last_selection_reason.return_value = "ok"

@@ -342,7 +342,7 @@ def _normalize_text(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", ascii_text).strip()
 
 
-def _normalize_state(value: str | None) -> str:
+def _normalize_billing_state(value: str | None) -> str:
     normalized = _normalize_text(value)
     if not normalized:
         return ""
@@ -599,6 +599,15 @@ def _fill_missing(profile: BillingProfile) -> BillingProfile:
 def select_profile(
     zip_code: str | int | None = None,
     worker_id: Optional[str] = None,
+) -> BillingProfile:
+    """Select a billing profile from the pool."""
+    return select_profile_for_geo(zip_code, worker_id=worker_id)
+
+
+def select_profile_for_geo(
+    zip_code: str | int | None = None,
+    worker_id: Optional[str] = None,
+    *,
     city: str | None = None,
     state: str | None = None,
 ) -> BillingProfile:
@@ -728,7 +737,7 @@ def _select_profile_per_worker(
     """
     normalized_zip = _normalize_zip(zip_code)
     normalized_city = _normalize_text(city)
-    normalized_state = _normalize_state(state)
+    normalized_state = _normalize_billing_state(state)
     state = get_worker_state(worker_id)
 
     with _WORKER_STATES_LOCK:
@@ -782,7 +791,7 @@ def _select_profile_per_worker(
         if normalized_state:
             for offset in range(n):
                 i = (state.index + offset) % n
-                if _normalize_state(profiles[i].state) == normalized_state:
+                if _normalize_billing_state(profiles[i].state) == normalized_state:
                     profile = profiles[i]
                     if profile.phone is None or profile.email is None:
                         profile = _fill_missing(profile)

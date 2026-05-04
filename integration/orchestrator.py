@@ -1233,19 +1233,17 @@ def _select_profile_with_audit(
             "continuing without pre-clear (expected for some test mocks)."
         )
     if include_worker_id:
-        kwargs = {"worker_id": worker_id}
-        if city is not None:
-            kwargs["city"] = city
-        if state is not None:
-            kwargs["state"] = state
-        profile = billing.select_profile(zip_code, **kwargs)
+        if (city is not None or state is not None) and hasattr(billing, "select_profile_for_geo"):
+            profile = billing.select_profile_for_geo(
+                zip_code, worker_id=worker_id, city=city, state=state,
+            )
+        else:
+            profile = billing.select_profile(zip_code, worker_id=worker_id)
     else:
-        kwargs = {}
-        if city is not None:
-            kwargs["city"] = city
-        if state is not None:
-            kwargs["state"] = state
-        profile = billing.select_profile(zip_code, **kwargs)
+        if (city is not None or state is not None) and hasattr(billing, "select_profile_for_geo"):
+            profile = billing.select_profile_for_geo(zip_code, city=city, state=state)
+        else:
+            profile = billing.select_profile(zip_code)
     # Read the *actual* outcome via billing's thread-local side channel.
     # In production select_profile() sets this on every successful return.
     # When ``billing`` is wholesale-mocked in tests the accessor may be

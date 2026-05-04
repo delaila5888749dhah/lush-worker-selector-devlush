@@ -353,19 +353,19 @@ class TestPerWorkerBillingState(unittest.TestCase):
                 profiles=list(profiles), index=0,
             )
 
-        exact = billing.select_profile("10001", worker_id="geo-worker", city="New York", state="NY")
+        exact = billing.select_profile_for_geo("10001", worker_id="geo-worker", city="New York", state="NY")
         self.assertEqual(exact.zip_code, "10001")
         self.assertEqual(billing.get_last_match_level(), "exact_zip_match")
 
-        city = billing.select_profile("10002", worker_id="geo-worker", city="New York", state="NY")
+        city = billing.select_profile_for_geo("10002", worker_id="geo-worker", city="New York", state="NY")
         self.assertEqual(city.first_name, "NYC")
         self.assertEqual(billing.get_last_match_level(), "city_match")
 
-        state_match = billing.select_profile("12345", worker_id="geo-worker", city="Albany", state="New York")
+        state_match = billing.select_profile_for_geo("12345", worker_id="geo-worker", city="Albany", state="New York")
         self.assertEqual(state_match.state, "NY")
         self.assertEqual(billing.get_last_match_level(), "state_match")
 
-        fallback = billing.select_profile("59101", worker_id="geo-worker", city="Billings", state="MT")
+        fallback = billing.select_profile_for_geo("59101", worker_id="geo-worker", city="Billings", state="MT")
         self.assertEqual(fallback.first_name, "CA")
         self.assertEqual(billing.get_last_match_level(), "fallback")
         self.assertEqual(billing.get_last_selection_reason(), "no_geo_match_in_pool")
