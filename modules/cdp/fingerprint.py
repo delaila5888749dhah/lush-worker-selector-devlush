@@ -15,11 +15,11 @@ from uuid import uuid4
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
+_BITBROWSER_POOL_CLIENTS_LOCK = threading.Lock()
 _BITBROWSER_POOL_CLIENTS: Dict[
     Tuple[str, bool, Tuple[str, ...], str],
     "BitBrowserPoolClient",
 ] = {}
-_BITBROWSER_POOL_CLIENTS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -72,18 +72,18 @@ def _bitbrowser_pool_cache_key(
     profile_ids: List[str],
     pool_mode: str,
 ) -> Tuple[str, bool, Tuple[str, ...], str]:
-    normalised = set()
+    normalized = set()
     for pid in profile_ids:
         if not pid:
             continue
         stripped = pid.strip()
         if stripped:
-            normalised.add(stripped)
-    normalised_ids = tuple(sorted(normalised))
+            normalized.add(stripped)
+    normalized_ids = tuple(sorted(normalized))
     return (
         endpoint.rstrip("/"),
         api_key_present,
-        normalised_ids,
+        normalized_ids,
         pool_mode.strip().lower(),
     )
 
