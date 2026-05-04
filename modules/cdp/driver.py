@@ -450,6 +450,15 @@ def _selector_name(sel: str) -> str:
         or "UNREGISTERED_SELECTOR"
     )
 
+
+def _safe_int(value, default: int = -1) -> int:
+    if not isinstance(value, (int, float, str)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 # ── Payment / Card fields (Step 4) — URL_PAYMENT ────────────────────────────
 SEL_CARD_NAME         = "#cws_txt_ccName"
 SEL_CARD_NUMBER       = "#cws_txt_ccNum"
@@ -2528,9 +2537,6 @@ class GivexDriver:
         if not els: raise SelectorTimeoutError(sel, 0)  # noqa: E701
         selector_name = _selector_name(sel)
         expected_len = len(str(val))
-        delay_permitted = (
-            self._engine is None or self._engine.is_delay_permitted()
-        )
         # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
         # add its selector + symbolic name to the module-level _SELECTOR_NAMES registry
         # defined immediately after SEL_GUEST_EMAIL. Unregistered fields keep legacy
@@ -2545,6 +2551,9 @@ class GivexDriver:
         if _type_value is None:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
+            delay_permitted = (
+                self._engine is None or self._engine.is_delay_permitted()
+            )
             start_ns = time.monotonic_ns()
             self._send_keys_fallback(sel, val)
             res = {}
@@ -2559,10 +2568,10 @@ class GivexDriver:
                 "typed_chars=%d mode=%s engine_delay_permitted=%s",
                 selector_name,
                 expected_len,
-                actual_len,
+                _safe_int(actual_len),
                 duration_ms,
-                res.get("typed_chars", -1),
-                res.get("mode", "unknown"),
+                _safe_int(res.get("typed_chars", -1) if isinstance(res, dict) else -1),
+                str(res.get("mode", "unknown") if isinstance(res, dict) else "unknown"),
                 delay_permitted,
             )
             if verify_value:
@@ -2588,6 +2597,9 @@ class GivexDriver:
         # also zeroes the persona base rate while in critical section, since
         # typo injection is itself a behaviour modulation that must not fire
         # in safe-zone contracts.
+        delay_permitted = (
+            self._engine is None or self._engine.is_delay_permitted()
+        )
         if not delay_permitted:
             typo_prob = 0.0
         elif apply_night_bonus and self._persona and self._temporal:
@@ -2629,10 +2641,10 @@ class GivexDriver:
             "typed_chars=%d mode=%s engine_delay_permitted=%s",
             selector_name,
             expected_len,
-            actual_len,
+            _safe_int(actual_len),
             duration_ms,
-            res.get("typed_chars", -1),
-            res.get("mode", "unknown"),
+            _safe_int(res.get("typed_chars", -1) if isinstance(res, dict) else -1),
+            str(res.get("mode", "unknown") if isinstance(res, dict) else "unknown"),
             delay_permitted,
         )
         if verify_value:
