@@ -610,7 +610,10 @@ class _RedisIdempotencyStore(_IdempotencyStore):
 
     def is_submitted(self, task_id: str) -> bool:
         try:
-            return self._redis.get(self._key(task_id)) == "submitted"
+            value = self._redis.get(self._key(task_id))
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            return value == "submitted"
         except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
             _logger.error(
                 "RedisIdempotencyStore.is_submitted failed for task_id=%s: %s",
