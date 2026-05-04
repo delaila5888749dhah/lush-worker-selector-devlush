@@ -2602,7 +2602,7 @@ class GivexDriver:
         # per-keystroke sleeps via ``engine.is_delay_permitted``; this
         # extra guard ensures the biometric RNG advance is also avoided
         # so the production path matches the safe-zone contract.
-        if self._engine is not None and not delay_permitted:
+        if not delay_permitted:
             dl = None
         elif self._bio and use_burst and len(val) >= 16:
             dl = self._bio.generate_4x4_pattern()
