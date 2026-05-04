@@ -1376,13 +1376,14 @@ class TestBillingCircuitBreaker(RuntimeResetMixin, unittest.TestCase):
             with runtime._lock:
                 throttled = runtime._is_billing_throttled()
             self.assertTrue(throttled, "billing circuit breaker should be active after threshold failures")
-            billing_cb_events = []
-            for event in events:
-                _event_worker_id, _event_state, event_action, _event_data = event
-                if event_action == "billing_cb_triggered":
-                    billing_cb_events.append(event)
+            billing_cb_events = [
+                event
+                for event in events
+                for _event_worker_id, _event_state, event_action, _event_data in (event,)
+                if event_action == "billing_cb_triggered"
+            ]
             self.assertEqual(len(billing_cb_events), 1)
-            event_worker_id, event_state, event_action, event_data = billing_cb_events[0]
+            [(event_worker_id, event_state, event_action, event_data)] = billing_cb_events
             self.assertEqual(event_worker_id, wid2)
             self.assertEqual(event_state, "critical")
             self.assertEqual(event_action, "billing_cb_triggered")
