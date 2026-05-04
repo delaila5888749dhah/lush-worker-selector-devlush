@@ -38,6 +38,7 @@ from modules.cdp.fingerprint import (
     BitBrowserSession,
     get_bitbrowser_client,
 )
+from integration.cycle_outcome import CycleDidNotCompleteError, normalize_action
 from modules.delay.persona import PersonaProfile
 from modules.delay.temporal import set_utc_offset
 
@@ -208,12 +209,14 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                             ctx=ctx,
                             abort_check=lambda: is_task_aborted(worker_id),
                         )
-                        if action == "abort_cycle":
-                            _log.info(
-                                "worker=%s abort_cycle — releasing profile",
-                                worker_id,
-                            )
-                            return  # BitBrowserSession.__exit__ releases profile
+                        normalized = normalize_action(action)
+                        if normalized != "complete":
+                            if normalized == "abort_cycle":
+                                _log.info(
+                                    "worker=%s abort_cycle — releasing profile",
+                                    worker_id,
+                                )
+                            raise CycleDidNotCompleteError(action=normalized)
                 else:
                     _log.debug(
                         "worker=%s profile=%s driver registered; "

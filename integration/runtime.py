@@ -25,6 +25,7 @@ from modules.billing import main as billing
 from modules.cdp import main as cdp
 from modules.cdp.proxy import get_default_pool
 from modules.common.exceptions import CycleExhaustedError
+from integration.cycle_outcome import CycleDidNotCompleteError
 from modules.common.sanitize import sanitize_error as _canonical_sanitize_error  # INV-PII-UNIFIED-01
 from modules.common.thresholds import ERROR_RATE_THRESHOLD, MAX_RESTARTS_PER_HOUR
 _logger = logging.getLogger(__name__)
@@ -272,9 +273,16 @@ def _worker_fn(worker_id, task_fn, persona):
                     if _consecutive_billing_failures >= _BILLING_CB_THRESHOLD:
                         if not _is_billing_throttled():  # Only arm CB if not already active
                             pause_dur = int(_BILLING_CB_PAUSE)
-                            fail_count = _consecutive_billing_failures
                             _billing_throttled_until = time.monotonic() + pause_dur
-                            _log_event(worker_id, "critical", "billing_cb_triggered", {"count": fail_count, "pause_seconds": pause_dur})
+                            _log_event(
+                                worker_id,
+                                "critical",
+                                "billing_cb_triggered",
+                                {
+                                    "threshold_reached": True,
+                                    "pause_seconds": pause_dur,
+                                },
+                            )
                             _logger.error("Billing circuit breaker triggered. Pausing billing for %ds.", pause_dur)
                         # Always reset counter to prevent unbounded growth
                         _consecutive_billing_failures = 0
@@ -285,6 +293,34 @@ def _worker_fn(worker_id, task_fn, persona):
                     err_data["persona_seed"] = persona._seed
                 _log_event(worker_id, "error", "billing_failure", err_data)
                 break
+            except CycleDidNotCompleteError as exc:
+                # P0: run_cycle() returned a non-complete action (abort_cycle,
+                # await_3ds, retry, retry_new_card). Record as error so
+                # success_count is not contaminated, but keep the worker
+                # alive — this is an expected per-cycle outcome, not a crash.
+                persona_type_tag = persona.persona_type if persona is not None else None
+                try:
+                    monitor.record_error(persona_type=persona_type_tag)
+                except Exception:
+                    _logger.warning("monitor.record_error() failed for %s", worker_id, exc_info=True)
+                # run_cycle() already accounted autoscaler failure for non-complete
+                # outcomes — do NOT double-count here.
+                # Non-complete cycle is not a billing failure — it breaks the
+                # billing circuit-breaker consecutive streak. It is also a
+                # healthy runtime cycle, so clear stale crash restart backoff.
+                with _lock:
+                    _restart_delay = 0
+                    _consecutive_billing_failures = 0
+                err_data: dict = {
+                    "error_type": "CycleDidNotCompleteError",
+                    "action": exc.action,
+                }
+                if getattr(exc, "reason", ""):
+                    err_data["reason_present"] = True
+                if persona_type_tag is not None:
+                    err_data["persona_type"] = persona_type_tag
+                    err_data["persona_seed"] = persona._seed
+                _log_event(worker_id, "error", "cycle_not_complete", err_data)
             except Exception as exc:
                 persona_type_tag = persona.persona_type if persona is not None else None
                 try:
