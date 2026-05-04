@@ -2365,7 +2365,7 @@ class GivexDriver:
             extra,
         )
 
-    def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> None:
+    def _verify_field_value_length(self, sel: str, expected_len: int, selector_name: str) -> int:
         actual_len = self._field_value_length(sel)
         _log.info("_realistic_type_field: field=%s expected_len=%d actual_len=%d", selector_name, expected_len, actual_len)
         if actual_len < 0:
@@ -2374,7 +2374,7 @@ class GivexDriver:
                 f"Field {selector_name} value unreadable (JS read failed); expected_len={expected_len}"
             )
         if expected_len <= 0:
-            return
+            return actual_len
         if sel == SEL_AMOUNT_INPUT:
             failed, label = actual_len <= 0, "empty"
         else:
@@ -2382,6 +2382,7 @@ class GivexDriver:
         if failed:
             self._capture_failure_screenshot(f"type_field_value_{label}_{selector_name}")
             raise SessionFlaggedError(f"Field {selector_name} did not receive typed value (expected_len={expected_len} actual_len={actual_len})")
+        return actual_len
 
     def _wait_for_url(self, url_fragment: str, timeout: int = 15) -> None:
         """Poll until the current URL contains *url_fragment* or *timeout* expires.
@@ -2527,6 +2528,7 @@ class GivexDriver:
         if not els: raise SelectorTimeoutError(sel, 0)  # noqa: E701
         selector_name = _selector_name(sel)
         expected_len = len(str(val))
+        start_ns = time.monotonic_ns()
         # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
         # add its selector + symbolic name to the module-level _SELECTOR_NAMES registry
         # defined immediately after SEL_GUEST_EMAIL. Unregistered fields keep legacy
@@ -2542,8 +2544,28 @@ class GivexDriver:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
             self._send_keys_fallback(sel, val)
-            if verify_value:
+            res = {}
+            delay_permitted = (
+                self._engine is None or self._engine.is_delay_permitted()
+            )
+            actual_len = (
                 self._verify_field_value_length(sel, expected_len, selector_name)
+                if verify_value else self._field_value_length(sel)
+            )
+            duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+            _log.info(
+                "_realistic_type_field_complete "
+                "field=%s expected_len=%d actual_len=%d duration_ms=%.1f "
+                "typed_chars=%d mode=%s engine_delay_permitted=%s",
+                selector_name,
+                expected_len,
+                actual_len,
+                duration_ms,
+                res.get("typed_chars", -1),
+                res.get("mode", "unknown"),
+                delay_permitted,
+            )
+            if verify_value:
                 self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
             return
         typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
@@ -2583,7 +2605,7 @@ class GivexDriver:
         # per-keystroke sleeps via ``engine.is_delay_permitted``; this
         # extra guard ensures the biometric RNG advance is also avoided
         # so the production path matches the safe-zone contract.
-        if self._engine is not None and not self._engine.is_delay_permitted():
+        if self._engine is not None and not delay_permitted:
             dl = None
         elif self._bio and use_burst and len(val) >= 16:
             dl = self._bio.generate_4x4_pattern()
@@ -2591,14 +2613,33 @@ class GivexDriver:
             dl = self._bio.generate_burst_pattern(len(val))
         else:
             dl = None
-        _type_value(
+        res = _type_value(
             self._driver, els[0], val, self._get_rng(),
             typo_rate=typo_prob, delays=dl, strict=self._strict,
             field_kind=field_kind, engine=self._engine,
         )
+        if res is None:
+            res = {}
         if verify_value:
-            self._verify_field_value_length(sel, expected_len, selector_name)
+            actual_len = self._verify_field_value_length(sel, expected_len, selector_name)
+        else:
+            actual_len = self._field_value_length(sel)
+        duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+        _log.info(
+            "_realistic_type_field_complete "
+            "field=%s expected_len=%d actual_len=%d duration_ms=%.1f "
+            "typed_chars=%d mode=%s engine_delay_permitted=%s",
+            selector_name,
+            expected_len,
+            actual_len,
+            duration_ms,
+            res.get("typed_chars", -1),
+            res.get("mode", "unknown"),
+            delay_permitted,
+        )
+        if verify_value:
             self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
+        return res
 
     def _cdp_select_option(self, selector: str, value: str) -> None:
         """CDP-keynav to exact value/text or normalized numeric/month/year option."""
