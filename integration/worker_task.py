@@ -152,6 +152,7 @@ def _utc_offset_from_record(record) -> float | None:
 
 
 def _maxmind_geo_for_ip(ip_addr: str) -> tuple[str | None, float | None, str | None]:
+    """Return ``(postal_code, utc_offset, reason)`` for a resolved proxy IP."""
     reader, reason = _open_maxmind_reader()
     if reader is None:
         return None, None, reason
@@ -174,7 +175,12 @@ def _maxmind_geo_for_ip(ip_addr: str) -> tuple[str | None, float | None, str | N
 
 
 def resolve_proxy_geo(worker_id: str) -> GeoResolution:
-    """Resolve proxy geo with explicit reason for any miss."""
+    """Resolve proxy geo with explicit reason for any miss.
+
+    Returns a :class:`GeoResolution` containing a hashed detected IP, safe
+    proxy source metadata, optional MaxMind ZIP, optional fractional UTC offset,
+    and one of the ``GeoResolutionReason`` values.
+    """
     del worker_id  # Reserved for future worker-scoped proxy sources.
     raw_proxy = os.environ.get("PROXY_SERVER", "").strip()
     if not raw_proxy:
