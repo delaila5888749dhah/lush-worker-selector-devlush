@@ -20,6 +20,8 @@ import urllib.error
 from unittest.mock import patch
 
 from modules.cdp.fingerprint import (
+    _BITBROWSER_POOL_CLIENTS,
+    _BITBROWSER_POOL_CLIENTS_LOCK,
     BitBrowserClient,
     BitBrowserLaunchEndpoint,
     BitBrowserPoolClient,
@@ -475,6 +477,14 @@ class TestLegacyBackwardCompat(unittest.TestCase):
 
 class TestPoolClientFactoryWarnings(unittest.TestCase):
     """Startup validation — pool-size warning + duplicate dedupe."""
+
+    def setUp(self):
+        with _BITBROWSER_POOL_CLIENTS_LOCK:
+            _BITBROWSER_POOL_CLIENTS.clear()
+
+    def tearDown(self):
+        with _BITBROWSER_POOL_CLIENTS_LOCK:
+            _BITBROWSER_POOL_CLIENTS.clear()
 
     def test_duplicate_ids_deduped_with_warning(self):
         with patch.dict(
