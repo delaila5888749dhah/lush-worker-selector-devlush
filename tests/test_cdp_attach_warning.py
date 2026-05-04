@@ -100,9 +100,9 @@ class TestCdpAttachWarning(unittest.TestCase):
         with patch.dict(os.environ, {"BITBROWSER_POOL_MODE": "0"}):
             self.assertTrue(_is_attach_mode(_AttachDriver()))
 
-    def test_attach_mode_env_heuristic(self):
+    def test_no_attach_mode_when_pool_env_only(self):
         with patch.dict(os.environ, {"BITBROWSER_POOL_MODE": "1"}):
-            self.assertTrue(_is_attach_mode(_DriverMissingListener()))
+            self.assertFalse(_is_attach_mode(_DriverMissingListener()))
 
 
 if __name__ == "__main__":

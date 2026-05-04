@@ -20,9 +20,11 @@ installing `selenium-wire` does **not** add `add_cdp_listener` to that driver.
   bring-up rather than as a 10s Phase A cycle timeout.
 
 The probe distinguishes local-launched Selenium from BitBrowser/attach mode.
-Local messages mention `selenium-wire==5.1.0` as a repair option. Attach-mode
-messages do not recommend reinstalling `selenium-wire`; they point to the
-explicit DOM fallback instead.
+Attach mode is indicated by `goog:chromeOptions.debuggerAddress` in driver
+capabilities or by an explicit launch-path hint from the caller. Local messages
+mention `selenium-wire==5.1.0` as a repair option. Attach-mode messages do not
+recommend reinstalling `selenium-wire`; they point to the explicit DOM fallback
+instead.
 
 ## DOM-only fallback contract — `ALLOW_DOM_ONLY_WATCHDOG`
 
@@ -60,7 +62,10 @@ driver.
 Use this path when attaching to a BitBrowser-managed Chrome session.
 
 - Expected driver shape: `goog:chromeOptions.debuggerAddress` is present in
-  capabilities, or `BITBROWSER_POOL_MODE=1` indicates the BitBrowser pool path.
+  capabilities, or the caller supplies an explicit launch-path hint.
+- `BITBROWSER_POOL_MODE=1` only indicates BitBrowser profile pool acquisition
+  strategy. It does not guarantee attach driver shape; BitBrowser pool mode can
+  still return a legacy `webdriver` URL.
 - `selenium-wire==5.1.0` does **not** restore `add_cdp_listener` in this mode,
   because the attach path bypasses selenium-wire's wrapped driver.
 - Missing listener with `ALLOW_DOM_ONLY_WATCHDOG` unset: startup still fails

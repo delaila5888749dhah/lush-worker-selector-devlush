@@ -805,7 +805,7 @@ def _is_attach_mode(driver_obj: object, hint: bool | None = None) -> bool:
     know whether the driver was created through an attach flow.
 
     Prefer the explicit caller hint, then driver capabilities
-    (``goog:chromeOptions.debuggerAddress``), then the BitBrowser pool env.
+    (``goog:chromeOptions.debuggerAddress``).
 
     Returns ``True`` when attach mode is detected, ``False`` otherwise.
     """
@@ -813,9 +813,7 @@ def _is_attach_mode(driver_obj: object, hint: bool | None = None) -> bool:
         return hint
     caps = getattr(driver_obj, "capabilities", {}) or {}
     chrome_options = caps.get("goog:chromeOptions", {}) or {}
-    if chrome_options.get("debuggerAddress"):
-        return True
-    return os.environ.get("BITBROWSER_POOL_MODE") == "1"
+    return bool(chrome_options.get("debuggerAddress"))
 
 
 def probe_cdp_listener_support(
@@ -828,7 +826,7 @@ def probe_cdp_listener_support(
     ``driver_obj`` is expected to be a Selenium-compatible driver object.
     ``attach_mode_hint`` may be supplied by callers that know whether the
     driver is attached to an externally managed browser; otherwise the probe
-    detects attach mode from driver capabilities and BitBrowser pool env.
+    detects attach mode from driver capabilities.
 
     Returns ``True`` when the hook is callable. Returns ``False`` and logs a
     WARNING when the hook is missing **and** ``ALLOW_DOM_ONLY_WATCHDOG`` is
@@ -837,8 +835,9 @@ def probe_cdp_listener_support(
     at driver bring-up time rather than silently as a 10s Phase A cycle
     timeout (issue F2 audit).
 
-    Called from ``integration/worker_task.py`` immediately after the
-    seleniumwire driver is constructed; single source of truth for the check.
+    Called from ``integration/worker_task.py`` immediately after the Selenium
+    driver is constructed (selenium-wire for local-launched mode, stock
+    Selenium for BitBrowser-managed/attach mode).
     """
     if callable(getattr(driver_obj, "add_cdp_listener", None)):
         return True

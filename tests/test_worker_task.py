@@ -103,9 +103,22 @@ class TestMakeTaskFnSuccess(unittest.TestCase):
         mock_cdp, _, _ = self._run()
         mock_cdp._register_pid.assert_called_once_with("worker-1", 12345)
 
-    def test_probe_cdp_listener_called(self):
-        _, mock_probe, _ = self._run()
-        mock_probe.assert_called_once_with(self.selenium_drv)
+    def test_probe_cdp_listener_called_with_bitbrowser_hint(self):
+        launch_responses = (
+            {"webdriver": self.webdriver_url},
+            {
+                "http": "http://127.0.0.1:64663",
+                "driver": r"C:\chromedriver\144\chromedriver.exe",
+            },
+        )
+        for launch_response in launch_responses:
+            with self.subTest(launch_response=launch_response):
+                self.bb_client.launch_profile.return_value = launch_response
+                _, mock_probe, _ = self._run()
+                mock_probe.assert_called_once_with(
+                    self.selenium_drv,
+                    attach_mode_hint=True,
+                )
 
     def test_unregister_driver_called_on_success(self):
         mock_cdp, _, _ = self._run()
