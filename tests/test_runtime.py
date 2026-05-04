@@ -1357,19 +1357,34 @@ class TestBillingCircuitBreaker(RuntimeResetMixin, unittest.TestCase):
                 call_count["n"] += 1
                 raise CycleExhaustedError("pool empty")
 
-            # Launch 2 workers that fail with CycleExhaustedError
-            wid1 = start_worker(billing_fail)
-            self.assertTrue(
-                self._poll_until(lambda: wid1 not in get_active_workers()),
-            )
-            wid2 = start_worker(billing_fail)
-            self.assertTrue(
-                self._poll_until(lambda: wid2 not in get_active_workers()),
-            )
+            events = []
+
+            def capture_log_event(worker_id, state, action, metrics=None):
+                events.append((worker_id, state, action, metrics))
+
+            with patch.object(runtime, "_log_event", side_effect=capture_log_event):
+                # Launch 2 workers that fail with CycleExhaustedError
+                wid1 = start_worker(billing_fail)
+                self.assertTrue(
+                    self._poll_until(lambda: wid1 not in get_active_workers()),
+                )
+                wid2 = start_worker(billing_fail)
+                self.assertTrue(
+                    self._poll_until(lambda: wid2 not in get_active_workers()),
+                )
             # After 2 billing failures, circuit breaker should be throttled
             with runtime._lock:
                 throttled = runtime._is_billing_throttled()
             self.assertTrue(throttled, "billing circuit breaker should be active after threshold failures")
+            cb_events = [
+                event for event in events
+                if len(event) >= 4 and event[2] == "billing_cb_triggered"
+            ]
+            self.assertEqual(len(cb_events), 1)
+            event_data = cb_events[0][3]
+            self.assertNotIn("count", event_data)
+            self.assertEqual(event_data["threshold_reached"], True)
+            self.assertEqual(event_data["pause_seconds"], 60)
         finally:
             runtime._BILLING_CB_THRESHOLD = original_threshold
             runtime._BILLING_CB_PAUSE = original_pause
