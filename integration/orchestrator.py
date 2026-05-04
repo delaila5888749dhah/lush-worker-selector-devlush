@@ -2078,10 +2078,11 @@ def handle_outcome(state, order_queue, worker_id: str = "default", ctx=None):
         )
         _record_fork_safe("ui_lock")
         return "retry"
-    if getattr(state, "name", None) == "vbv_3ds":
+    state_name = getattr(state, "name", None)
+    if state_name == "vbv_3ds":
         _logger.info(
             "[trace=%s] FORK=%s worker=%s swap=%d",
-            _get_trace_id(), state.name, worker_id, _swap,
+            _get_trace_id(), state_name, worker_id, _swap,
         )
         _record_fork_safe("vbv_3ds")
         try:

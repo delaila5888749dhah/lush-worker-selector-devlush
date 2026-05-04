@@ -11,7 +11,7 @@ def _make_task(task_id: str) -> WorkerTask:
         recipient_email="a@b.com",
         amount=10,
         primary_card=CardInfo(
-            card_number="1" * 19,
+            card_number="4111111111111111",
             exp_month="12",
             exp_year="2030",
             cvv="123",
