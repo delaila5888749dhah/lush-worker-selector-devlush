@@ -34,8 +34,10 @@ from typing import Any, Callable, Optional
 from modules.cdp import main as cdp
 from modules.cdp.driver import (
     _get_proxy_ip,
+    _get_current_ip_best_effort,
     _lookup_maxmind_utc_offset,
     maxmind_lookup_geo,
+    maxmind_lookup_zip,
 )
 from modules.cdp.fingerprint import (
     BitBrowserLaunchEndpoint,

@@ -1179,6 +1179,8 @@ def _coerce_proxy_geo_reason(
     geo_reason: str | None,
     selection_reason: str | None,
 ) -> str:
+    if geo_reason is None and selection_reason is None:
+        return "profile_no_proxy"
     if selection_reason == "no_geo_match_in_pool" and geo_reason in (None, "ok"):
         return "no_geo_match_in_pool"
     if geo_reason in {
