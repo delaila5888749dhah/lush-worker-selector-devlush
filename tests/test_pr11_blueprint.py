@@ -11,6 +11,7 @@ from __future__ import annotations
 import collections
 import os
 import random
+import socket
 import threading
 import types
 import unittest
@@ -217,7 +218,7 @@ class TestGetProxyIp(unittest.TestCase):
         with patch("modules.cdp.driver.socket.getaddrinfo",
                    return_value=[(2, 1, 6, "", ("10.0.0.1", 0))]) as mock_dns:
             result = drv._get_proxy_ip("http://proxy.internal:8080")  # pylint: disable=protected-access
-        mock_dns.assert_called_once_with("proxy.internal", None, type=drv.socket.SOCK_STREAM)
+        mock_dns.assert_called_once_with("proxy.internal", None, type=socket.SOCK_STREAM)
         self.assertEqual(result, "10.0.0.1")
 
     def test_returns_none_on_dns_failure(self):

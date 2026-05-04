@@ -231,7 +231,9 @@ class BitBrowserClient:
     def get_profile_proxy(self, profile_id: str) -> object:
         """Return configured proxy metadata from BitBrowser profile detail."""
         detail = self.get_profile_detail(profile_id)
-        return detail.get("proxy") or detail
+        if "proxy" in detail:
+            return detail["proxy"]
+        return detail
 
     def close_profile(self, profile_id: str) -> None:
         """POST /api/v1/browser/close. No-op if request fails."""
