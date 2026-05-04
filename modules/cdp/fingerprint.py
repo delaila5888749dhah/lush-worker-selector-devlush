@@ -72,9 +72,14 @@ def _bitbrowser_pool_cache_key(
     profile_ids: List[str],
     pool_mode: str,
 ) -> Tuple[str, bool, Tuple[str, ...], str]:
-    normalised_ids = tuple(
-        sorted({pid.strip() for pid in profile_ids if pid and pid.strip()})
-    )
+    normalised = set()
+    for pid in profile_ids:
+        if not pid:
+            continue
+        stripped = pid.strip()
+        if stripped:
+            normalised.add(stripped)
+    normalised_ids = tuple(sorted(normalised))
     return (
         endpoint.rstrip("/"),
         api_key_present,

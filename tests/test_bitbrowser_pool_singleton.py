@@ -86,9 +86,9 @@ class TestBitBrowserPoolSingleton(unittest.TestCase):
         self.assertEqual(len(acquired), 2)
         self.assertEqual(len(acquired), len(set(acquired)))
 
-        with clients[0]._lock:
+        with patch.object(BitBrowserPoolClient, "_close_browser"):
             for pid in acquired:
-                clients[0]._busy.discard(pid)
+                clients[0].release_profile(pid)
 
 
 if __name__ == "__main__":
