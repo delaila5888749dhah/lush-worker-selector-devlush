@@ -237,9 +237,15 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                 # Register BitBrowser profile id (F-04)
                 cdp.register_browser_profile(worker_id, profile_id)
 
-                # Guard: verify driver exposes add_cdp_listener (U-06)
+                # Guard: verify driver exposes add_cdp_listener (U-06).
+                # This call site is inside BitBrowserSession, so the driver is
+                # BitBrowser-managed stock Selenium without selenium-wire
+                # wrapping; avoid local-launched selenium-wire remediation.
                 from integration.runtime import probe_cdp_listener_support  # noqa: PLC0415
-                probe_cdp_listener_support(selenium_driver)
+                probe_cdp_listener_support(
+                    selenium_driver,
+                    attach_mode_hint=True,
+                )
 
                 # Geo pre-flight (Blueprint §2): run immediately after the
                 # browser/session is up — before MaxMind, persona, and any

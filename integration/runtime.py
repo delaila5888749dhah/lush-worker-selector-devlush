@@ -797,8 +797,36 @@ def is_dom_only_watchdog_allowed() -> bool:
     )
 
 
-def probe_cdp_listener_support(driver_obj: object) -> bool:
+def _is_attach_mode(driver_obj: object, hint: bool | None = None) -> bool:
+    """Best-effort attach-mode detection.
+
+    ``driver_obj`` is a Selenium-compatible driver; this helper only inspects
+    its optional ``capabilities`` mapping. ``hint`` is for callers that already
+    know whether the driver was created through an attach flow.
+
+    Prefer the explicit caller hint, then driver capabilities
+    (``goog:chromeOptions.debuggerAddress``).
+
+    Returns ``True`` when attach mode is detected, ``False`` otherwise.
+    """
+    if hint is not None:
+        return hint
+    caps = getattr(driver_obj, "capabilities", {}) or {}
+    chrome_options = caps.get("goog:chromeOptions", {}) or {}
+    return bool(chrome_options.get("debuggerAddress"))
+
+
+def probe_cdp_listener_support(
+    driver_obj: object,
+    *,
+    attach_mode_hint: bool | None = None,
+) -> bool:
     """Assert *driver_obj* exposes a callable ``add_cdp_listener`` method.
+
+    ``driver_obj`` is expected to be a Selenium-compatible driver object.
+    ``attach_mode_hint`` may be supplied by callers that know whether the
+    driver is attached to an externally managed browser; otherwise the probe
+    detects attach mode from driver capabilities.
 
     Returns ``True`` when the hook is callable. Returns ``False`` and logs a
     WARNING when the hook is missing **and** ``ALLOW_DOM_ONLY_WATCHDOG`` is
@@ -807,24 +835,39 @@ def probe_cdp_listener_support(driver_obj: object) -> bool:
     at driver bring-up time rather than silently as a 10s Phase A cycle
     timeout (issue F2 audit).
 
-    Called from ``integration/worker_task.py`` immediately after the
-    seleniumwire driver is constructed; single source of truth for the check.
+    Called from ``integration/worker_task.py`` immediately after the Selenium
+    driver is constructed (selenium-wire for local-launched mode, stock
+    Selenium for BitBrowser-managed/attach mode).
     """
-    if (hasattr(driver_obj, "add_cdp_listener")
-            and callable(getattr(driver_obj, "add_cdp_listener", None))):
+    if callable(getattr(driver_obj, "add_cdp_listener", None)):
         return True
+    attach_mode = _is_attach_mode(driver_obj, attach_mode_hint)
     if is_dom_only_watchdog_allowed():
-        _logger.warning(
-            "Driver lacks callable 'add_cdp_listener'; "
-            "ALLOW_DOM_ONLY_WATCHDOG=1 — DOM polling for Phase A + Phase C. "
-            "DEGRADED mode; re-install selenium-wire==5.1.0 to restore CDP."
-        )
+        if attach_mode:
+            _logger.warning(
+                "BitBrowser/attach driver does not expose 'add_cdp_listener'; "
+                "this is expected in attach mode. DOM-polling watchdog "
+                "(ALLOW_DOM_ONLY_WATCHDOG=1) is enabled. "
+                "See docs/audit/addendum-selenium-flavor.md."
+            )
+        else:
+            _logger.warning(
+                "Driver does not expose 'add_cdp_listener'. "
+                "ALLOW_DOM_ONLY_WATCHDOG=1 is enabled; using DOM-polling fallback. "
+                "For local-launched Selenium, selenium-wire==5.1.0 may restore "
+                "CDP listener support."
+            )
         return False
+    if attach_mode:
+        raise RuntimeError(
+            "BitBrowser/attach driver does not expose 'add_cdp_listener'. "
+            "This is expected in attach mode. Set ALLOW_DOM_ONLY_WATCHDOG=1 "
+            "to opt into DOM-polling fallback."
+        )
     raise RuntimeError(
-        "Driver does not expose a callable 'add_cdp_listener'. "
-        "Install selenium-wire==5.1.0 (or equivalent CDP-capable flavor), "
-        "or set ALLOW_DOM_ONLY_WATCHDOG=1 to opt into DOM-polling fallback "
-        "(see docs/audit/addendum-selenium-flavor.md)."
+        "Driver does not expose 'add_cdp_listener'. "
+        "Install selenium-wire==5.1.0 for local-launched Selenium, "
+        "or set ALLOW_DOM_ONLY_WATCHDOG=1 to opt into DOM-polling fallback."
     )
 
 
