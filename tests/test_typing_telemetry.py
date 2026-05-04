@@ -70,6 +70,30 @@ class TestTypingTelemetry(unittest.TestCase):
         self.assertIn("field=SEL_GUEST_EMAIL", output)
         self.assertIn(f"expected_len={len(raw_value)}", output)
 
+    def test_duration_ms_emitted_for_fallback(self):
+        selenium = _make_driver()
+        givex = GivexDriver(selenium)
+        with patch.object(givex, "_human_scroll_to"), \
+             patch.object(givex, "_wait_scroll_stable"), \
+             patch.object(givex, "bounding_box_click"), \
+             patch.object(givex, "_engine_aware_sleep"), \
+             patch.object(givex, "_field_value_length", return_value=5), \
+             patch.object(givex, "_send_keys_fallback"), \
+             patch("modules.cdp.driver._type_value", None), \
+             patch("time.monotonic_ns", side_effect=[3_000_000_000, 3_010_000_000]), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            res = givex._realistic_type_field(SEL_BILLING_ZIP, "12345")
+
+        self.assertEqual(res, {})
+        complete = [
+            line for line in logs.output
+            if "_realistic_type_field_complete" in line
+        ]
+        self.assertEqual(len(complete), 1)
+        self.assertIn("duration_ms=10.0", complete[0])
+        self.assertIn("typed_chars=-1", complete[0])
+        self.assertIn("mode=unknown", complete[0])
+
 
 if __name__ == "__main__":
     unittest.main()

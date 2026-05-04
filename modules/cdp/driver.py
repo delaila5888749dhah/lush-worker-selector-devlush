@@ -2529,6 +2529,9 @@ class GivexDriver:
         selector_name = _selector_name(sel)
         expected_len = len(str(val))
         start_ns = time.monotonic_ns()
+        delay_permitted = (
+            self._engine is None or self._engine.is_delay_permitted()
+        )
         # IMPORTANT: To enable focus-before-type + length verification on a NEW field,
         # add its selector + symbolic name to the module-level _SELECTOR_NAMES registry
         # defined immediately after SEL_GUEST_EMAIL. Unregistered fields keep legacy
@@ -2545,9 +2548,6 @@ class GivexDriver:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
             self._send_keys_fallback(sel, val)
             res = {}
-            delay_permitted = (
-                self._engine is None or self._engine.is_delay_permitted()
-            )
             actual_len = (
                 self._verify_field_value_length(sel, expected_len, selector_name)
                 if verify_value else self._field_value_length(sel)
@@ -2567,7 +2567,7 @@ class GivexDriver:
             )
             if verify_value:
                 self._engine_aware_sleep(0.08, 0.25, "post_type_pause")
-            return
+            return res
         typo_prob = self._persona.get_typo_probability() if self._persona else 0.0
         # Apply explicit ``typo_rate`` override first (callers who pass an
         # explicit rate own the rate exactly — no NIGHT bonus is layered on
@@ -2588,9 +2588,6 @@ class GivexDriver:
         # also zeroes the persona base rate while in critical section, since
         # typo injection is itself a behaviour modulation that must not fire
         # in safe-zone contracts.
-        delay_permitted = (
-            self._engine is None or self._engine.is_delay_permitted()
-        )
         if not delay_permitted:
             typo_prob = 0.0
         elif apply_night_bonus and self._persona and self._temporal:
