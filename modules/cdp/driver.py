@@ -447,6 +447,7 @@ SEL_BUY_EGIFT_BTN = "#cardForeground > div > div.bannerButtons.clearfix > div.ba
 _EGIFT_PATH_FRAGMENT = "/e-gifts/"
 _EGIFT_NAV_MAX_CLICK_ATTEMPTS = 3
 _EGIFT_NAV_BACKOFF_BASE_S = 0.5
+_EGIFT_NAV_BACKOFF_MULTIPLIER = 2
 _EGIFT_NAV_WAIT_AFTER_CLICK_S = 4.0
 _EGIFT_NAV_FORBIDDEN_PATH_PARTS = (
     "/shopping-cart",
@@ -3841,7 +3842,8 @@ class GivexDriver:
                 in_scope,
             )
             return None
-        return urllib.parse.urlunsplit((target.scheme, target.netloc, target.path, target.query, target.fragment))
+        target_parts = (target.scheme, target.netloc, target.path, target.query, target.fragment)
+        return urllib.parse.urlunsplit(target_parts)
 
     def _assign_buy_egift_href_fallback(self, href: str) -> None:
         _log.info("navigate_to_egift: fallback=href_assign target=%s", _short_url(href))
@@ -3887,7 +3889,9 @@ class GivexDriver:
                 return
             _log.info("navigate_to_egift: click attempt=%d landing predicate=none", attempt)
             if attempt < _EGIFT_NAV_MAX_CLICK_ATTEMPTS:
-                delay = _EGIFT_NAV_BACKOFF_BASE_S * (2 ** (attempt - 1))
+                delay = _EGIFT_NAV_BACKOFF_BASE_S * (
+                    _EGIFT_NAV_BACKOFF_MULTIPLIER ** (attempt - 1)
+                )
                 _log.info("navigate_to_egift: retry backoff_s=%.2f attempt=%d", delay, attempt)
                 time.sleep(delay)
 
