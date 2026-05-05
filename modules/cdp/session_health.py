@@ -8,8 +8,11 @@ def classify_session_loss(exc_or_text) -> str | None:
     text = str(exc_or_text).lower()
     if "invalid session id" in text:
         return "invalid_session_id"
+    # Selenium/ChromeDriver variants include prefixes such as
+    # "invalid session id: session deleted as the browser has closed".
     if "browser has closed" in text:
         return "browser_connection_closed"
+    # ChromeDriver and CDP surfaces vary the prefix before this stable suffix.
     if "not connected to devtools" in text:
         return "devtools_disconnected"
     if "target frame detached" in text:
