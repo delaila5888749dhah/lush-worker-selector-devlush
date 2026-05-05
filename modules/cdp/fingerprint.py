@@ -2,7 +2,6 @@
 # pylint: disable=duplicate-code
 
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -82,10 +81,9 @@ def _bitbrowser_pool_cache_key(
         if stripped:
             normalized.add(stripped)
     normalized_ids = tuple(sorted(normalized))
-    api_key_hash = hmac.new(
-        b"bitbrowser-pool-cache-key",
-        (api_key or "").encode("utf-8"),
-        hashlib.sha256,
+    # lgtm [py/weak-sensitive-data-hashing] Cache partitioning only; not password storage.
+    api_key_hash = hashlib.sha256(
+        (api_key or "").encode("utf-8")
     ).hexdigest()[:32]
     return (
         endpoint.rstrip("/"),
