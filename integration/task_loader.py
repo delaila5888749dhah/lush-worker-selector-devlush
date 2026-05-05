@@ -34,23 +34,28 @@ _RE_EMAIL = re.compile(
 )
 
 
-def _make_card(fields: List[str]) -> CardInfo:
-    """Validate and build a :class:`CardInfo` from ``fields``.
+def _make_card_from_input_fields(
+    *,
+    card_number: str,
+    exp_month: str,
+    exp_year: str,
+    cvv: str,
+) -> CardInfo:
+    """Validate and build a :class:`CardInfo` from explicitly named fields.
 
     Raises :class:`ValueError` with a *privacy-safe* message (never includes
     raw card digits) if any field fails regex validation.
     """
-    card_number, exp_m, exp_y, cvv = fields[0], fields[1], fields[2], fields[3]
     card_clean = card_number.replace(" ", "").replace("-", "").strip()
     if not _RE_CARD.match(card_clean):
         raise ValueError(
             f"Invalid card number length/format: {len(card_clean)} digits "
             "(expected 15 or 16)"
         )
-    exp_m_s = exp_m.strip()
+    exp_m_s = exp_month.strip()
     if not _RE_EXP_MONTH.match(exp_m_s):
         raise ValueError("Invalid exp_month format (expected 01-12)")
-    exp_y_s = exp_y.strip()
+    exp_y_s = exp_year.strip()
     if not _RE_EXP_YEAR.match(exp_y_s):
         raise ValueError("Invalid exp_year format (expected YY or YYYY)")
     cvv_s = cvv.strip()
@@ -62,6 +67,16 @@ def _make_card(fields: List[str]) -> CardInfo:
         exp_year=exp_y_s,
         cvv=cvv_s,
         card_name="",
+    )
+
+
+def _make_card(fields: List[str]) -> CardInfo:
+    """Validate a historical positional card field list used by existing tests."""
+    return _make_card_from_input_fields(
+        card_number=fields[0],
+        exp_month=fields[1],
+        exp_year=fields[2],
+        cvv=fields[3],
     )
 
 
@@ -108,13 +123,23 @@ class FileTaskLoader:
                 "FileTaskLoader: invalid email/amount on line %d", line_no
             )
             return None
-        cards = parts[2:]
+        card_fields = parts[2:]
         try:
-            primary = _make_card(cards[:_CARD_BLOCK])
+            primary = _make_card_from_input_fields(
+                card_number=card_fields[0],
+                exp_month=card_fields[1],
+                exp_year=card_fields[2],
+                cvv=card_fields[3],
+            )
             extras: List[CardInfo] = []
             i = _CARD_BLOCK
-            while i + _CARD_BLOCK <= len(cards):
-                extras.append(_make_card(cards[i:i + _CARD_BLOCK]))
+            while i + _CARD_BLOCK <= len(card_fields):
+                extras.append(_make_card_from_input_fields(
+                    card_number=card_fields[i],
+                    exp_month=card_fields[i + 1],
+                    exp_year=card_fields[i + 2],
+                    cvv=card_fields[i + 3],
+                ))
                 i += _CARD_BLOCK
         except ValueError as exc:
             # Privacy: *exc* message is crafted in _make_card to exclude raw

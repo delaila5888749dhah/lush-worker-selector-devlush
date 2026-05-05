@@ -460,6 +460,14 @@ SEL_CONFIRM_RECIPIENT_EMAIL = "#cws_txt_confRecipEmail"
 SEL_SENDER_NAME            = "#cws_txt_gcBuyFrom"
 SEL_ADD_TO_CART            = "#cws_btn_gcBuyAdd > span"
 SEL_REVIEW_CHECKOUT        = "#cws_btn_gcBuyCheckout"
+# PAN-like sequences may be separated by spaces/dashes as users often write cards.
+_EGIFT_NAME_PAN_LIKE_RE = re.compile(r"\d(?:[ -]?\d){11,18}")
+# PAN-like sequence followed by an expiration-looking month/year token.
+_EGIFT_NAME_CARD_EXP_RE = re.compile(
+    r"\d(?:[ -]?\d){11,18}\s+(?:0?[1-9]|1[0-2]|\d{2}|\d{4})\b"
+)
+# Human billing names should not need more than suffix-style digits (e.g. "2").
+_MAX_DIGITS_IN_EGIFT_NAME = 2
 
 # ── Cart & Guest Checkout (Step 2) ───────────────────────────────────────────
 SEL_BEGIN_CHECKOUT = "#cws_btn_cartCheckout"
@@ -493,6 +501,43 @@ def _selector_name(sel: str) -> str:
         or _SELECTOR_LOG_NAMES.get(sel)
         or "UNREGISTERED_SELECTOR"
     )
+
+
+def _egift_name_stats(value: str) -> dict[str, int | bool]:
+    stripped = value.strip()
+    alpha_count = sum(1 for ch in stripped if ch.isalpha())
+    digit_count = sum(1 for ch in stripped if ch.isdigit())
+    alpha_part_count = sum(
+        1 for part in re.split(r"\s+", stripped) if any(ch.isalpha() for ch in part)
+    )
+    card_like = bool(
+        _EGIFT_NAME_PAN_LIKE_RE.search(stripped)
+        or _EGIFT_NAME_CARD_EXP_RE.search(stripped)
+        or digit_count > _MAX_DIGITS_IN_EGIFT_NAME
+    )
+    return {
+        "value_len": len(stripped),
+        "alpha_count": alpha_count,
+        "digit_count": digit_count,
+        "alpha_part_count": alpha_part_count,
+        "card_like": card_like,
+    }
+
+
+def _validate_egift_full_name(full_name: str) -> None:
+    stats = _egift_name_stats(full_name)
+    malformed = (
+        stats["value_len"] <= 0
+        or stats["alpha_count"] <= 0
+        or stats["alpha_part_count"] < 2
+        or bool(stats["card_like"])
+    )
+    if malformed:
+        raise SessionFlaggedError(
+            "DataContractError: invalid billing_profile.full_name for eGift name fields "
+            f"value_len={stats['value_len']} alpha_count={stats['alpha_count']} "
+            f"digit_count={stats['digit_count']} card_like={str(stats['card_like']).lower()}"
+        )
 
 
 def _safe_int(value, default: int = -1) -> int:
@@ -3890,7 +3935,19 @@ class GivexDriver:
         self._engine_aware_sleep(0.9, 2.2, "egift_observation_before_form_scroll")
         self._select_card_design_if_required()
         self._smooth_scroll_to(SEL_GREETING_MSG)
-        full_name = f"{billing_profile.first_name} {billing_profile.last_name}"
+        full_name = f"{billing_profile.first_name} {billing_profile.last_name}".strip()
+        name_stats = _egift_name_stats(full_name)
+        for field_name in ("SEL_RECIPIENT_NAME", "SEL_SENDER_NAME"):
+            _log.info(
+                "fill_egift_form: field=%s source=billing_profile.full_name "
+                "value_len=%d alpha_count=%d digit_count=%d card_like=%s",
+                field_name,
+                name_stats["value_len"],
+                name_stats["alpha_count"],
+                name_stats["digit_count"],
+                str(name_stats["card_like"]).lower(),
+            )
+        _validate_egift_full_name(full_name)
         greeting = _random_greeting(self._rnd)
         _log.info("fill_egift_form: field=SEL_GREETING_MSG len=%d", len(greeting))
         self._realistic_type_field(
@@ -3901,7 +3958,6 @@ class GivexDriver:
             SEL_AMOUNT_INPUT, str(task.amount),
             field_kind="amount", typo_rate=0.0,
         )
-        _log.info("fill_egift_form: field=SEL_RECIPIENT_NAME len=%d", len(full_name))
         self._realistic_type_field(
             SEL_RECIPIENT_NAME, full_name, field_kind="name",
         )
@@ -3914,7 +3970,6 @@ class GivexDriver:
             SEL_CONFIRM_RECIPIENT_EMAIL, task.recipient_email,
             field_kind="text",
         )
-        _log.info("fill_egift_form: field=SEL_SENDER_NAME len=%d", len(full_name))
         self._realistic_type_field(
             SEL_SENDER_NAME, full_name, field_kind="name",
         )
