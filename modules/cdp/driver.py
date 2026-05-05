@@ -444,6 +444,12 @@ URL_CONFIRM_HOST = "givex.com"
 # ── Navigation ───────────────────────────────────────────────────────────
 SEL_COOKIE_ACCEPT = "#button--accept-cookies"
 SEL_BUY_EGIFT_BTN = "#cardForeground > div > div.bannerButtons.clearfix > div.bannerBtn.btn1.displaySectionYes > a"
+_EGIFT_NAV_MAX_CLICK_ATTEMPTS = 3
+_EGIFT_NAV_BACKOFF_BASE_S = 0.5
+_EGIFT_NAV_WAIT_AFTER_CLICK_S = 4.0
+_EGIFT_NAV_FORBIDDEN_PATH_PARTS = ("/shopping-cart", "/checkout", "/payment")
+_EGIFT_EXPECTED_URL = urllib.parse.urlsplit(URL_EGIFT)
+_EGIFT_EXPECTED_PATH = _EGIFT_EXPECTED_URL.path.rstrip("/")
 
 # ── eGift form (Step 1) — URL_EGIFT ─────────────────────────────────────────
 SEL_GREETING_MSG           = "#cws_txt_gcMsg"
@@ -3688,33 +3694,185 @@ class GivexDriver:
             )
         _log.debug("_clear_browser_state: browser state cleared for new cycle")
 
-    def navigate_to_egift(self) -> None:
-        """Navigate to the Givex base URL and open the eGift purchase page.
+    def _egift_form_visible(self) -> bool:
+        """Return whether the eGift greeting field is visibly present."""
+        js = ("const el=document.querySelector(arguments[0]);if(!el)return false;"
+              "const s=getComputedStyle(el),r=el.getBoundingClientRect();"
+              "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';")
+        try:
+            return bool(self._driver.execute_script(js, SEL_GREETING_MSG))
+        except Exception:  # pylint: disable=broad-except
+            _log.debug("navigate_to_egift: DOM visibility predicate unavailable", exc_info=True)
+            return False
 
-        Accepts the cookie banner if present, then clicks the Buy eGift link,
-        and navigates directly to the eGift form page.
-        """
+    def _is_egift_landing_url(self, url: str) -> bool:
+        try:
+            target = urllib.parse.urlsplit(url or "")
+        except ValueError:
+            return False
+        if target.scheme != _EGIFT_EXPECTED_URL.scheme or target.netloc != _EGIFT_EXPECTED_URL.netloc:
+            return False
+        path = (target.path or "").rstrip("/")
+        if any(part in path for part in _EGIFT_NAV_FORBIDDEN_PATH_PARTS):
+            return False
+        return path == _EGIFT_EXPECTED_PATH
+
+    def _wait_for_egift_landing(self, timeout: float = _EGIFT_NAV_WAIT_AFTER_CLICK_S) -> str | None:
+        """Wait until URL or DOM proves the eGift form landing succeeded."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                current = self._driver.current_url or ""
+            except Exception:  # URL briefly unavailable during SPA transition
+                current = ""
+            if self._is_egift_landing_url(current):
+                _log.info("navigate_to_egift: landing predicate=url_path")
+                return "url_path"
+            if self._egift_form_visible():
+                _log.info("navigate_to_egift: landing predicate=visible_form_dom")
+                return "visible_form_dom"
+            time.sleep(0.25)
+        return None
+
+    def _dismiss_egift_navigation_interruptions(self, attempt: int) -> None:
+        """Best-effort dismissal of overlays that can intercept Buy-eGift."""
+        for kind, selectors in (
+            ("cookie_banner", (SEL_COOKIE_ACCEPT,)),
+            ("overlay", (*_GIVEX_FANCYBOX_CLOSE_SELECTORS, SEL_POPUP_CLOSE_BTN)),
+        ):
+            hit = False
+            buy_ids = set()
+            if kind == "overlay":
+                try:
+                    buy_ids = {id(e) for e in self.find_elements(SEL_BUY_EGIFT_BTN)}
+                except Exception:  # pylint: disable=broad-except
+                    buy_ids = set()
+            for selector in selectors:
+                try:
+                    elements = self.find_elements(selector)
+                    if buy_ids:
+                        elements = [e for e in elements if id(e) not in buy_ids]
+                    if not elements:
+                        continue
+                    hit = True
+                    _log.info("navigate_to_egift: interruption=%s attempt=%d detected", kind, attempt)
+                    try:
+                        self.bounding_box_click(selector)
+                        _log.info("navigate_to_egift: interruption=%s attempt=%d dismissed", kind, attempt)
+                    except Exception as exc:  # best-effort only
+                        _log.info(
+                            "navigate_to_egift: interruption=%s attempt=%d dismiss_failed reason=%s",
+                            kind, attempt, _sanitize_error(str(exc)),
+                        )
+                    break
+                except Exception as exc:  # pylint: disable=broad-except
+                    hit = True
+                    _log.info(
+                        "navigate_to_egift: interruption=%s attempt=%d probe_failed reason=%s",
+                        kind, attempt, _sanitize_error(str(exc)),
+                    )
+                    break
+            if not hit:
+                _log.info("navigate_to_egift: interruption=%s attempt=%d absent", kind, attempt)
+
+    def _safe_buy_egift_href(self) -> str | None:
+        """Return a same-origin Buy-eGift href that stays in e-gift landing scope."""
+        try:
+            raw = self._driver.execute_script(
+                "const el=document.querySelector(arguments[0]);"
+                "return el && typeof el.href === 'string' ? el.href : null;",
+                SEL_BUY_EGIFT_BTN,
+            )
+        except Exception:  # pylint: disable=broad-except
+            _log.info("navigate_to_egift: fallback href probe failed")
+            return None
+        if not isinstance(raw, str) or not raw.strip():
+            _log.info("navigate_to_egift: fallback href absent")
+            return None
+        href = urllib.parse.urljoin(URL_BASE, raw.strip())
+        try:
+            base = urllib.parse.urlsplit(URL_BASE)
+            target = urllib.parse.urlsplit(href)
+        except Exception:
+            _log.info("navigate_to_egift: fallback href invalid")
+            return None
+        same_origin = target.scheme == base.scheme and target.netloc == base.netloc
+        in_scope = self._is_egift_landing_url(href)
+        if not same_origin or not in_scope:
+            _log.info(
+                "navigate_to_egift: fallback href rejected same_origin=%s in_scope=%s",
+                same_origin,
+                in_scope,
+            )
+            return None
+        return urllib.parse.urlunsplit(target)
+
+    def navigate_to_egift(self) -> None:
+        """Navigate to the Givex base URL and open the eGift purchase page."""
         _log.info("navigate_to_egift: started")
         self._clear_browser_state()
         _log.info("navigate_to_egift: get(%s)", _short_url(URL_BASE))
         self._driver.get(URL_BASE)
-        # Dismiss cookie banner if present (best-effort)
-        if self.find_elements(SEL_COOKIE_ACCEPT):
-            _log.info("navigate_to_egift: cookie banner detected")
-            try:
-                self.bounding_box_click(SEL_COOKIE_ACCEPT)
-                _log.info("navigate_to_egift: cookie banner dismissed")
-            except Exception as exc:  # cookie banner is best-effort; continue navigation
-                _log.debug("Cookie banner click skipped: %s", exc)
-        else:
-            _log.info("navigate_to_egift: cookie banner absent")
         if self._wait_for_element(SEL_BUY_EGIFT_BTN, timeout=10):
             _log.info("navigate_to_egift: Buy-eGift visible")
-        self.bounding_box_click(SEL_BUY_EGIFT_BTN)
-        _log.info("navigate_to_egift: Buy-eGift clicked")
-        self._wait_for_url_or_capture(URL_EGIFT, "url_egift_not_reached")
-        _log.info("navigate_to_egift: URL_EGIFT reached")
-        _log.info("navigate_to_egift: completed")
+        else:
+            _log.info("navigate_to_egift: Buy-eGift not visible before retries")
+
+        last_predicate = None
+        last_error = ""
+        for attempt in range(1, _EGIFT_NAV_MAX_CLICK_ATTEMPTS + 1):
+            self._dismiss_egift_navigation_interruptions(attempt)
+            _log.info(
+                "navigate_to_egift: click attempt=%d/%d",
+                attempt,
+                _EGIFT_NAV_MAX_CLICK_ATTEMPTS,
+            )
+            try:
+                self.bounding_box_click(SEL_BUY_EGIFT_BTN)
+                _log.info("navigate_to_egift: Buy-eGift clicked attempt=%d", attempt)
+            except Exception as exc:  # pylint: disable=broad-except
+                last_error = _sanitize_error(str(exc))
+                _log.info(
+                    "navigate_to_egift: click attempt=%d failed reason=%s",
+                    attempt,
+                    last_error,
+                )
+            last_predicate = self._wait_for_egift_landing()
+            if last_predicate:
+                _log.info(
+                    "navigate_to_egift: completed via click attempt=%d predicate=%s",
+                    attempt,
+                    last_predicate,
+                )
+                return
+            _log.info("navigate_to_egift: click attempt=%d landing predicate=none", attempt)
+            if attempt < _EGIFT_NAV_MAX_CLICK_ATTEMPTS:
+                delay = _EGIFT_NAV_BACKOFF_BASE_S * (2 ** (attempt - 1))
+                _log.info("navigate_to_egift: retry backoff_s=%.2f attempt=%d", delay, attempt)
+                time.sleep(delay)
+
+        href = self._safe_buy_egift_href()
+        if href:
+            _log.info("navigate_to_egift: fallback attempt=1")
+            _log.info("navigate_to_egift: fallback=href_assign target=%s", _short_url(href))
+            self._driver.execute_script("window.location.assign(arguments[0]);", href)
+            last_predicate = self._wait_for_egift_landing()
+            if last_predicate:
+                _log.info("navigate_to_egift: completed via fallback predicate=%s", last_predicate)
+                return
+            _log.info("navigate_to_egift: fallback landing predicate=none")
+
+        try:
+            last_url = self._driver.current_url or ""
+        except Exception:
+            last_url = ""
+        raise PageStateError(
+            "egift_navigation_failed "
+            f"attempts={_EGIFT_NAV_MAX_CLICK_ATTEMPTS} "
+            f"last_predicate={last_predicate or 'none'} "
+            f"last_url={_short_url(last_url)} "
+            f"last_error={last_error or 'none'}"
+        )
 
     # ── eGift form (Step 1) ─────────────────────────────────────────────────
 

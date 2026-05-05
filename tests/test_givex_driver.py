@@ -1609,6 +1609,195 @@ class TestNavigateToEgift(unittest.TestCase):
         selenium.get.assert_called_once_with(URL_BASE)
         btn_el.click.assert_called_once()
 
+    def test_navigate_to_egift_accepts_visible_form_dom_without_url_change(self):
+        selenium = _make_driver(current_url=URL_BASE)
+        btn_el = MagicMock()
+
+        def find_elements(_method, selector):
+            clean = selector.strip()
+            if clean == "#button--accept-cookies":
+                return []
+            if clean == drv.SEL_BUY_EGIFT_BTN:
+                return [btn_el]
+            return []
+
+        def execute_script(script, *args):
+            if args and args[0] == SEL_GREETING_MSG and "getBoundingClientRect" in script:
+                return True
+            return None
+
+        selenium.find_elements.side_effect = find_elements
+        selenium.execute_script.side_effect = execute_script
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch("time.sleep"), patch.object(gd, "bounding_box_click") as click:
+            gd.navigate_to_egift()
+
+        selenium.get.assert_called_once_with(URL_BASE)
+        click.assert_called_once_with(drv.SEL_BUY_EGIFT_BTN)
+
+    def test_wait_for_egift_landing_accepts_valid_url(self):
+        gd = GivexDriver(_make_driver(current_url=URL_EGIFT), strict=False)
+        with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
+            self.assertEqual(gd._wait_for_egift_landing(timeout=0.01), "url_path")
+
+    def test_wait_for_egift_landing_rejects_cart_checkout_payment_urls_without_form_dom(self):
+        gd = GivexDriver(_make_driver(current_url=URL_CART), strict=False)
+        for bad_url in (URL_CART, URL_CHECKOUT, URL_PAYMENT):
+            gd._driver.current_url = bad_url
+            with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
+                self.assertIsNone(gd._wait_for_egift_landing(timeout=0.01))
+
+    def test_wait_for_egift_landing_rejects_cross_origin_matching_path_without_form_dom(self):
+        bad_url = "https://not-givex.example/cws4.0/lushusa/e-gifts/"
+        gd = GivexDriver(_make_driver(current_url=bad_url), strict=False)
+        with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
+            self.assertIsNone(gd._wait_for_egift_landing(timeout=0.01))
+
+    def test_navigate_to_egift_retries_with_exponential_backoff(self):
+        selenium = _make_driver(current_url=URL_BASE)
+        btn_el = MagicMock()
+
+        def find_elements(_method, selector):
+            return [btn_el] if selector.strip() == drv.SEL_BUY_EGIFT_BTN else []
+
+        selenium.find_elements.side_effect = find_elements
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch.object(gd, "_wait_for_egift_landing", side_effect=[None, None, "url_path"]), \
+             patch.object(gd, "_dismiss_egift_navigation_interruptions") as dismiss, \
+             patch.object(gd, "bounding_box_click") as click, \
+             patch("time.sleep") as sleep_mock:
+            gd.navigate_to_egift()
+
+        self.assertEqual(dismiss.call_count, 3)
+        self.assertEqual(click.call_args_list, [
+            call(drv.SEL_BUY_EGIFT_BTN),
+            call(drv.SEL_BUY_EGIFT_BTN),
+            call(drv.SEL_BUY_EGIFT_BTN),
+        ])
+        self.assertEqual([c.args[0] for c in sleep_mock.call_args_list], [0.5, 1.0])
+
+    def test_navigate_to_egift_dismisses_cookie_before_each_retry(self):
+        selenium = _make_driver(current_url=URL_BASE)
+        btn_el = MagicMock()
+        cookie_el = MagicMock()
+
+        def find_elements(_method, selector):
+            clean = selector.strip()
+            if clean == "#button--accept-cookies":
+                return [cookie_el]
+            if clean == drv.SEL_BUY_EGIFT_BTN:
+                return [btn_el]
+            return []
+
+        selenium.find_elements.side_effect = find_elements
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch.object(gd, "_wait_for_egift_landing", side_effect=[None, "url_path"]), \
+             patch.object(gd, "bounding_box_click") as click, \
+             patch("time.sleep"):
+            gd.navigate_to_egift()
+
+        self.assertEqual(click.call_args_list, [
+            call(drv.SEL_COOKIE_ACCEPT),
+            call(drv.SEL_BUY_EGIFT_BTN),
+            call(drv.SEL_COOKIE_ACCEPT),
+            call(drv.SEL_BUY_EGIFT_BTN),
+        ])
+
+    def test_navigate_to_egift_dismisses_overlay_before_retry(self):
+        selenium = _make_driver(current_url=URL_BASE)
+        btn_el = MagicMock()
+        overlay_el = MagicMock()
+        overlay_selector = drv._GIVEX_FANCYBOX_CLOSE_SELECTORS[0]
+
+        def find_elements(_method, selector):
+            clean = selector.strip()
+            if clean == drv.SEL_BUY_EGIFT_BTN:
+                return [btn_el]
+            if clean == overlay_selector:
+                return [overlay_el]
+            return []
+
+        selenium.find_elements.side_effect = find_elements
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch.object(gd, "_wait_for_egift_landing", side_effect=[None, "url_path"]), \
+             patch.object(gd, "bounding_box_click") as click, \
+             patch("time.sleep"):
+            gd.navigate_to_egift()
+
+        self.assertEqual(click.call_args_list, [
+            call(overlay_selector),
+            call(drv.SEL_BUY_EGIFT_BTN),
+            call(overlay_selector),
+            call(drv.SEL_BUY_EGIFT_BTN),
+        ])
+
+    def test_navigate_to_egift_uses_validated_href_assign_fallback(self):
+        selenium = _make_driver(current_url=URL_BASE)
+        btn_el = MagicMock()
+        clear_script = self._CLEAR_SCRIPT
+
+        def find_elements(_method, selector):
+            return [btn_el] if selector.strip() == drv.SEL_BUY_EGIFT_BTN else []
+
+        def execute_script(script, *args):
+            if script == clear_script:
+                return None
+            if "document.querySelector" in script and args == (drv.SEL_BUY_EGIFT_BTN,):
+                return URL_EGIFT
+            return None
+
+        selenium.find_elements.side_effect = find_elements
+        selenium.execute_script.side_effect = execute_script
+        gd = GivexDriver(selenium, strict=False)
+
+        with patch.object(
+            gd, "_wait_for_egift_landing", side_effect=[None, None, None, "url_path"]
+        ), patch.object(gd, "bounding_box_click"), patch("time.sleep"):
+            gd.navigate_to_egift()
+
+        assign_calls = [
+            c for c in selenium.execute_script.call_args_list
+            if c.args and c.args[0] == "window.location.assign(arguments[0]);"
+        ]
+        self.assertEqual(len(assign_calls), 1)
+        self.assertEqual(assign_calls[0].args[1], URL_EGIFT)
+        selenium.get.assert_called_once_with(URL_BASE)
+
+    def test_navigate_to_egift_rejects_cross_origin_fallback_href(self):
+        selenium = _make_driver(current_url=URL_BASE + "?email=secret@example.com")
+        btn_el = MagicMock()
+        clear_script = self._CLEAR_SCRIPT
+
+        def find_elements(_method, selector):
+            return [btn_el] if selector.strip() == drv.SEL_BUY_EGIFT_BTN else []
+
+        def execute_script(script, *args):
+            if script == clear_script:
+                return None
+            if "document.querySelector" in script and args == (drv.SEL_BUY_EGIFT_BTN,):
+                return "https://evil.example/e-gifts/"
+            return None
+
+        selenium.find_elements.side_effect = find_elements
+        selenium.execute_script.side_effect = execute_script
+        gd = GivexDriver(selenium, strict=False)
+
+        with self.assertRaises(PageStateError) as ctx:
+            with patch.object(gd, "_wait_for_egift_landing", return_value=None), \
+                 patch.object(gd, "bounding_box_click"), patch("time.sleep"):
+                gd.navigate_to_egift()
+
+        self.assertNotIn("secret@example.com", str(ctx.exception))
+        self.assertNotIn("?email=", str(ctx.exception))
+        self.assertFalse(any(
+            c.args and c.args[0] == "window.location.assign(arguments[0]);"
+            for c in selenium.execute_script.call_args_list
+        ))
+
     def test_navigate_to_egift_clears_browser_state_once(self):
         """localStorage/sessionStorage clear and delete_all_cookies called exactly once."""
         selenium = _make_driver(current_url=URL_EGIFT)
