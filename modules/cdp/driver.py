@@ -446,7 +446,6 @@ SEL_COOKIE_ACCEPT = "#button--accept-cookies"
 SEL_BUY_EGIFT_BTN = "#cardForeground > div > div.bannerButtons.clearfix > div.bannerBtn.btn1.displaySectionYes > a"
 _EGIFT_NAV_MAX_CLICK_ATTEMPTS = 3
 _EGIFT_NAV_BACKOFF_BASE_S = 0.5
-_EGIFT_NAV_BACKOFF_MULTIPLIER = 2
 _EGIFT_NAV_WAIT_AFTER_CLICK_S = 4.0
 _EGIFT_NAV_FORBIDDEN_PATH_PARTS = (
     "/shopping-cart",
@@ -3744,12 +3743,17 @@ class GivexDriver:
             ("overlay", (*_GIVEX_FANCYBOX_CLOSE_SELECTORS, SEL_POPUP_CLOSE_BTN)),
         ):
             hit = False
+            buy_ids = set()
+            if kind == "overlay":
+                try:
+                    buy_ids = {id(e) for e in self.find_elements(SEL_BUY_EGIFT_BTN)}
+                except Exception:  # pylint: disable=broad-except
+                    buy_ids = set()
             for selector in selectors:
                 try:
                     elements = self.find_elements(selector)
-                    buy_elements = self.find_elements(SEL_BUY_EGIFT_BTN) if kind == "overlay" else []
-                    if kind == "overlay":
-                        elements = [e for e in elements if not any(e is b for b in buy_elements)]
+                    if buy_ids:
+                        elements = [e for e in elements if id(e) not in buy_ids]
                     if not elements:
                         continue
                     hit = True
@@ -3845,9 +3849,7 @@ class GivexDriver:
                 return
             _log.info("navigate_to_egift: click attempt=%d landing predicate=none", attempt)
             if attempt < _EGIFT_NAV_MAX_CLICK_ATTEMPTS:
-                delay = _EGIFT_NAV_BACKOFF_BASE_S * (
-                    _EGIFT_NAV_BACKOFF_MULTIPLIER ** (attempt - 1)
-                )
+                delay = _EGIFT_NAV_BACKOFF_BASE_S * (2 ** (attempt - 1))
                 _log.info("navigate_to_egift: retry backoff_s=%.2f attempt=%d", delay, attempt)
                 time.sleep(delay)
 
