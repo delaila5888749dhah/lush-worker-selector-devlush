@@ -200,6 +200,20 @@ class ParseLineEmailValidationTests(unittest.TestCase):
         self.assertEqual(task.recipient_email, "nguyenvana@yahoo.com")
         self.assertEqual(task.amount, 100)
 
+    def test_parse_maps_task_and_card_fields_explicitly(self):
+        line = "email@example.com|23|4111111111111111|07|2028|123"
+        _, task = self._load_one(line)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.recipient_email, "email@example.com")
+        self.assertEqual(task.amount, 23)
+        self.assertEqual(task.primary_card.card_number, "4111111111111111")
+        self.assertEqual(task.primary_card.exp_month, "07")
+        self.assertEqual(task.primary_card.exp_year, "2028")
+        self.assertEqual(task.primary_card.cvv, "123")
+        self.assertEqual(task.primary_card.card_name, "")
+        self.assertFalse(hasattr(task, "recipient_name"))
+        self.assertFalse(hasattr(task, "sender_name"))
+
     def test_parse_rejects_consecutive_dots_in_domain(self):
         line = "a@b..com|100|4111111111111111|07|27|123"
         with self.assertLogs("integration.task_loader", level="WARNING") as cm:

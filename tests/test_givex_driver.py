@@ -422,6 +422,63 @@ class TestFillEgiftForm(unittest.TestCase):
         self.assertEqual(len(sender_calls), 1)
         self.assertEqual(sender_calls[0].args[1], "Jane Doe")
 
+    def test_fill_egift_form_uses_billing_profile_full_name_for_egift_names(self):
+        selenium = _make_driver()
+        task = _make_task()
+        billing = BillingProfile(
+            first_name="John",
+            last_name="Smith",
+            address="123 Main St",
+            city="Portland",
+            state="OR",
+            zip_code="97201",
+            phone="5035550100",
+            email="john@example.com",
+            country="US",
+        )
+        gd = GivexDriver(selenium)
+        with patch.object(drv, "_random_greeting", return_value="Hi"), \
+             patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch.object(gd, "_field_value_length", return_value=10), \
+             patch.object(gd, "_field_value", return_value=task.recipient_email):
+            gd.fill_egift_form(task, billing)
+        recipient_calls = [c for c in mock_type.call_args_list if c.args[0] == SEL_RECIPIENT_NAME]
+        sender_calls = [c for c in mock_type.call_args_list if c.args[0] == SEL_SENDER_NAME]
+        self.assertEqual(recipient_calls[0].args[1], "John Smith")
+        self.assertEqual(sender_calls[0].args[1], "John Smith")
+
+    def test_fill_egift_form_rejects_card_like_egift_name_before_typing_names(self):
+        selenium = _make_driver()
+        task = _make_task()
+        billing = BillingProfile(
+            first_name="4111111111111111",
+            last_name="07",
+            address="123 Main St",
+            city="Portland",
+            state="OR",
+            zip_code="97201",
+            phone="5035550100",
+            email="jane@example.com",
+            country="US",
+        )
+        gd = GivexDriver(selenium)
+        with patch.object(gd, "_realistic_type_field") as mock_type, \
+             patch("modules.cdp.driver._type_value") as mock_type_value, \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs, \
+             self.assertRaises(SessionFlaggedError) as ctx:
+            gd.fill_egift_form(task, billing)
+
+        self.assertIn("DataContractError", str(ctx.exception))
+        self.assertFalse(any(c.args[0] == SEL_RECIPIENT_NAME for c in mock_type.call_args_list))
+        self.assertFalse(any(c.args[0] == SEL_SENDER_NAME for c in mock_type.call_args_list))
+        mock_type_value.assert_not_called()
+        joined = "\n".join(logs.output)
+        self.assertIn("source=billing_profile.full_name", joined)
+        self.assertIn("card_like=true", joined)
+        self.assertNotIn("4111111111111111", joined)
+        self.assertNotIn("123", joined)
+        self.assertNotIn("recipient@example.com", joined)
+
     def test_fill_egift_form_uses_type_value_not_send_keys(self):
         """fill_egift_form dispatches via _type_value, never via send_keys."""
         selenium = _make_driver()
