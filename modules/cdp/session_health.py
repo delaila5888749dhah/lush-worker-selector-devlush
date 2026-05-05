@@ -23,7 +23,7 @@ def classify_session_loss(exc_or_text) -> str | None:
 
 
 def is_session_dead(driver, exc_or_text=None) -> bool:
-    """Return True when *driver* or *exc_or_text* indicates a dead session."""
+    """Return True when the driver or exception text indicates a dead session."""
     if exc_or_text is not None and classify_session_loss(exc_or_text):
         return True
     try:

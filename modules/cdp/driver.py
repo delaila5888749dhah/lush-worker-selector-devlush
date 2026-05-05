@@ -100,7 +100,7 @@ _DEAD_SESSION_CLEANUP_LOG_LOCK = threading.Lock()
 _DEAD_SESSION_CLEANUP_LOGGED: set[str] = set()
 
 
-def _get_dead_session_reason(driver: object, exc_or_text: object | None = None) -> str | None:
+def _classify_dead_session(driver: object, exc_or_text: object | None = None) -> str | None:
     if _is_session_dead is None:
         return None
     if not _is_session_dead(driver, exc_or_text):
@@ -3464,7 +3464,7 @@ class GivexDriver:
         ``lushusa.com``), closing the cross-origin gap surfaced by audit
         finding [B3] (Blueprint §7 end-of-cycle hard-reset).
         """
-        reason = _get_dead_session_reason(self._driver)
+        reason = _classify_dead_session(self._driver)
         if reason is not None:
             _log_cleanup_session_dead_once(reason)
             return
@@ -3474,7 +3474,7 @@ class GivexDriver:
                 "window.sessionStorage.clear();"
             )
         except Exception as exc:  # pylint: disable=broad-except
-            reason = _get_dead_session_reason(self._driver, exc)
+            reason = _classify_dead_session(self._driver, exc)
             if reason is not None:
                 _log_cleanup_session_dead_once(reason)
                 return
@@ -3482,7 +3482,7 @@ class GivexDriver:
         try:
             self._driver.delete_all_cookies()
         except Exception as exc:  # pylint: disable=broad-except
-            reason = _get_dead_session_reason(self._driver, exc)
+            reason = _classify_dead_session(self._driver, exc)
             if reason is not None:
                 _log_cleanup_session_dead_once(reason)
                 return
@@ -3495,7 +3495,7 @@ class GivexDriver:
         try:
             self._driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
         except Exception as exc:  # pylint: disable=broad-except
-            reason = _get_dead_session_reason(self._driver, exc)
+            reason = _classify_dead_session(self._driver, exc)
             if reason is not None:
                 _log_cleanup_session_dead_once(reason)
                 return
@@ -3511,7 +3511,7 @@ class GivexDriver:
         try:
             self._driver.execute_cdp_cmd("Network.clearBrowserCache", {})
         except Exception as exc:  # pylint: disable=broad-except
-            reason = _get_dead_session_reason(self._driver, exc)
+            reason = _classify_dead_session(self._driver, exc)
             if reason is not None:
                 _log_cleanup_session_dead_once(reason)
                 return
