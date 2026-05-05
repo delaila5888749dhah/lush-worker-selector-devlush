@@ -469,6 +469,14 @@ _SELECTOR_NAMES = dict(
         (SEL_GUEST_EMAIL, "SEL_GUEST_EMAIL"),
     )
 )
+_EGIFT_FORM_SELECTORS = {
+    SEL_GREETING_MSG,
+    SEL_AMOUNT_INPUT,
+    SEL_RECIPIENT_NAME,
+    SEL_RECIPIENT_EMAIL,
+    SEL_CONFIRM_RECIPIENT_EMAIL,
+    SEL_SENDER_NAME,
+}
 _SELECTOR_LOG_NAMES: dict[str, str] = {}
 
 
@@ -2660,7 +2668,14 @@ class GivexDriver:
             self._human_scroll_to(sel)
             self._wait_scroll_stable()
             self._engine_aware_sleep(0.08, 0.20, "pre_focus_pause")
-            els = [self._focus_and_requery_field(sel, selector_name)]
+            if sel in _EGIFT_FORM_SELECTORS:
+                els = [self._focus_and_requery_field(sel, selector_name)]
+            else:
+                self.bounding_box_click(sel)
+                self._engine_aware_sleep(0.08, 0.25, "post_focus_pause")
+                els = self.find_elements(sel)
+                if not els:
+                    raise SelectorTimeoutError(sel, 0)
         if _type_value is None:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
