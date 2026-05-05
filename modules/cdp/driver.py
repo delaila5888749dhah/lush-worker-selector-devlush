@@ -460,10 +460,14 @@ SEL_CONFIRM_RECIPIENT_EMAIL = "#cws_txt_confRecipEmail"
 SEL_SENDER_NAME            = "#cws_txt_gcBuyFrom"
 SEL_ADD_TO_CART            = "#cws_btn_gcBuyAdd > span"
 SEL_REVIEW_CHECKOUT        = "#cws_btn_gcBuyCheckout"
+# PAN-like sequences may be separated by spaces/dashes as users often write cards.
 _EGIFT_NAME_PAN_LIKE_RE = re.compile(r"\d(?:[ -]?\d){11,18}")
+# PAN-like sequence followed by an expiration-looking month/year token.
 _EGIFT_NAME_CARD_EXP_RE = re.compile(
     r"\d(?:[ -]?\d){11,18}\s+(?:0?[1-9]|1[0-2]|\d{2}|\d{4})\b"
 )
+# Human billing names should not need more than suffix-style digits (e.g. "2").
+_MAX_DIGITS_IN_EGIFT_NAME = 2
 
 # ── Cart & Guest Checkout (Step 2) ───────────────────────────────────────────
 SEL_BEGIN_CHECKOUT = "#cws_btn_cartCheckout"
@@ -509,7 +513,7 @@ def _egift_name_stats(value: str) -> dict[str, int | bool]:
     card_like = bool(
         _EGIFT_NAME_PAN_LIKE_RE.search(stripped)
         or _EGIFT_NAME_CARD_EXP_RE.search(stripped)
-        or digit_count > 2
+        or digit_count > _MAX_DIGITS_IN_EGIFT_NAME
     )
     return {
         "value_len": len(stripped),

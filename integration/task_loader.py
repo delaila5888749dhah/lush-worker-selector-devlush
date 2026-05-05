@@ -71,7 +71,7 @@ def _make_card_from_input_fields(
 
 
 def _make_card(fields: List[str]) -> CardInfo:
-    """Validate and build a :class:`CardInfo` from the legacy field list."""
+    """Validate a historical positional card field list used by existing tests."""
     return _make_card_from_input_fields(
         card_number=fields[0],
         exp_month=fields[1],

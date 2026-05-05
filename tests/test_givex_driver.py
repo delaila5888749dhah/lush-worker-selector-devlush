@@ -364,18 +364,7 @@ class TestFillEgiftForm(unittest.TestCase):
 
     def test_fill_egift_form_types_all_fields(self):
         selenium = _make_driver()
-        task = WorkerTask(
-            recipient_email="pii-safe-log-recipient@example.com",
-            amount=50,
-            primary_card=CardInfo(
-                card_number="4111111111111111",
-                exp_month="12",
-                exp_year="2027",
-                cvv="987",
-                card_name="Jane Doe",
-            ),
-            order_queue=(),
-        )
+        task = _make_task()
         billing = _make_billing()
         full_name = f"{billing.first_name} {billing.last_name}"
 
@@ -460,7 +449,18 @@ class TestFillEgiftForm(unittest.TestCase):
 
     def test_fill_egift_form_rejects_card_like_egift_name_before_typing_names(self):
         selenium = _make_driver()
-        task = _make_task()
+        task = WorkerTask(
+            recipient_email="pii-safe-log-recipient@example.com",
+            amount=50,
+            primary_card=CardInfo(
+                card_number="4111111111111111",
+                exp_month="12",
+                exp_year="2027",
+                cvv="987",
+                card_name="Jane Doe",
+            ),
+            order_queue=(),
+        )
         billing = BillingProfile(
             first_name="4111111111111111",
             last_name="07",
