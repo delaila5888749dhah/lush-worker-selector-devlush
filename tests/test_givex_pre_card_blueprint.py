@@ -20,6 +20,13 @@ from modules.cdp.driver import (
 from modules.common.exceptions import SelectorTimeoutError, SessionFlaggedError
 from tests.test_givex_driver import _make_billing, _make_driver, _make_task
 
+READY_FOCUS = {
+    "attached": True,
+    "visible": True,
+    "unobscured": True,
+    "expected_focused": True,
+}
+
 
 class LowBoundRng:
     def uniform(self, low, high):
@@ -220,6 +227,7 @@ class FocusBeforeTypeTests(unittest.TestCase):
              patch.object(gd, "_wait_scroll_stable", side_effect=lambda: order.append("stable")), \
              patch.object(gd, "_engine_aware_sleep"), \
              patch.object(gd, "bounding_box_click", side_effect=lambda _s: order.append("click")), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(gd, "_field_value_length", return_value=20), \
              patch("modules.cdp.driver._type_value", side_effect=lambda *_a, **_k: order.append("type")), \
              patch("modules.cdp.driver.time.sleep"):
@@ -234,6 +242,7 @@ class FocusBeforeTypeTests(unittest.TestCase):
              patch.object(gd, "_wait_scroll_stable", return_value=True), \
              patch.object(gd, "_engine_aware_sleep"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(gd, "_field_value_length", return_value=2), \
              patch.object(gd, "_get_rng", return_value=random.Random(7)) as mock_rng, \
              patch("modules.cdp.driver._type_value"), \
@@ -251,6 +260,7 @@ class FieldLengthVerificationTests(unittest.TestCase):
              patch.object(gd, "_wait_scroll_stable", return_value=True), \
              patch.object(gd, "_engine_aware_sleep"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(gd, "_field_value_length", return_value=actual_len), \
              patch.object(gd, "_capture_failure_screenshot"), \
              patch("modules.cdp.driver._type_value"), \
@@ -290,6 +300,7 @@ class FieldLengthVerificationTests(unittest.TestCase):
              patch.object(gd, "_wait_scroll_stable", return_value=True), \
              patch.object(gd, "_engine_aware_sleep"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(gd, "_field_value_length", return_value=18), \
              patch("modules.cdp.driver._type_value"), \
              patch("modules.cdp.driver.time.sleep"), \
@@ -299,6 +310,137 @@ class FieldLengthVerificationTests(unittest.TestCase):
         self.assertIn("expected_len=18 actual_len=18", text)
         self.assertNotIn("secret", text)
         self.assertNotIn("@example.com", text)
+
+
+class GreetingFocusVerifyTests(unittest.TestCase):
+    def _driver(self):
+        selenium = _make_driver()
+        selenium.find_elements.return_value = [MagicMock()]
+        return GivexDriver(selenium, strict=False)
+
+    def test_merge_typing_results_sums_numeric_counters(self):
+        merged = GivexDriver._merge_typing_results(
+            {
+                "typed_chars": 2,
+                "typos_injected": 1,
+                "corrections_made": 1,
+                "mode": "cdp_key",
+            },
+            {
+                "typed_chars": 3,
+                "typos_injected": 2,
+                "corrections_made": 2,
+                "mode": "cdp_key",
+            },
+        )
+
+        self.assertEqual(merged["typed_chars"], 5)
+        self.assertEqual(merged["typos_injected"], 3)
+        self.assertEqual(merged["corrections_made"], 3)
+
+    def test_requeries_after_focus_for_react_rerender(self):
+        selenium = _make_driver()
+        old_el = MagicMock(name="old")
+        new_el = MagicMock(name="new")
+        selenium.find_elements.side_effect = [[old_el], [new_el], [new_el]]
+        gd = GivexDriver(selenium, strict=False)
+        typed_elements = []
+
+        def capture_type(_driver, element, value, _rng, **_kwargs):
+            typed_elements.append((element, value))
+            return {"typed_chars": len(value), "mode": "cdp_key"}
+
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable", return_value=True), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
+             patch.object(gd, "_field_value_length", side_effect=[2, 5]), \
+             patch("modules.cdp.driver._type_value", side_effect=capture_type), \
+             patch("modules.cdp.driver.time.sleep"):
+            gd._realistic_type_field(SEL_GREETING_MSG, "Hello")
+
+        self.assertIs(typed_elements[0][0], new_el)
+        self.assertNotIn(old_el, [element for element, _value in typed_elements])
+
+    def test_prefix_then_suffix_typing_and_final_verify(self):
+        gd = self._driver()
+        typed_values = []
+
+        def capture_type(_driver, _element, value, _rng, **kwargs):
+            typed_values.append((value, kwargs.get("clear_first", True)))
+            return {"typed_chars": len(value), "mode": "cdp_key"}
+
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable", return_value=True), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
+             patch.object(gd, "_field_value_length", side_effect=[2, 5]), \
+             patch("modules.cdp.driver._type_value", side_effect=capture_type), \
+             patch("modules.cdp.driver.time.sleep"):
+            gd._realistic_type_field(SEL_GREETING_MSG, "Hello")
+
+        self.assertEqual(typed_values, [("He", True), ("llo", False)])
+
+    def test_replays_once_when_prefix_leaves_zero_length(self):
+        gd = self._driver()
+        typed_values = []
+
+        def capture_type(_driver, _element, value, _rng, **kwargs):
+            typed_values.append((value, kwargs.get("clear_first", True)))
+            return {"typed_chars": len(value), "mode": "cdp_key"}
+
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable", return_value=True), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value=READY_FOCUS), \
+             patch.object(gd, "_field_value_length", side_effect=[0, 5]), \
+             patch("modules.cdp.driver._type_value", side_effect=capture_type), \
+             patch("modules.cdp.driver.time.sleep"):
+            gd._realistic_type_field(SEL_GREETING_MSG, "Hello")
+
+        self.assertEqual(typed_values, [("He", True), ("Hello", True)])
+
+    def test_lost_focus_is_refocused_before_typing(self):
+        gd = self._driver()
+        diags = [
+            {**READY_FOCUS, "expected_focused": False},
+            READY_FOCUS,
+        ]
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable", return_value=True), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "bounding_box_click") as click, \
+             patch.object(gd, "_field_focus_diagnostics", side_effect=diags), \
+             patch.object(gd, "_field_value_length", side_effect=[2, 5]), \
+             patch("modules.cdp.driver._type_value"), \
+             patch("modules.cdp.driver.time.sleep"):
+            gd._realistic_type_field(SEL_GREETING_MSG, "Hello")
+        self.assertEqual(click.call_count, 2)
+
+    def test_overlay_occlusion_diagnostics_are_pii_safe(self):
+        gd = self._driver()
+        diags = [
+            {**READY_FOCUS, "unobscured": False},
+            READY_FOCUS,
+        ]
+        secret = "Secret greeting"
+        with patch.object(gd, "_human_scroll_to"), \
+             patch.object(gd, "_wait_scroll_stable", return_value=True), \
+             patch.object(gd, "_engine_aware_sleep"), \
+             patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", side_effect=diags), \
+             patch.object(gd, "_field_value_length", side_effect=[2, len(secret)]), \
+             patch("modules.cdp.driver._type_value"), \
+             patch("modules.cdp.driver.time.sleep"), \
+             self.assertLogs("modules.cdp.driver", level="INFO") as logs:
+            gd._realistic_type_field(SEL_GREETING_MSG, secret)
+        text = "\n".join(logs.output)
+        self.assertIn("field=SEL_GREETING_MSG", text)
+        self.assertIn("expected_len=15 actual_len=15", text)
+        self.assertNotIn(secret, text)
 
 
 class FillEgiftFormFinalValidationTests(unittest.TestCase):

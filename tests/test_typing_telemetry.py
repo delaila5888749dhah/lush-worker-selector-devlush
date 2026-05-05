@@ -3,6 +3,13 @@ from unittest.mock import MagicMock, patch
 
 from modules.cdp.driver import GivexDriver, SEL_BILLING_ZIP, SEL_GUEST_EMAIL
 
+READY_FOCUS = {
+    "attached": True,
+    "visible": True,
+    "unobscured": True,
+    "expected_focused": True,
+}
+
 
 def _make_driver():
     driver = MagicMock()
@@ -24,6 +31,7 @@ class TestTypingTelemetry(unittest.TestCase):
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
              patch.object(givex, "_engine_aware_sleep"), \
+             patch.object(givex, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(givex, "_field_value_length", return_value=5), \
              patch("modules.cdp.driver._type_value", return_value=typed), \
              patch("time.monotonic_ns", side_effect=[1_000_000_000, 1_187_600_000]), \
@@ -58,6 +66,7 @@ class TestTypingTelemetry(unittest.TestCase):
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
              patch.object(givex, "_engine_aware_sleep"), \
+             patch.object(givex, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(givex, "_field_value_length", return_value=len(raw_value)), \
              patch("modules.cdp.driver._type_value", return_value=typed), \
              patch("time.monotonic_ns", side_effect=[2_000_000_000, 2_025_000_000]), \
@@ -77,6 +86,7 @@ class TestTypingTelemetry(unittest.TestCase):
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
              patch.object(givex, "_engine_aware_sleep"), \
+             patch.object(givex, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(givex, "_field_value_length", return_value=5), \
              patch.object(givex, "_send_keys_fallback"), \
              patch("modules.cdp.driver._type_value", None), \
@@ -101,6 +111,7 @@ class TestTypingTelemetry(unittest.TestCase):
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
              patch.object(givex, "_engine_aware_sleep"), \
+             patch.object(givex, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(givex, "_verify_field_value_length", return_value=MagicMock()), \
              patch("modules.cdp.driver._type_value", return_value=MagicMock()), \
              patch("time.monotonic_ns", side_effect=[4_000_000_000, 4_001_000_000]), \
@@ -143,6 +154,7 @@ class TestTypingTelemetry(unittest.TestCase):
              patch.object(givex, "_wait_scroll_stable"), \
              patch.object(givex, "bounding_box_click"), \
              patch.object(givex, "_engine_aware_sleep", side_effect=disable_delay_permission), \
+             patch.object(givex, "_field_focus_diagnostics", return_value=READY_FOCUS), \
              patch.object(givex, "_field_value_length", return_value=5), \
              patch("modules.cdp.driver._type_value", side_effect=capture_type_value), \
              patch("time.monotonic_ns", side_effect=[5_000_000_000, 5_001_000_000]), \

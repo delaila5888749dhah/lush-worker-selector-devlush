@@ -83,6 +83,13 @@ class TestTypeValueBasic(unittest.TestCase):
             type_value(drv, el, "x", _rnd(), typo_rate=0.0)
         el.clear.assert_called_once()
 
+    def test_clear_can_be_skipped_for_suffix_typing(self):
+        drv = _mock_driver()
+        el = MagicMock()
+        with patch("time.sleep"):
+            type_value(drv, el, "x", _rnd(), typo_rate=0.0, clear_first=False)
+        el.clear.assert_not_called()
+
     def test_no_typos_when_typo_rate_zero(self):
         drv = _mock_driver()
         el = MagicMock()

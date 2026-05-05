@@ -432,6 +432,12 @@ class TestFillEgiftForm(unittest.TestCase):
         with patch.object(drv, "_random_greeting", return_value="Hi"), \
              patch.object(gd, "_human_scroll_to"), \
              patch.object(gd, "bounding_box_click"), \
+             patch.object(gd, "_field_focus_diagnostics", return_value={
+                 "attached": True,
+                 "visible": True,
+                 "unobscured": True,
+                 "expected_focused": True,
+             }), \
              patch.object(gd, "_field_value_length", return_value=100), \
              patch.object(gd, "_field_value", return_value="recipient@example.com"), \
              patch("modules.cdp.driver._type_value") as mock_tv, \
