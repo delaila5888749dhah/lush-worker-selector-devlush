@@ -1720,12 +1720,13 @@ class TestNavigateToEgift(unittest.TestCase):
     def test_navigate_to_egift_uses_validated_href_assign_fallback(self):
         selenium = _make_driver(current_url=URL_BASE)
         btn_el = MagicMock()
+        clear_script = self._CLEAR_SCRIPT
 
         def find_elements(_method, selector):
             return [btn_el] if selector.strip() == drv.SEL_BUY_EGIFT_BTN else []
 
         def execute_script(script, *args):
-            if script == self._CLEAR_SCRIPT:
+            if script == clear_script:
                 return None
             if "document.querySelector" in script and args == (drv.SEL_BUY_EGIFT_BTN,):
                 return URL_EGIFT
@@ -1751,12 +1752,13 @@ class TestNavigateToEgift(unittest.TestCase):
     def test_navigate_to_egift_rejects_cross_origin_fallback_href(self):
         selenium = _make_driver(current_url=URL_BASE + "?email=secret@example.com")
         btn_el = MagicMock()
+        clear_script = self._CLEAR_SCRIPT
 
         def find_elements(_method, selector):
             return [btn_el] if selector.strip() == drv.SEL_BUY_EGIFT_BTN else []
 
         def execute_script(script, *args):
-            if script == self._CLEAR_SCRIPT:
+            if script == clear_script:
                 return None
             if "document.querySelector" in script and args == (drv.SEL_BUY_EGIFT_BTN,):
                 return "https://evil.example/e-gifts/"
