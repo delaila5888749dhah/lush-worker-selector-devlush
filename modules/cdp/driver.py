@@ -2272,6 +2272,90 @@ class GivexDriver:
         except Exception:  # pylint: disable=broad-except
             return None
 
+    def _field_focus_diagnostics(self, selector: str, selector_name: str) -> dict[str, bool]:
+        js = """
+        const el = document.querySelector(arguments[0]);
+        const base = {
+            attached: Boolean(el && document.contains(el)),
+            visible: false,
+            unobscured: false,
+            expected_focused: false
+        };
+        if (!el) return base;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        base.visible = rect.width > 0 && rect.height > 0 &&
+            style.display !== "none" && style.visibility !== "hidden" &&
+            style.pointerEvents !== "none";
+        base.expected_focused = document.activeElement === el;
+        if (base.visible) {
+            const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
+            const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+            const top = document.elementFromPoint(x, y);
+            base.unobscured = top === el || Boolean(top && el.contains(top));
+        }
+        return base;
+        """
+        data: dict[str, bool] = {}
+        try:
+            raw = self._driver.execute_script(js, selector)
+            if isinstance(raw, dict):
+                data = {
+                    "attached": bool(raw.get("attached")),
+                    "visible": bool(raw.get("visible")),
+                    "unobscured": bool(raw.get("unobscured")),
+                    "expected_focused": bool(raw.get("expected_focused")),
+                }
+        except Exception:  # pylint: disable=broad-except
+            _log.debug("_field_focus_diagnostics: JS probe failed for %s", selector_name, exc_info=True)
+        if not data:
+            data = {
+                "attached": False,
+                "visible": False,
+                "unobscured": False,
+                "expected_focused": False,
+            }
+        _log.info(
+            "_realistic_type_field_focus "
+            "field=%s attached=%s visible=%s unobscured=%s expected_focused=%s",
+            selector_name,
+            data["attached"],
+            data["visible"],
+            data["unobscured"],
+            data["expected_focused"],
+        )
+        return data
+
+    @staticmethod
+    def _field_focus_ready(diag: dict[str, bool]) -> bool:
+        return (
+            bool(diag.get("attached")) and bool(diag.get("visible")) and
+            bool(diag.get("unobscured")) and bool(diag.get("expected_focused"))
+        )
+
+    def _focus_and_requery_field(self, selector: str, selector_name: str, *, retry: bool = True):
+        self.bounding_box_click(selector)
+        self._engine_aware_sleep(0.08, 0.25, "post_focus_pause")
+        elements = self.find_elements(selector)
+        if not elements:
+            raise SelectorTimeoutError(selector, 0)
+        diag = self._field_focus_diagnostics(selector, selector_name)
+        if retry and not self._field_focus_ready(diag):
+            self._engine_aware_sleep(0.10, 0.20, "focus_retry_backoff")
+            self.bounding_box_click(selector)
+            self._engine_aware_sleep(0.16, 0.35, "post_focus_retry_pause")
+            elements = self.find_elements(selector)
+            if not elements:
+                raise SelectorTimeoutError(selector, 0)
+            diag = self._field_focus_diagnostics(selector, selector_name)
+        if not self._field_focus_ready(diag):
+            raise SessionFlaggedError(
+                f"Field {selector_name} not focused for typing "
+                f"(attached={diag.get('attached')} visible={diag.get('visible')} "
+                f"unobscured={diag.get('unobscured')} expected_focused={diag.get('expected_focused')})"
+            )
+        return elements[0]
+
     def _form_validation_diagnostics(self) -> dict:
         js = 'const known=new Map([[arguments[0],"SEL_GREETING_MSG"],[arguments[1],"SEL_AMOUNT_INPUT"],[arguments[2],"SEL_RECIPIENT_NAME"],[arguments[3],"SEL_RECIPIENT_EMAIL"],[arguments[4],"SEL_CONFIRM_RECIPIENT_EMAIL"],[arguments[5],"SEL_SENDER_NAME"]]);const sym=(el)=>{for(const [sel,name] of known.entries()){try{if(el.matches(sel))return name;}catch(e){}}return null;};const desc=(el)=>{const v=el.validity||{},value=typeof el.value==="string"?el.value:"",msg=typeof el.validationMessage==="string"?el.validationMessage:"";return {selector_name:sym(el),tag:(el.tagName||"").toLowerCase(),type:el.getAttribute("type")||"",id_len:(el.id||"").length,name_len:(el.getAttribute("name")||"").length,value_len:value.length,validity:{valid:Boolean(v.valid),valueMissing:Boolean(v.valueMissing),typeMismatch:Boolean(v.typeMismatch),patternMismatch:Boolean(v.patternMismatch),rangeUnderflow:Boolean(v.rangeUnderflow),rangeOverflow:Boolean(v.rangeOverflow),tooShort:Boolean(v.tooShort),tooLong:Boolean(v.tooLong),customError:Boolean(v.customError)},validationMessage_len:msg.length};};return {forms:Array.from(document.forms||[]).map((form)=>({checkValidity:(()=>{try{return Boolean(form.checkValidity())}catch(e){return false}})(),elements_length:(form.elements||[]).length,elements:Array.from(form.elements||[]).map(desc)}))};'
         try:
@@ -2576,8 +2660,7 @@ class GivexDriver:
             self._human_scroll_to(sel)
             self._wait_scroll_stable()
             self._engine_aware_sleep(0.08, 0.20, "pre_focus_pause")
-            self.bounding_box_click(sel)
-            self._engine_aware_sleep(0.08, 0.25, "post_focus_pause")
+            els = [self._focus_and_requery_field(sel, selector_name)]
         if _type_value is None:
             if self._strict:
                 _log.warning("_realistic_type_field: keyboard unavailable (strict)")
@@ -2654,13 +2737,63 @@ class GivexDriver:
         else:
             dl = None
         start_ns = time.monotonic_ns()
-        res = _type_value(
-            self._driver, els[0], val, self._get_rng(),
-            typo_rate=typo_prob, delays=dl, strict=self._strict,
-            field_kind=field_kind, engine=self._engine,
-        )
-        if res is None:
-            res = {}
+        def _typed(part: str, element, delays, *, clear_first: bool):
+            kwargs = {
+                "typo_rate": typo_prob,
+                "delays": delays,
+                "strict": self._strict,
+                "field_kind": field_kind,
+                "engine": self._engine,
+            }
+            if not clear_first:
+                kwargs["clear_first"] = False
+            out = _type_value(
+                self._driver, element, part, self._get_rng(),
+                **kwargs,
+            )
+            return out if isinstance(out, dict) else {}
+
+        if sel == SEL_GREETING_MSG and expected_len > 0:
+            prefix_len = min(3, max(2, expected_len if expected_len < 2 else 2))
+            prefix = val[:prefix_len]
+            suffix = val[prefix_len:]
+            prefix_delays = dl[:prefix_len] if dl else None
+            suffix_delays = dl[prefix_len:] if dl else None
+            res = _typed(prefix, els[0], prefix_delays, clear_first=True)
+            prefix_actual_len = self._field_value_length(sel)
+            _log.info(
+                "_realistic_type_field_prefix "
+                "field=%s prefix_len=%d actual_len=%d",
+                selector_name,
+                len(prefix),
+                _safe_int(prefix_actual_len),
+            )
+            if prefix_actual_len == 0:
+                _log.info(
+                    "_realistic_type_field_replay "
+                    "field=%s reason=zero_after_prefix expected_len=%d actual_len=%d",
+                    selector_name,
+                    expected_len,
+                    _safe_int(prefix_actual_len),
+                )
+                self._engine_aware_sleep(0.10, 0.20, "type_replay_backoff")
+                replay_el = self._focus_and_requery_field(sel, selector_name, retry=True)
+                replay_res = _typed(val, replay_el, dl, clear_first=True)
+                res["typed_chars"] = _safe_int(res.get("typed_chars"), 0) + _safe_int(replay_res.get("typed_chars"), 0)
+                for key, value in replay_res.items():
+                    if key not in res or key == "mode":
+                        res[key] = value
+            elif suffix:
+                fresh_els = self.find_elements(sel)
+                if not fresh_els:
+                    raise SelectorTimeoutError(sel, 0)
+                suffix_res = _typed(suffix, fresh_els[0], suffix_delays, clear_first=False)
+                res["typed_chars"] = _safe_int(res.get("typed_chars"), 0) + _safe_int(suffix_res.get("typed_chars"), 0)
+                for key, value in suffix_res.items():
+                    if key not in res or key == "mode":
+                        res[key] = value
+        else:
+            res = _typed(val, els[0], dl, clear_first=True)
         if verify_value:
             actual_len = self._verify_field_value_length(sel, expected_len, selector_name)
         else:

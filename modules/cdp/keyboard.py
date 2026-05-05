@@ -139,15 +139,16 @@ def dispatch_key(driver, key_name: str) -> bool:
         return False
 
 def type_value(driver, element, value, rnd, *, typo_rate=0.0, delays=None,
-               strict=False, field_kind="text", engine=None):
+               strict=False, field_kind="text", engine=None, clear_first=True):
     eff = min(typo_rate, _FIELD_TYPO_CAP.get(field_kind, _MAX_TYPO_RATE), _MAX_TYPO_RATE)
     res = {"typed_chars": 0, "typos_injected": 0, "corrections_made": 0, "mode": "cdp_key", "field_kind": field_kind, "eff_typo_rate": eff}
     def _sleep(d):
         if engine:
             d = engine.accumulate_delay(d) if engine.is_delay_permitted() else 0.0
         time.sleep(d)
-    try: element.clear()
-    except Exception: _log.debug("type_value: clear skipped", exc_info=True)
+    if clear_first:
+        try: element.clear()
+        except Exception: _log.debug("type_value: clear skipped", exc_info=True)
     for i, ch in enumerate(value):
         d = delays[i] if (delays and i < len(delays)) else 0.05
         if eff > 0 and rnd.random() < eff:
