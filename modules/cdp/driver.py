@@ -452,6 +452,7 @@ _EGIFT_NAV_FORBIDDEN_PATH_PARTS = (
     "/checkout",
     "/payment",
 )
+_EGIFT_EXPECTED_PATH = urllib.parse.urlsplit(URL_EGIFT).path.rstrip("/")
 
 # ── eGift form (Step 1) — URL_EGIFT ─────────────────────────────────────────
 SEL_GREETING_MSG           = "#cws_txt_gcMsg"
@@ -3710,14 +3711,12 @@ class GivexDriver:
     def _is_egift_landing_url(self, url: str) -> bool:
         try:
             target = urllib.parse.urlsplit(url or "")
-            expected = urllib.parse.urlsplit(URL_EGIFT)
         except Exception:
             return False
         path = (target.path or "").rstrip("/")
-        expected_path = (expected.path or "").rstrip("/")
         if any(part in path for part in _EGIFT_NAV_FORBIDDEN_PATH_PARTS):
             return False
-        return path == expected_path
+        return path == _EGIFT_EXPECTED_PATH
 
     def _wait_for_egift_landing(self, timeout: float = _EGIFT_NAV_WAIT_AFTER_CLICK_S) -> str | None:
         """Wait until URL or DOM proves the eGift form landing succeeded."""
