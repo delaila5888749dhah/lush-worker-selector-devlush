@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-_SENTINEL = object()
+_SESSION_ID_UNSET_SENTINEL = object()
 
 
 def classify_session_loss(exc_or_text) -> str | None:
@@ -33,7 +33,7 @@ def is_session_dead(driver, exc_or_text=None) -> bool:
         raw = vars(driver).get("_driver", driver)
     except TypeError:
         raw = driver
-    return getattr(raw, "session_id", _SENTINEL) is None
+    return getattr(raw, "session_id", _SESSION_ID_UNSET_SENTINEL) is None
 
 
 def session_alive(driver) -> bool:
