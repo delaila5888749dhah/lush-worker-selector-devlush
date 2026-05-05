@@ -2769,7 +2769,7 @@ class GivexDriver:
             return out if isinstance(out, dict) else {}
 
         if sel == SEL_GREETING_MSG and expected_len > 0:
-            prefix_len = min(3, max(2, expected_len if expected_len < 2 else 2))
+            prefix_len = 2 if expected_len >= 2 else expected_len
             prefix = val[:prefix_len]
             suffix = val[prefix_len:]
             prefix_delays = dl[:prefix_len] if dl else None
@@ -2794,10 +2794,7 @@ class GivexDriver:
                 self._engine_aware_sleep(0.10, 0.20, "type_replay_backoff")
                 replay_el = self._focus_and_requery_field(sel, selector_name, retry=True)
                 replay_res = _typed(val, replay_el, dl, clear_first=True)
-                res["typed_chars"] = _safe_int(res.get("typed_chars"), 0) + _safe_int(replay_res.get("typed_chars"), 0)
-                for key, value in replay_res.items():
-                    if key not in res or key == "mode":
-                        res[key] = value
+                res = replay_res
             elif suffix:
                 fresh_els = self.find_elements(sel)
                 if not fresh_els:

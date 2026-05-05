@@ -232,7 +232,7 @@ class FocusBeforeTypeTests(unittest.TestCase):
              patch("modules.cdp.driver._type_value", side_effect=lambda *_a, **_k: order.append("type")), \
              patch("modules.cdp.driver.time.sleep"):
             gd._realistic_type_field(SEL_RECIPIENT_EMAIL, "secret@example.com")
-        self.assertEqual(order[:4], ["scroll", "stable", "click", "type"])
+        self.assertEqual(order, ["scroll", "stable", "click", "type"])
 
     def test_realistic_type_field_calls_get_rng(self):
         selenium = _make_driver()
