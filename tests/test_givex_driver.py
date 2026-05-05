@@ -1648,6 +1648,12 @@ class TestNavigateToEgift(unittest.TestCase):
             with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
                 self.assertIsNone(gd._wait_for_egift_landing(timeout=0.01))
 
+    def test_wait_for_egift_landing_rejects_cross_origin_matching_path_without_form_dom(self):
+        bad_url = "https://not-givex.example/cws4.0/lushusa/e-gifts/"
+        gd = GivexDriver(_make_driver(current_url=bad_url), strict=False)
+        with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
+            self.assertIsNone(gd._wait_for_egift_landing(timeout=0.01))
+
     def test_navigate_to_egift_retries_with_exponential_backoff(self):
         selenium = _make_driver(current_url=URL_BASE)
         btn_el = MagicMock()

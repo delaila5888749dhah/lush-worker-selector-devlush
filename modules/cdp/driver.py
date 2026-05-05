@@ -447,12 +447,9 @@ SEL_BUY_EGIFT_BTN = "#cardForeground > div > div.bannerButtons.clearfix > div.ba
 _EGIFT_NAV_MAX_CLICK_ATTEMPTS = 3
 _EGIFT_NAV_BACKOFF_BASE_S = 0.5
 _EGIFT_NAV_WAIT_AFTER_CLICK_S = 4.0
-_EGIFT_NAV_FORBIDDEN_PATH_PARTS = (
-    "/shopping-cart",
-    "/checkout",
-    "/payment",
-)
-_EGIFT_EXPECTED_PATH = urllib.parse.urlsplit(URL_EGIFT).path.rstrip("/")
+_EGIFT_NAV_FORBIDDEN_PATH_PARTS = ("/shopping-cart", "/checkout", "/payment")
+_EGIFT_EXPECTED_URL = urllib.parse.urlsplit(URL_EGIFT)
+_EGIFT_EXPECTED_PATH = _EGIFT_EXPECTED_URL.path.rstrip("/")
 
 # ── eGift form (Step 1) — URL_EGIFT ─────────────────────────────────────────
 SEL_GREETING_MSG           = "#cws_txt_gcMsg"
@@ -3712,6 +3709,8 @@ class GivexDriver:
         try:
             target = urllib.parse.urlsplit(url or "")
         except ValueError:
+            return False
+        if target.scheme != _EGIFT_EXPECTED_URL.scheme or target.netloc != _EGIFT_EXPECTED_URL.netloc:
             return False
         path = (target.path or "").rstrip("/")
         if any(part in path for part in _EGIFT_NAV_FORBIDDEN_PATH_PARTS):
