@@ -444,7 +444,6 @@ URL_CONFIRM_HOST = "givex.com"
 # ── Navigation ───────────────────────────────────────────────────────────
 SEL_COOKIE_ACCEPT = "#button--accept-cookies"
 SEL_BUY_EGIFT_BTN = "#cardForeground > div > div.bannerButtons.clearfix > div.bannerBtn.btn1.displaySectionYes > a"
-_EGIFT_PATH_FRAGMENT = "/e-gifts/"
 _EGIFT_NAV_MAX_CLICK_ATTEMPTS = 3
 _EGIFT_NAV_BACKOFF_BASE_S = 0.5
 _EGIFT_NAV_BACKOFF_MULTIPLIER = 2
@@ -3700,19 +3699,26 @@ class GivexDriver:
 
     def _egift_form_visible(self) -> bool:
         """Return whether the eGift greeting field is visibly present."""
-        js = """
-        const el = document.querySelector(arguments[0]);
-        if (!el) return false;
-        const style = window.getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 &&
-            style.display !== "none" && style.visibility !== "hidden";
-        """
+        js = ("const el=document.querySelector(arguments[0]);if(!el)return false;"
+              "const s=getComputedStyle(el),r=el.getBoundingClientRect();"
+              "return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';")
         try:
             return bool(self._driver.execute_script(js, SEL_GREETING_MSG))
         except Exception:  # pylint: disable=broad-except
             _log.debug("navigate_to_egift: DOM visibility predicate unavailable", exc_info=True)
             return False
+
+    def _is_egift_landing_url(self, url: str) -> bool:
+        try:
+            target = urllib.parse.urlsplit(url or "")
+            expected = urllib.parse.urlsplit(URL_EGIFT)
+        except Exception:
+            return False
+        path = (target.path or "").rstrip("/")
+        expected_path = (expected.path or "").rstrip("/")
+        if any(part in path for part in _EGIFT_NAV_FORBIDDEN_PATH_PARTS):
+            return False
+        return path == expected_path
 
     def _wait_for_egift_landing(self, timeout: float = _EGIFT_NAV_WAIT_AFTER_CLICK_S) -> str | None:
         """Wait until URL or DOM proves the eGift form landing succeeded."""
@@ -3722,7 +3728,7 @@ class GivexDriver:
                 current = self._driver.current_url or ""
             except Exception:  # URL briefly unavailable during SPA transition
                 current = ""
-            if _EGIFT_PATH_FRAGMENT in current:
+            if self._is_egift_landing_url(current):
                 _log.info("navigate_to_egift: landing predicate=url_path")
                 return "url_path"
             if self._egift_form_visible():
@@ -3733,78 +3739,39 @@ class GivexDriver:
 
     def _dismiss_egift_navigation_interruptions(self, attempt: int) -> None:
         """Best-effort dismissal of overlays that can intercept Buy-eGift."""
-        dismissed = False
-        try:
-            if self.find_elements(SEL_COOKIE_ACCEPT):
-                _log.info(
-                    "navigate_to_egift: interruption=cookie_banner attempt=%d detected",
-                    attempt,
-                )
+        for kind, selectors in (
+            ("cookie_banner", (SEL_COOKIE_ACCEPT,)),
+            ("overlay", (*_GIVEX_FANCYBOX_CLOSE_SELECTORS, SEL_POPUP_CLOSE_BTN)),
+        ):
+            hit = False
+            for selector in selectors:
                 try:
-                    self.bounding_box_click(SEL_COOKIE_ACCEPT)
-                    dismissed = True
+                    elements = self.find_elements(selector)
+                    buy_elements = self.find_elements(SEL_BUY_EGIFT_BTN) if kind == "overlay" else []
+                    if kind == "overlay":
+                        elements = [e for e in elements if not any(e is b for b in buy_elements)]
+                    if not elements:
+                        continue
+                    hit = True
+                    _log.info("navigate_to_egift: interruption=%s attempt=%d detected", kind, attempt)
+                    try:
+                        self.bounding_box_click(selector)
+                        _log.info("navigate_to_egift: interruption=%s attempt=%d dismissed", kind, attempt)
+                    except Exception as exc:  # best-effort only
+                        _log.info(
+                            "navigate_to_egift: interruption=%s attempt=%d dismiss_failed reason=%s",
+                            kind, attempt, _sanitize_error(str(exc)),
+                        )
+                    break
+                except Exception as exc:  # pylint: disable=broad-except
+                    hit = True
                     _log.info(
-                        "navigate_to_egift: interruption=cookie_banner attempt=%d dismissed",
-                        attempt,
+                        "navigate_to_egift: interruption=%s attempt=%d probe_failed reason=%s",
+                        kind, attempt, _sanitize_error(str(exc)),
                     )
-                except Exception as exc:  # cookie banner is best-effort
-                    _log.info(
-                        "navigate_to_egift: interruption=cookie_banner attempt=%d dismiss_failed reason=%s",
-                        attempt,
-                        _sanitize_error(str(exc)),
-                    )
-            else:
-                _log.info(
-                    "navigate_to_egift: interruption=cookie_banner attempt=%d absent",
-                    attempt,
-                )
-        except Exception as exc:  # pylint: disable=broad-except
-            _log.info(
-                "navigate_to_egift: interruption=cookie_banner attempt=%d probe_failed reason=%s",
-                attempt,
-                _sanitize_error(str(exc)),
-            )
-
-        buy_elements = []
-        try:
-            buy_elements = self.find_elements(SEL_BUY_EGIFT_BTN)
-        except Exception:  # pylint: disable=broad-except
-            buy_elements = []
-        for selector in (*_GIVEX_FANCYBOX_CLOSE_SELECTORS, SEL_POPUP_CLOSE_BTN):
-            try:
-                elements = [
-                    elem for elem in self.find_elements(selector)
-                    if not any(elem is buy_elem for buy_elem in buy_elements)
-                ]
-                if not elements:
-                    continue
-                _log.info(
-                    "navigate_to_egift: interruption=overlay attempt=%d detected",
-                    attempt,
-                )
-                try:
-                    self.bounding_box_click(selector)
-                    dismissed = True
-                    _log.info(
-                        "navigate_to_egift: interruption=overlay attempt=%d dismissed",
-                        attempt,
-                    )
-                except Exception as exc:  # overlay dismissal is best-effort
-                    _log.info(
-                        "navigate_to_egift: interruption=overlay attempt=%d dismiss_failed reason=%s",
-                        attempt,
-                        _sanitize_error(str(exc)),
-                    )
-                break
-            except Exception as exc:  # pylint: disable=broad-except
-                _log.info(
-                    "navigate_to_egift: interruption=overlay attempt=%d probe_failed reason=%s",
-                    attempt,
-                    _sanitize_error(str(exc)),
-                )
-                break
-        if not dismissed:
-            _log.info("navigate_to_egift: interruption=overlay attempt=%d none_dismissed", attempt)
+                    break
+            if not hit:
+                _log.info("navigate_to_egift: interruption=%s attempt=%d absent", kind, attempt)
 
     def _safe_buy_egift_href(self) -> str | None:
         """Return a same-origin Buy-eGift href that stays in e-gift landing scope."""
@@ -3827,14 +3794,8 @@ class GivexDriver:
         except Exception:
             _log.info("navigate_to_egift: fallback href invalid")
             return None
-        same_origin = (
-            target.scheme == base.scheme
-            and target.netloc == base.netloc
-        )
-        path = target.path or ""
-        in_scope = _EGIFT_PATH_FRAGMENT in path and not any(
-            part in path for part in _EGIFT_NAV_FORBIDDEN_PATH_PARTS
-        )
+        same_origin = target.scheme == base.scheme and target.netloc == base.netloc
+        in_scope = self._is_egift_landing_url(href)
         if not same_origin or not in_scope:
             _log.info(
                 "navigate_to_egift: fallback href rejected same_origin=%s in_scope=%s",
@@ -3843,10 +3804,6 @@ class GivexDriver:
             )
             return None
         return urllib.parse.urlunsplit(target)
-
-    def _assign_buy_egift_href_fallback(self, href: str) -> None:
-        _log.info("navigate_to_egift: fallback=href_assign target=%s", _short_url(href))
-        self._driver.execute_script("window.location.assign(arguments[0]);", href)
 
     def navigate_to_egift(self) -> None:
         """Navigate to the Givex base URL and open the eGift purchase page."""
@@ -3897,7 +3854,8 @@ class GivexDriver:
         href = self._safe_buy_egift_href()
         if href:
             _log.info("navigate_to_egift: fallback attempt=1")
-            self._assign_buy_egift_href_fallback(href)
+            _log.info("navigate_to_egift: fallback=href_assign target=%s", _short_url(href))
+            self._driver.execute_script("window.location.assign(arguments[0]);", href)
             last_predicate = self._wait_for_egift_landing()
             if last_predicate:
                 _log.info("navigate_to_egift: completed via fallback predicate=%s", last_predicate)

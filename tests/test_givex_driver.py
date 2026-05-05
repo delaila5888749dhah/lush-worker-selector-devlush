@@ -1636,6 +1636,18 @@ class TestNavigateToEgift(unittest.TestCase):
         selenium.get.assert_called_once_with(URL_BASE)
         click.assert_called_once_with(drv.SEL_BUY_EGIFT_BTN)
 
+    def test_wait_for_egift_landing_accepts_valid_url(self):
+        gd = GivexDriver(_make_driver(current_url=URL_EGIFT), strict=False)
+        with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
+            self.assertEqual(gd._wait_for_egift_landing(timeout=0.01), "url_path")
+
+    def test_wait_for_egift_landing_rejects_cart_checkout_payment_urls_without_form_dom(self):
+        gd = GivexDriver(_make_driver(current_url=URL_CART), strict=False)
+        for bad_url in (URL_CART, URL_CHECKOUT, URL_PAYMENT):
+            gd._driver.current_url = bad_url
+            with patch.object(gd, "_egift_form_visible", return_value=False), patch("time.sleep"):
+                self.assertIsNone(gd._wait_for_egift_landing(timeout=0.01))
+
     def test_navigate_to_egift_retries_with_exponential_backoff(self):
         selenium = _make_driver(current_url=URL_BASE)
         btn_el = MagicMock()
