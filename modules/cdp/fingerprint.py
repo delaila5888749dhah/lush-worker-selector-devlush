@@ -1,6 +1,7 @@
 """BitBrowser client utilities for per-worker fingerprint lifecycle."""
 # pylint: disable=duplicate-code
 
+import hashlib
 import json
 import logging
 import os
@@ -14,6 +15,12 @@ from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
 _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+_BITBROWSER_POOL_CLIENTS_LOCK = threading.Lock()
+_BITBROWSER_POOL_CLIENTS: Dict[
+    Tuple[str, str, Tuple[str, ...], str],
+    "BitBrowserPoolClient",
+] = {}
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,34 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _bitbrowser_pool_cache_key(
+    endpoint: str,
+    api_key: Optional[str],
+    profile_ids: List[str],
+    pool_mode: str,
+) -> Tuple[str, str, Tuple[str, ...], str]:
+    normalized = set()
+    for pid in profile_ids:
+        if not pid:
+            continue
+        stripped = pid.strip()
+        if stripped:
+            normalized.add(stripped)
+    normalized_ids = tuple(sorted(normalized))
+    api_key_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        (api_key or "").encode("utf-8"),
+        b"bitbrowser-pool-cache-key",
+        100_000,
+    ).hex()[:32]
+    return (
+        endpoint.rstrip("/"),
+        api_key_hash,
+        normalized_ids,
+        pool_mode.strip().lower(),
+    )
 
 
 def _validate_endpoint_scheme(endpoint: str) -> None:
@@ -456,13 +491,25 @@ def get_bitbrowser_client() -> Optional[BitBrowserClient]:
                 "BITBROWSER_POOL_MODE=1 but BITBROWSER_PROFILE_IDS is empty. "
                 "Add a CSV of profile IDs to .env (Blueprint §2.1)."
             )
-        # Dedupe + size validation are enforced inside BitBrowserPoolClient
-        # __init__ so direct callers get the same guarantees.
-        return BitBrowserPoolClient(
+        cache_key = _bitbrowser_pool_cache_key(
             endpoint=endpoint,
             api_key=api_key,
             profile_ids=raw_ids,
+            pool_mode=pool_mode,
         )
+        with _BITBROWSER_POOL_CLIENTS_LOCK:
+            pool_client = _BITBROWSER_POOL_CLIENTS.get(cache_key)
+            if pool_client is None:
+                # Dedupe + size validation are enforced inside
+                # BitBrowserPoolClient.__init__ so direct callers get the same
+                # guarantees.
+                pool_client = BitBrowserPoolClient(
+                    endpoint=endpoint,
+                    api_key=api_key,
+                    profile_ids=raw_ids,
+                )
+                _BITBROWSER_POOL_CLIENTS[cache_key] = pool_client
+            return pool_client
     client = BitBrowserClient(endpoint=endpoint, api_key=api_key)
     if not client.is_available():
         return None
