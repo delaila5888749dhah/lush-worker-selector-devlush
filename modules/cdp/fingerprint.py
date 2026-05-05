@@ -81,10 +81,12 @@ def _bitbrowser_pool_cache_key(
         if stripped:
             normalized.add(stripped)
     normalized_ids = tuple(sorted(normalized))
-    # lgtm [py/weak-sensitive-data-hashing] Cache partitioning only; not password storage.
-    api_key_hash = hashlib.sha256(
-        (api_key or "").encode("utf-8")
-    ).hexdigest()[:32]
+    api_key_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        (api_key or "").encode("utf-8"),
+        b"bitbrowser-pool-cache-key",
+        100_000,
+    ).hex()[:32]
     return (
         endpoint.rstrip("/"),
         api_key_hash,
