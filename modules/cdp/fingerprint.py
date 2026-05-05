@@ -2,6 +2,7 @@
 # pylint: disable=duplicate-code
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -69,7 +70,7 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 def _bitbrowser_pool_cache_key(
     endpoint: str,
-    api_key: str,
+    api_key: Optional[str],
     profile_ids: List[str],
     pool_mode: str,
 ) -> Tuple[str, str, Tuple[str, ...], str]:
@@ -81,7 +82,11 @@ def _bitbrowser_pool_cache_key(
         if stripped:
             normalized.add(stripped)
     normalized_ids = tuple(sorted(normalized))
-    api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    api_key_hash = hmac.new(
+        b"bitbrowser-pool-cache-key",
+        (api_key or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
     return (
         endpoint.rstrip("/"),
         api_key_hash,
