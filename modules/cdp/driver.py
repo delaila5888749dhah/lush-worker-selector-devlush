@@ -2356,10 +2356,11 @@ class GivexDriver:
     def _merge_typing_results(first: dict, second: dict) -> dict:
         """Combine prefix/suffix typing telemetry without logging raw values."""
         merged = dict(first)
-        merged["typed_chars"] = (
-            _safe_int(first.get("typed_chars"), 0) +
-            _safe_int(second.get("typed_chars"), 0)
-        )
+        for counter in ("typed_chars", "typos_injected", "corrections_made"):
+            merged[counter] = (
+                _safe_int(first.get(counter), 0) +
+                _safe_int(second.get(counter), 0)
+            )
         for key, value in second.items():
             if key not in merged or key == "mode":
                 merged[key] = value

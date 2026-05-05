@@ -318,6 +318,26 @@ class GreetingFocusVerifyTests(unittest.TestCase):
         selenium.find_elements.return_value = [MagicMock()]
         return GivexDriver(selenium, strict=False)
 
+    def test_merge_typing_results_sums_numeric_counters(self):
+        merged = GivexDriver._merge_typing_results(
+            {
+                "typed_chars": 2,
+                "typos_injected": 1,
+                "corrections_made": 1,
+                "mode": "cdp_key",
+            },
+            {
+                "typed_chars": 3,
+                "typos_injected": 2,
+                "corrections_made": 2,
+                "mode": "cdp_key",
+            },
+        )
+
+        self.assertEqual(merged["typed_chars"], 5)
+        self.assertEqual(merged["typos_injected"], 3)
+        self.assertEqual(merged["corrections_made"], 3)
+
     def test_requeries_after_focus_for_react_rerender(self):
         selenium = _make_driver()
         old_el = MagicMock(name="old")
