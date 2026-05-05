@@ -503,6 +503,9 @@ def _egift_name_stats(value: str) -> dict[str, int | bool]:
     stripped = value.strip()
     alpha_count = sum(1 for ch in stripped if ch.isalpha())
     digit_count = sum(1 for ch in stripped if ch.isdigit())
+    alpha_part_count = sum(
+        1 for part in re.split(r"\s+", stripped) if any(ch.isalpha() for ch in part)
+    )
     card_like = bool(
         _EGIFT_NAME_PAN_LIKE_RE.search(stripped)
         or _EGIFT_NAME_CARD_EXP_RE.search(stripped)
@@ -512,6 +515,7 @@ def _egift_name_stats(value: str) -> dict[str, int | bool]:
         "value_len": len(stripped),
         "alpha_count": alpha_count,
         "digit_count": digit_count,
+        "alpha_part_count": alpha_part_count,
         "card_like": card_like,
     }
 
@@ -521,6 +525,7 @@ def _validate_egift_full_name(full_name: str) -> dict[str, int | bool]:
     malformed = (
         stats["value_len"] <= 0
         or stats["alpha_count"] <= 0
+        or stats["alpha_part_count"] < 2
         or bool(stats["card_like"])
     )
     if malformed:
