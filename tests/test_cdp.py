@@ -24,6 +24,8 @@ from modules.cdp.main import (
     force_kill,
     register_driver,
     unregister_driver,
+    register_browser_profile,
+    unregister_browser_profile,
     detect_page_state,
     fill_card,
     fill_billing,
@@ -76,6 +78,19 @@ class DriverRegistryTests(unittest.TestCase):
         register_driver("w1", driver_a)
         register_driver("w1", driver_b)
         self.assertIs(cdp._get_driver("w1"), driver_b)
+
+    def test_unregister_browser_profile_removes_entry(self):
+        register_browser_profile("w1", "profile-1")
+        self.assertEqual(cdp.get_browser_profile("w1"), "profile-1")
+        unregister_browser_profile("w1")
+        self.assertIsNone(cdp.get_browser_profile("w1"))
+
+    def test_unregister_browser_profile_is_idempotent(self):
+        unregister_browser_profile("missing")
+        register_browser_profile("w1", "profile-1")
+        unregister_browser_profile("w1")
+        unregister_browser_profile("w1")
+        self.assertIsNone(cdp.get_browser_profile("w1"))
 
 
 # ---------------------------------------------------------------------------

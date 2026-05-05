@@ -52,6 +52,15 @@ except ImportError:  # pragma: no cover - defensive; mouse.py/keyboard.py always
     _GhostCursor = None  # type: ignore[assignment,misc]
     _type_value = None  # type: ignore[assignment,misc]
 
+try:
+    from modules.cdp.session_health import (
+        classify_session_loss as _classify_session_loss,
+    )
+    from modules.cdp.session_health import is_session_dead as _is_session_dead
+except ImportError:  # pragma: no cover - defensive; session_health.py always present
+    _classify_session_loss = None  # type: ignore[assignment]
+    _is_session_dead = None  # type: ignore[assignment]
+
 from modules.common.exceptions import (
     CDPClickError,
     CDPCommandError,
@@ -87,6 +96,26 @@ _GIVEX_REVIEW_CHECKOUT_POLL_DEFAULT_S = 18.0
 _GIVEX_CART_STATE_POLL_DEFAULT_S = 18.0
 
 _log = logging.getLogger(__name__)
+_DEAD_SESSION_CLEANUP_LOG_LOCK = threading.Lock()
+_DEAD_SESSION_CLEANUP_LOGGED: set[str] = set()
+
+
+def _dead_session_reason_or_none(driver: object, exc_or_text: object | None = None) -> str | None:
+    if _classify_session_loss is not None and exc_or_text is not None:
+        reason = _classify_session_loss(exc_or_text)
+        if reason is not None:
+            return reason
+    if _is_session_dead is not None and _is_session_dead(driver):
+        return "no_session_id"
+    return None
+
+
+def _log_cleanup_session_dead_once(reason: str) -> None:
+    with _DEAD_SESSION_CLEANUP_LOG_LOCK:
+        if reason in _DEAD_SESSION_CLEANUP_LOGGED:
+            return
+        _DEAD_SESSION_CLEANUP_LOGGED.add(reason)
+    _log.debug("_clear_browser_state: skipped for dead session (%s)", reason)
 
 
 def _sanitize_url_for_log(url: str) -> str:
@@ -3434,16 +3463,28 @@ class GivexDriver:
         ``lushusa.com``), closing the cross-origin gap surfaced by audit
         finding [B3] (Blueprint §7 end-of-cycle hard-reset).
         """
+        reason = _dead_session_reason_or_none(self._driver)
+        if reason is not None:
+            _log_cleanup_session_dead_once(reason)
+            return
         try:
             self._driver.execute_script(
                 "window.localStorage.clear(); "
                 "window.sessionStorage.clear();"
             )
-        except Exception:
+        except Exception as exc:  # pylint: disable=broad-except
+            reason = _dead_session_reason_or_none(self._driver, exc)
+            if reason is not None:
+                _log_cleanup_session_dead_once(reason)
+                return
             _log.debug("_clear_browser_state: script clear skipped", exc_info=True)
         try:
             self._driver.delete_all_cookies()
-        except Exception:
+        except Exception as exc:  # pylint: disable=broad-except
+            reason = _dead_session_reason_or_none(self._driver, exc)
+            if reason is not None:
+                _log_cleanup_session_dead_once(reason)
+                return
             _log.debug(
                 "_clear_browser_state: delete_all_cookies skipped",
                 exc_info=True,
@@ -3453,6 +3494,10 @@ class GivexDriver:
         try:
             self._driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
         except Exception as exc:  # pylint: disable=broad-except
+            reason = _dead_session_reason_or_none(self._driver, exc)
+            if reason is not None:
+                _log_cleanup_session_dead_once(reason)
+                return
             _log.warning(
                 "_clear_browser_state: CDP Network.clearBrowserCookies failed: %s",
                 exc,
@@ -3465,6 +3510,10 @@ class GivexDriver:
         try:
             self._driver.execute_cdp_cmd("Network.clearBrowserCache", {})
         except Exception as exc:  # pylint: disable=broad-except
+            reason = _dead_session_reason_or_none(self._driver, exc)
+            if reason is not None:
+                _log_cleanup_session_dead_once(reason)
+                return
             _log.warning(
                 "_clear_browser_state: CDP Network.clearBrowserCache failed: %s",
                 exc,

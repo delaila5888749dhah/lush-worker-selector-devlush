@@ -124,8 +124,12 @@ class TestMakeTaskFnSuccess(unittest.TestCase):
         mock_cdp, _, _ = self._run()
         mock_cdp.unregister_driver.assert_called_once_with("worker-1")
 
+    def test_unregister_browser_profile_called_on_success(self):
+        mock_cdp, _, _ = self._run()
+        mock_cdp.unregister_browser_profile.assert_called_once_with("worker-1")
+
     def test_register_before_unregister(self):
-        """register_driver must happen before unregister_driver."""
+        """register_driver must happen before cleanup unregister calls."""
         call_order = []
         bb_client = self.bb_client
         selenium_drv = self.selenium_drv
@@ -137,6 +141,9 @@ class TestMakeTaskFnSuccess(unittest.TestCase):
 
             def unregister_driver(self, w):
                 call_order.append("unregister")
+
+            def unregister_browser_profile(self, w):
+                call_order.append("unregister_profile")
 
             def _register_pid(self, w, p):
                 call_order.append("register_pid")
@@ -162,7 +169,12 @@ class TestMakeTaskFnSuccess(unittest.TestCase):
 
         self.assertIn("register", call_order)
         self.assertIn("unregister", call_order)
+        self.assertIn("unregister_profile", call_order)
         self.assertLess(call_order.index("register"), call_order.index("unregister"))
+        self.assertLess(
+            call_order.index("unregister"),
+            call_order.index("unregister_profile"),
+        )
 
 
 class TestMakeTaskFnNoPid(unittest.TestCase):
@@ -518,6 +530,7 @@ class TestEndOfCycleHardReset(unittest.TestCase):
         givex_drv._clear_browser_state.assert_called_once()
         # Driver still unregistered, profile still released.
         mock_cdp.unregister_driver.assert_called_once_with("worker-1")
+        mock_cdp.unregister_browser_profile.assert_called_once_with("worker-1")
         bb_client.close_profile.assert_called_once_with("p1")
 
     def test_no_clear_when_givex_driver_construction_fails(self):

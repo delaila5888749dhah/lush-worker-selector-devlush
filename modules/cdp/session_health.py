@@ -3,20 +3,37 @@
 from __future__ import annotations
 
 
+_SESSION_ID_UNSET_SENTINEL = object()
+
+
 def classify_session_loss(exc_or_text) -> str | None:
     """Return normalized session-loss reason, or None for unknown errors."""
     text = str(exc_or_text).lower()
     if "invalid session id" in text:
         return "invalid_session_id"
-    if "browser has closed the connection" in text:
+    # Selenium/ChromeDriver variants include prefixes such as
+    # "invalid session id: session deleted as the browser has closed".
+    if "browser has closed" in text:
         return "browser_connection_closed"
-    if "disconnected: not connected to devtools" in text:
+    # ChromeDriver and CDP surfaces vary the prefix before this stable suffix.
+    if "not connected to devtools" in text:
         return "devtools_disconnected"
     if "target frame detached" in text:
         return "target_frame_detached"
     if "chrome-error://" in text or "err_connection_closed" in text:
         return "gateway_connection_closed"
     return None
+
+
+def is_session_dead(driver, exc_or_text=None) -> bool:
+    """Return True when the driver or exception text indicates a dead session."""
+    if exc_or_text is not None and classify_session_loss(exc_or_text):
+        return True
+    try:
+        raw = vars(driver).get("_driver", driver)
+    except TypeError:
+        raw = driver
+    return getattr(raw, "session_id", _SESSION_ID_UNSET_SENTINEL) is None
 
 
 def session_alive(driver) -> bool:
