@@ -477,6 +477,7 @@ _EGIFT_FORM_SELECTORS = {
     SEL_CONFIRM_RECIPIENT_EMAIL,
     SEL_SENDER_NAME,
 }
+_PREFIX_REPLAY_SELECTORS = {SEL_GREETING_MSG}
 _SELECTOR_LOG_NAMES: dict[str, str] = {}
 
 
@@ -2297,8 +2298,16 @@ class GivexDriver:
             style.pointerEvents !== "none";
         base.expected_focused = document.activeElement === el;
         if (base.visible) {
-            const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
-            const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+            const MIN_VIEWPORT_COORD = 0;
+            const VIEWPORT_EDGE_OFFSET = 1;
+            const x = Math.min(
+                Math.max(rect.left + rect.width / 2, MIN_VIEWPORT_COORD),
+                window.innerWidth - VIEWPORT_EDGE_OFFSET
+            );
+            const y = Math.min(
+                Math.max(rect.top + rect.height / 2, MIN_VIEWPORT_COORD),
+                window.innerHeight - VIEWPORT_EDGE_OFFSET
+            );
             const top = document.elementFromPoint(x, y);
             base.unobscured = top === el || Boolean(top && el.contains(top));
         }
@@ -2340,6 +2349,18 @@ class GivexDriver:
             bool(diag.get("attached")) and bool(diag.get("visible")) and
             bool(diag.get("unobscured")) and bool(diag.get("expected_focused"))
         )
+
+    @staticmethod
+    def _merge_typing_results(first: dict, second: dict) -> dict:
+        merged = dict(first)
+        merged["typed_chars"] = (
+            _safe_int(first.get("typed_chars"), 0) +
+            _safe_int(second.get("typed_chars"), 0)
+        )
+        for key, value in second.items():
+            if key not in merged or key == "mode":
+                merged[key] = value
+        return merged
 
     def _focus_and_requery_field(self, selector: str, selector_name: str, *, retry: bool = True):
         self.bounding_box_click(selector)
@@ -2768,7 +2789,7 @@ class GivexDriver:
             )
             return out if isinstance(out, dict) else {}
 
-        if sel == SEL_GREETING_MSG and expected_len > 0:
+        if sel in _PREFIX_REPLAY_SELECTORS and expected_len > 0:
             prefix_len = 2 if expected_len >= 2 else expected_len
             prefix = val[:prefix_len]
             suffix = val[prefix_len:]
@@ -2800,10 +2821,7 @@ class GivexDriver:
                 if not fresh_els:
                     raise SelectorTimeoutError(sel, 0)
                 suffix_res = _typed(suffix, fresh_els[0], suffix_delays, clear_first=False)
-                res["typed_chars"] = _safe_int(res.get("typed_chars"), 0) + _safe_int(suffix_res.get("typed_chars"), 0)
-                for key, value in suffix_res.items():
-                    if key not in res or key == "mode":
-                        res[key] = value
+                res = self._merge_typing_results(res, suffix_res)
         else:
             res = _typed(val, els[0], dl, clear_first=True)
         if verify_value:
