@@ -1768,10 +1768,10 @@ class TestNavigateToEgift(unittest.TestCase):
         selenium.execute_script.side_effect = execute_script
         gd = GivexDriver(selenium, strict=False)
 
-        with patch.object(gd, "_wait_for_egift_landing", return_value=None), \
-             patch.object(gd, "bounding_box_click"), patch("time.sleep"), \
-             self.assertRaises(PageStateError) as ctx:
-            gd.navigate_to_egift()
+        with self.assertRaises(PageStateError) as ctx:
+            with patch.object(gd, "_wait_for_egift_landing", return_value=None), \
+                 patch.object(gd, "bounding_box_click"), patch("time.sleep"):
+                gd.navigate_to_egift()
 
         self.assertNotIn("secret@example.com", str(ctx.exception))
         self.assertNotIn("?email=", str(ctx.exception))

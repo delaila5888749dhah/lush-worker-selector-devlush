@@ -3842,8 +3842,7 @@ class GivexDriver:
                 in_scope,
             )
             return None
-        target_parts = (target.scheme, target.netloc, target.path, target.query, target.fragment)
-        return urllib.parse.urlunsplit(target_parts)
+        return urllib.parse.urlunsplit(target)
 
     def _assign_buy_egift_href_fallback(self, href: str) -> None:
         _log.info("navigate_to_egift: fallback=href_assign target=%s", _short_url(href))
