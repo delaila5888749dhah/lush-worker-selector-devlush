@@ -524,7 +524,7 @@ def _egift_name_stats(value: str) -> dict[str, int | bool]:
     }
 
 
-def _validate_egift_full_name(full_name: str) -> dict[str, int | bool]:
+def _validate_egift_full_name(full_name: str) -> None:
     stats = _egift_name_stats(full_name)
     malformed = (
         stats["value_len"] <= 0
@@ -538,7 +538,6 @@ def _validate_egift_full_name(full_name: str) -> dict[str, int | bool]:
             f"value_len={stats['value_len']} alpha_count={stats['alpha_count']} "
             f"digit_count={stats['digit_count']} card_like={str(stats['card_like']).lower()}"
         )
-    return stats
 
 
 def _safe_int(value, default: int = -1) -> int:
