@@ -1,6 +1,7 @@
 """BitBrowser client utilities for per-worker fingerprint lifecycle."""
 # pylint: disable=duplicate-code
 
+import hashlib
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ _log = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 _BITBROWSER_POOL_CLIENTS_LOCK = threading.Lock()
 _BITBROWSER_POOL_CLIENTS: Dict[
-    Tuple[str, bool, Tuple[str, ...], str],
+    Tuple[str, str, Tuple[str, ...], str],
     "BitBrowserPoolClient",
 ] = {}
 
@@ -68,10 +69,10 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 def _bitbrowser_pool_cache_key(
     endpoint: str,
-    api_key_present: bool,
+    api_key: str,
     profile_ids: List[str],
     pool_mode: str,
-) -> Tuple[str, bool, Tuple[str, ...], str]:
+) -> Tuple[str, str, Tuple[str, ...], str]:
     normalized = set()
     for pid in profile_ids:
         if not pid:
@@ -80,9 +81,10 @@ def _bitbrowser_pool_cache_key(
         if stripped:
             normalized.add(stripped)
     normalized_ids = tuple(sorted(normalized))
+    api_key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
     return (
         endpoint.rstrip("/"),
-        api_key_present,
+        api_key_hash,
         normalized_ids,
         pool_mode.strip().lower(),
     )
@@ -486,7 +488,7 @@ def get_bitbrowser_client() -> Optional[BitBrowserClient]:
             )
         cache_key = _bitbrowser_pool_cache_key(
             endpoint=endpoint,
-            api_key_present=bool(api_key),
+            api_key=api_key,
             profile_ids=raw_ids,
             pool_mode=pool_mode,
         )

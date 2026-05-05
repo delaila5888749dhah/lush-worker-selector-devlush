@@ -55,6 +55,24 @@ class TestBitBrowserPoolSingleton(unittest.TestCase):
 
         self.assertIs(first, second)
 
+    def test_api_key_change_creates_new_pool_client(self):
+        endpoint = "http://127.0.0.1:54349"
+
+        with patch.dict(
+            os.environ,
+            self._pool_env(endpoint=endpoint, ids="p1,p2"),
+            clear=False,
+        ):
+            first = get_bitbrowser_client()
+
+        env2 = self._pool_env(endpoint=endpoint, ids="p1,p2")
+        env2["BITBROWSER_API_KEY"] = "rotated-key"
+
+        with patch.dict(os.environ, env2, clear=False):
+            second = get_bitbrowser_client()
+
+        self.assertIsNot(first, second)
+
     def test_concurrent_threads_share_client_and_acquire_different_profiles(self):
         with patch.dict(
             os.environ,
