@@ -1723,6 +1723,38 @@ class TestClearBrowserStateCdp(unittest.TestCase):
         self.assertIn("Network.clearBrowserCookies", cdp_methods)
         self.assertIn("Network.clearBrowserCache", cdp_methods)
 
+    def test_clear_browser_state_skips_dead_session_without_stack_noise(self):
+        """Known dead-session errors stop cleanup and log once per reason."""
+        with drv._DEAD_SESSION_CLEANUP_LOG_LOCK:  # pylint: disable=protected-access
+            drv._DEAD_SESSION_CLEANUP_LOGGED.clear()  # pylint: disable=protected-access
+        selenium = _make_driver()
+        selenium.execute_script.side_effect = RuntimeError("invalid session id")
+        gd = GivexDriver(selenium)
+
+        with self.assertLogs("modules.cdp.driver", level="DEBUG") as logs:
+            gd._clear_browser_state()
+            gd._clear_browser_state()
+
+        selenium.delete_all_cookies.assert_not_called()
+        selenium.execute_cdp_cmd.assert_not_called()
+        messages = [
+            msg for msg in logs.output
+            if "skipped for dead session (invalid_session_id)" in msg
+        ]
+        self.assertEqual(len(messages), 1)
+
+    def test_clear_browser_state_skips_when_session_id_already_cleared(self):
+        """A driver with no Selenium session id is considered already dead."""
+        selenium = _make_driver()
+        selenium.session_id = None
+        gd = GivexDriver(selenium)
+
+        gd._clear_browser_state()
+
+        selenium.execute_script.assert_not_called()
+        selenium.delete_all_cookies.assert_not_called()
+        selenium.execute_cdp_cmd.assert_not_called()
+
 
 class TestPreflightGeoCheck(unittest.TestCase):
     """preflight_geo_check uses URL_GEO_CHECK constant."""

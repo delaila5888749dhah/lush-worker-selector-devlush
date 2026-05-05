@@ -14,7 +14,8 @@ returned callable wires the full browser lifecycle for one work cycle:
      MaxMind/persona/run_cycle work (Blueprint §2).
   8. Resolve proxy IP → zip code via MaxMind (F-07).
   9. Execute purchase cycle via ``run_cycle`` when a task_source is wired.
-  10. On **all** exits: ``cdp.unregister_driver()`` (GAP-CDP-01).
+  10. On **all** exits: ``cdp.unregister_driver()`` and
+      ``cdp.unregister_browser_profile()`` (GAP-CDP-01).
 
 Feature flag: ``ENABLE_PRODUCTION_TASK_FN`` (default OFF) — the gate is
 enforced by the caller (``app/__main__.py``).  This module does **not** read
@@ -345,8 +346,9 @@ def make_task_fn(task_source: Optional[Callable[[str], Any]] = None) -> Callable
                         worker_id,
                         exc_info=True,
                     )
-                # Always unregister the driver to prevent registry leaks (GAP-CDP-01)
+                # Always unregister worker-scoped registry entries to prevent leaks.
                 cdp.unregister_driver(worker_id)
+                cdp.unregister_browser_profile(worker_id)
                 _clear_abort(worker_id)
 
     return task_fn

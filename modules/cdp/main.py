@@ -392,6 +392,12 @@ def register_browser_profile(worker_id: str, profile_id: str) -> None:
         _bitbrowser_registry[worker_id] = profile_id
 
 
+def unregister_browser_profile(worker_id: str) -> None:
+    """Remove the BitBrowser profile id entry for a worker."""
+    with _registry_lock:
+        _bitbrowser_registry.pop(worker_id, None)
+
+
 def detect_popup_thank_you(worker_id: str, *, patterns=None) -> bool:
     """Detect whether the current page shows a "Thank you" success confirmation.
 

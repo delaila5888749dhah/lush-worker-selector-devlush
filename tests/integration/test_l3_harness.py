@@ -822,6 +822,10 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
                 event_log.append(f"unregister:{wid}")
 
             @staticmethod
+            def unregister_browser_profile(wid):
+                event_log.append(f"unregister_profile:{wid}")
+
+            @staticmethod
             def _register_pid(wid, pid):  # pylint: disable=unused-argument
                 """No-op stub for cdp._register_pid."""
 
@@ -844,12 +848,24 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
 
         register_key = f"register:{self.worker_id}"
         unregister_key = f"unregister:{self.worker_id}"
+        unregister_profile_key = f"unregister_profile:{self.worker_id}"
         self.assertIn(register_key, event_log, "register_driver must be called")
         self.assertIn(unregister_key, event_log, "unregister_driver must be called")
+        self.assertIn(
+            unregister_profile_key,
+            event_log,
+            "unregister_browser_profile must be called",
+        )
         self.assertLess(
             event_log.index(register_key),
             event_log.index(unregister_key),
             f"register_driver must be called before unregister_driver; log: {event_log}",
+        )
+        self.assertLess(
+            event_log.index(unregister_key),
+            event_log.index(unregister_profile_key),
+            "unregister_browser_profile must be called after unregister_driver; "
+            f"log: {event_log}",
         )
 
     def test_unregister_called_on_exception_in_run_cycle(self):
@@ -867,6 +883,10 @@ class TestL3TaskFnLifecycle(unittest.TestCase):
             @staticmethod
             def unregister_driver(wid):
                 unregister_calls.append(wid)
+
+            @staticmethod
+            def unregister_browser_profile(wid):  # pylint: disable=unused-argument
+                """No-op stub for cdp.unregister_browser_profile."""
 
             @staticmethod
             def _register_pid(wid, pid):  # pylint: disable=unused-argument
