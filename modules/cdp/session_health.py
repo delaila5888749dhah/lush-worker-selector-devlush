@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 
+_SENTINEL = object()
+
+
 def classify_session_loss(exc_or_text) -> str | None:
     """Return normalized session-loss reason, or None for unknown errors."""
     text = str(exc_or_text).lower()
@@ -30,7 +33,7 @@ def is_session_dead(driver, exc_or_text=None) -> bool:
         raw = vars(driver).get("_driver", driver)
     except TypeError:
         raw = driver
-    return getattr(raw, "session_id", object()) is None
+    return getattr(raw, "session_id", _SENTINEL) is None
 
 
 def session_alive(driver) -> bool:

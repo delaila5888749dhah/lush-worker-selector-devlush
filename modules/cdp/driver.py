@@ -101,14 +101,13 @@ _DEAD_SESSION_CLEANUP_LOGGED: set[str] = set()
 
 
 def _classify_dead_session(driver: object, exc_or_text: object | None = None) -> str | None:
-    if _is_session_dead is None:
-        return None
-    if not _is_session_dead(driver, exc_or_text):
-        return None
-    if _classify_session_loss is None:
+    if _classify_session_loss is not None and exc_or_text is not None:
+        reason = _classify_session_loss(exc_or_text)
+        if reason is not None:
+            return reason
+    if _is_session_dead is not None and _is_session_dead(driver):
         return "session_dead"
-    reason = _classify_session_loss(exc_or_text) if exc_or_text is not None else None
-    return reason or "session_dead"
+    return None
 
 
 def _log_cleanup_session_dead_once(reason: str) -> None:
