@@ -3711,7 +3711,7 @@ class GivexDriver:
     def _is_egift_landing_url(self, url: str) -> bool:
         try:
             target = urllib.parse.urlsplit(url or "")
-        except Exception:
+        except ValueError:
             return False
         path = (target.path or "").rstrip("/")
         if any(part in path for part in _EGIFT_NAV_FORBIDDEN_PATH_PARTS):
