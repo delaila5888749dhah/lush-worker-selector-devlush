@@ -2282,6 +2282,7 @@ class GivexDriver:
             return None
 
     def _field_focus_diagnostics(self, selector: str, selector_name: str) -> dict[str, bool]:
+        """Return PII-safe focus state for a selector before CDP typing."""
         js = """
         const el = document.querySelector(arguments[0]);
         const base = {
@@ -2345,6 +2346,7 @@ class GivexDriver:
 
     @staticmethod
     def _field_focus_ready(diag: dict[str, bool]) -> bool:
+        """Return True only when all required focus diagnostic flags pass."""
         return (
             bool(diag.get("attached")) and bool(diag.get("visible")) and
             bool(diag.get("unobscured")) and bool(diag.get("expected_focused"))
@@ -2352,6 +2354,7 @@ class GivexDriver:
 
     @staticmethod
     def _merge_typing_results(first: dict, second: dict) -> dict:
+        """Combine prefix/suffix typing telemetry without logging raw values."""
         merged = dict(first)
         merged["typed_chars"] = (
             _safe_int(first.get("typed_chars"), 0) +
@@ -2363,6 +2366,7 @@ class GivexDriver:
         return merged
 
     def _focus_and_requery_field(self, selector: str, selector_name: str, *, retry: bool = True):
+        """Focus, re-query after React reconciliation, and optionally retry once."""
         self.bounding_box_click(selector)
         self._engine_aware_sleep(0.08, 0.25, "post_focus_pause")
         elements = self.find_elements(selector)
